@@ -1,0 +1,7 @@
+.idea
+.vscode
+build
+coverage.out
+coverage-percentages.out
+go-vet.out
+.DS_Store
