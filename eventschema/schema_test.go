@@ -112,9 +112,9 @@ func makeTestSchema(assert *require.Assertions) *schemaImpl {
 	classNameStr := "class_name"
 	classes := map[string]*classDefinition{
 		"alpha": {
-			Uid:      int32(1),
+			Uid:      int64(1),
 			Category: "Greek",
-			Observables: map[string]int32{
+			Observables: map[string]int64{
 				"ball.green": 1000,
 			},
 			commonItemDefinition: commonItemDefinition{
@@ -246,9 +246,9 @@ func makeValidationTestSchema(assert *require.Assertions) *schemaImpl {
 
 	classes := map[string]*classDefinition{
 		"alpha": {
-			Uid:      int32(1),
+			Uid:      int64(1),
 			Category: "test",
-			Observables: map[string]int32{
+			Observables: map[string]int64{
 				"ball.green": 1000,
 			},
 			commonItemDefinition: commonItemDefinition{
@@ -419,7 +419,7 @@ func makeValidationTestSchema(assert *require.Assertions) *schemaImpl {
 	}
 	dictionary := &dictionaryDefinition{
 		Attributes: map[string]*commonAttributeDefinition{
-			"green": {Type: "string_t", Observable: ptrInt32(1000)},
+			"green": {Type: "string_t", Observable: new(int64(1000))},
 		},
 		Types: &typesDefinition{
 			Attributes: map[string]*typeDefinition{
@@ -431,28 +431,28 @@ func makeValidationTestSchema(assert *require.Assertions) *schemaImpl {
 						Caption: "Port",
 						Type:    "integer_t",
 					},
-					Range: []int32{0, 65535},
+					Range: []int64{0, 65535},
 				},
 				"bounded_int_t": {
 					commonAttributeDefinition: commonAttributeDefinition{
 						Caption: "Bounded Integer",
 						Type:    "integer_t",
 					},
-					Range: []int32{-10, 10},
+					Range: []int64{-10, 10},
 				},
 				"short_text_t": {
 					commonAttributeDefinition: commonAttributeDefinition{
 						Caption: "Short Text",
 						Type:    "string_t",
 					},
-					MaxLen: ptrInt32(3),
+					MaxLen: new(int64(3)),
 				},
 				"upper_code_t": {
 					commonAttributeDefinition: commonAttributeDefinition{
 						Caption: "Uppercase Code",
 						Type:    "string_t",
 					},
-					RegEx: ptrString("^[A-Z]+$"),
+					RegEx: new("^[A-Z]+$"),
 				},
 				"level_t": {
 					commonAttributeDefinition: commonAttributeDefinition{
@@ -475,14 +475,6 @@ func makeValidationTestSchema(assert *require.Assertions) *schemaImpl {
 	})
 	assert.NoError(err)
 	return si
-}
-
-func ptrInt32(value int32) *int32 {
-	return &value
-}
-
-func ptrString(value string) *string {
-	return &value
 }
 
 func TestNewSchemaImplWithModernCompiledSchema(t *testing.T) {
@@ -552,11 +544,11 @@ func TestNewSchemaImplWithModernCompiledSchema(t *testing.T) {
 	}`)
 
 	assert.Equal("1.2.3", si.version)
-	assert.NotNil(si.classes[int32(1)])
+	assert.NotNil(si.classes[int64(1)])
 	assert.NotNil(si.objects["observable"])
 	assert.Equal("Integer", si.dictionary.Types.Attributes["integer_t"].Caption)
 	assert.Equal("Class UID", si.dictionary.Attributes["class_uid"].Caption)
-	assert.Equal("Modern Observable", si.observableTypes[int32(1000)])
+	assert.Equal("Modern Observable", si.observableTypes[int64(1000)])
 }
 
 func TestNewSchemaImplWithUnsupportedCompiledSchemaVersion(t *testing.T) {
@@ -568,6 +560,63 @@ func TestNewSchemaImplWithUnsupportedCompiledSchemaVersion(t *testing.T) {
 	si, err := newSchemaImpl(&sd)
 	assert.Nil(si)
 	assert.EqualError(err, "unsupported compile_version: 2")
+}
+
+func TestNewSchemaImplRejectsDuplicateClassUIDs(t *testing.T) {
+	assert := require.New(t)
+	var sd schemaDefinition
+	err := json.Unmarshal([]byte(`{
+		"compile_version": 1,
+		"version": "1.0.0",
+		"classes": {
+			"alpha": {"name": "alpha", "uid": 1},
+			"beta": {"name": "beta", "uid": 1}
+		},
+		"objects": {},
+		"dictionary": {"attributes": {}, "types": {"attributes": {}}}
+	}`), &sd)
+	assert.NoError(err)
+
+	si, err := newSchemaImpl(&sd)
+
+	assert.Nil(si)
+	assert.ErrorContains(err, "compiled schema has duplicate class uid 1")
+}
+
+func TestNewSchemaImplNormalizesMissingOptionalSections(t *testing.T) {
+	assert := require.New(t)
+	var sd schemaDefinition
+	err := json.Unmarshal([]byte(`{
+		"compile_version": 1,
+		"version": "1.0.0",
+		"classes": {
+			"alpha": {"name": "alpha", "uid": 1}
+		}
+	}`), &sd)
+	assert.NoError(err)
+
+	si, err := newSchemaImpl(&sd)
+
+	assert.NoError(err)
+	assert.NotNil(si)
+	assert.NotNil(si.dictionary)
+	assert.NotNil(si.dictionary.Attributes)
+	assert.NotNil(si.dictionary.Types)
+	assert.NotNil(si.dictionary.Types.Attributes)
+	assert.NotNil(si.objects)
+	assert.NotNil(si.profiles)
+}
+
+func TestNewSchemaImplRejectsMissingClasses(t *testing.T) {
+	assert := require.New(t)
+	var sd schemaDefinition
+	err := json.Unmarshal([]byte(`{"compile_version":1}`), &sd)
+	assert.NoError(err)
+
+	si, err := newSchemaImpl(&sd)
+
+	assert.Nil(si)
+	assert.EqualError(err, "compiled schema is missing classes")
 }
 
 func newTestSchemaFromJSON(assert *require.Assertions, data string) *schemaImpl {
@@ -601,12 +650,12 @@ func TestClassObservablesWithSiblings(t *testing.T) {
 	assert.Equal(1, result.Enrichment.ObservablesAdded)
 	assert.Equal("Alpha", event["class_name"])
 	assert.NotNil(event["observables"])
-	observables, err := jsonish.GetSliceOfMaps(event, "observables")
-	assert.NoError(err)
+	observables, ok := event["observables"].([]jsonish.Map)
+	assert.True(ok)
 	assert.Len(observables, 1)
 	observable := observables[0]
 	assert.Equal("ball.green", observable["name"])
-	assert.Equal(int32(1000), observable["type_id"])
+	assert.Equal(int64(1000), observable["type_id"])
 	assert.Equal("Class path ball.green", observable["type"])
 	assert.Equal("A green thing", observable["value"])
 }
@@ -632,12 +681,12 @@ func TestClassObservablesWithoutSiblings(t *testing.T) {
 	assert.Equal(1, result.Enrichment.ObservablesAdded)
 	assert.NotContains(event, "class_name")
 	assert.NotNil(event["observables"])
-	observables, err := jsonish.GetSliceOfMaps(event, "observables")
-	assert.NoError(err)
+	observables, ok := event["observables"].([]jsonish.Map)
+	assert.True(ok)
 	assert.Len(observables, 1)
 	observable := observables[0]
 	assert.Equal("ball.green", observable["name"])
-	assert.Equal(int32(1000), observable["type_id"])
+	assert.Equal(int64(1000), observable["type_id"])
 	assert.NotContains(observable, "type")
 	assert.Equal("A green thing", observable["value"])
 }
@@ -789,6 +838,68 @@ func TestProcessEventValidationDoesNotEnrich(t *testing.T) {
 	assert.NotContains(event, "observables")
 }
 
+func TestProcessEventValidationRunsAfterEnrichment(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	event := validValidationEvent()
+	event["mode_id"] = json.Number("1")
+	event["ball"] = jsonish.Map{"green": "go"}
+
+	processor := si.NewEventProcessor(NewValidation(), NewEnrichment())
+	result, err := processor.ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Empty(result.Validation.Errors)
+	assert.Empty(result.Validation.Warnings)
+	assert.Equal("Alpha", event["class_name"])
+	assert.Equal("Do", event["activity_name"])
+	assert.Equal("Known", event["mode"])
+	assert.Contains(event, "observables")
+}
+
+func TestProcessEventEnrichmentDoesNotValidate(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	event := jsonish.Map{
+		"class_uid": json.Number("1"),
+		"mode_id":   json.Number("1"),
+	}
+
+	processor := si.NewEventProcessor(NewEnrichment())
+	result, err := processor.ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Empty(result.Validation.Errors)
+	assert.Empty(result.Validation.Warnings)
+	assert.Equal("Alpha", event["class_name"])
+	assert.Equal("Known", event["mode"])
+}
+
+func TestProcessEventNilEventReturnsError(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	processor := si.NewEventProcessor(NewValidation(), NewEnrichment())
+
+	result, err := processor.ProcessEvent(nil)
+
+	assert.ErrorIs(err, errNilEvent)
+	assert.Empty(result.Validation.Errors)
+	assert.Empty(result.Validation.Warnings)
+}
+
+func TestProcessEventValidationUnknownClassUIDUsesInt64(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	event := jsonish.Map{"class_uid": json.Number("2147483648")}
+
+	processor := si.NewEventProcessor(NewValidation())
+	result, err := processor.ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Contains(issueCodes(result.Validation.Errors), "class_uid_unknown")
+	assert.NotContains(issueCodes(result.Validation.Errors), "attribute_wrong_type")
+}
+
 func TestProcessEventValidationRecommendedWarningsAreOptional(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
@@ -819,6 +930,34 @@ func TestProcessEventValidationTypeUIDIncorrect(t *testing.T) {
 
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "type_uid_incorrect")
+}
+
+func TestProcessEventValidationTypeUIDOverflow(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	si.classes[math.MaxInt64/100+1] = &classDefinition{
+		Uid:      math.MaxInt64/100 + 1,
+		Category: "test",
+		commonItemDefinition: commonItemDefinition{
+			Name: "overflow",
+			Attributes: map[string]*itemAttributeDefinition{
+				"class_uid":   {commonAttributeDefinition: commonAttributeDefinition{Type: "integer_t"}},
+				"activity_id": {commonAttributeDefinition: commonAttributeDefinition{Type: "integer_t"}},
+				"type_uid":    {commonAttributeDefinition: commonAttributeDefinition{Type: "long_t"}},
+			},
+		},
+	}
+	event := jsonish.Map{
+		"class_uid":   json.Number(strconv.FormatInt(math.MaxInt64/100+1, 10)),
+		"activity_id": json.Number("1"),
+		"type_uid":    json.Number("1"),
+	}
+
+	processor := si.NewEventProcessor(NewValidation())
+	result, err := processor.ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Contains(issueCodes(result.Validation.Errors), "type_uid_expected_value_overflow")
 }
 
 func TestProcessEventValidationInactiveProfileAttributeIsUnknown(t *testing.T) {
@@ -894,7 +1033,7 @@ func TestProcessEventValidationConstraintEdgeCases(t *testing.T) {
 	assert.NotContains(issueCodes(result.Validation.Errors), "constraint_failed")
 
 	si = makeValidationTestSchema(assert)
-	si.classes[int32(1)].Constraints = map[string][]string{"just_one": {"name", "ball.green"}}
+	si.classes[int64(1)].Constraints = map[string][]string{"just_one": {"name", "ball.green"}}
 	processor = si.NewEventProcessor(NewValidation())
 
 	onePresentEvent := validValidationEvent()
@@ -1007,9 +1146,9 @@ func TestProcessEventValidationIntegerAndLongBounds(t *testing.T) {
 func TestProcessEventValidationDeprecationWarnings(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
-	si.classes[int32(1)].Deprecated = &deprecatedDefinition{Since: "1.0.0", Message: "class deprecated"}
-	si.classes[int32(1)].Attributes["red"].Deprecated = &deprecatedDefinition{Since: "1.0.0", Message: "attribute deprecated"}
-	si.classes[int32(1)].Attributes["mode_id"].Enum["1"].Deprecated = &deprecatedDefinition{Since: "1.0.0", Message: "enum deprecated"}
+	si.classes[int64(1)].Deprecated = &deprecatedDefinition{Since: "1.0.0", Message: "class deprecated"}
+	si.classes[int64(1)].Attributes["red"].Deprecated = &deprecatedDefinition{Since: "1.0.0", Message: "attribute deprecated"}
+	si.classes[int64(1)].Attributes["mode_id"].Enum["1"].Deprecated = &deprecatedDefinition{Since: "1.0.0", Message: "enum deprecated"}
 	si.objects["ball"].Deprecated = &deprecatedDefinition{Since: "1.0.0", Message: "object deprecated"}
 
 	event := validValidationEvent()
