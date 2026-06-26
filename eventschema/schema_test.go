@@ -14,6 +14,10 @@ import (
 const testSchemaFilePath = "../test/schema_v1.8.0.json"
 const testSchemaVersion = "1.8.0"
 
+func testPtrTo[T any](value T) *T {
+	return &value
+}
+
 func TestLoadSchemaFromFile(t *testing.T) {
 	assert := require.New(t)
 	schema, err := New(testSchemaFilePath)
@@ -419,7 +423,7 @@ func makeValidationTestSchema(assert *require.Assertions) *schemaImpl {
 	}
 	dictionary := &dictionaryDefinition{
 		Attributes: map[string]*commonAttributeDefinition{
-			"green": {Type: "string_t", Observable: new(int64(1000))},
+			"green": {Type: "string_t", Observable: testPtrTo(int64(1000))},
 		},
 		Types: &typesDefinition{
 			Attributes: map[string]*typeDefinition{
@@ -445,14 +449,14 @@ func makeValidationTestSchema(assert *require.Assertions) *schemaImpl {
 						Caption: "Short Text",
 						Type:    "string_t",
 					},
-					MaxLen: new(int64(3)),
+					MaxLen: testPtrTo(int64(3)),
 				},
 				"upper_code_t": {
 					commonAttributeDefinition: commonAttributeDefinition{
 						Caption: "Uppercase Code",
 						Type:    "string_t",
 					},
-					RegEx: new("^[A-Z]+$"),
+					RegEx: testPtrTo("^[A-Z]+$"),
 				},
 				"level_t": {
 					commonAttributeDefinition: commonAttributeDefinition{

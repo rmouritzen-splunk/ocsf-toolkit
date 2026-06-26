@@ -29,8 +29,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: "1.26.4"
           cache-dependency-path: go.sum
+
+      - name: Show Go version
+        run: go version
 
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9

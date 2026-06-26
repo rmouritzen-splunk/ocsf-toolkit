@@ -19,8 +19,14 @@ env:
 
 jobs:
   verify:
-    name: Verify all target platforms
+    name: Verify all target platforms with Go ${{ matrix.go-version }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version:
+          - "1.25.0"
+          - "1.26.4"
 
     steps:
       - name: Check out repository
@@ -29,8 +35,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go-version }}
           cache-dependency-path: go.sum
+
+      - name: Show Go version
+        run: go version
 
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9

@@ -382,8 +382,8 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 			file := summary.Files[0]
 			if config.validate {
 				report.Validation = &validationSummaryReport{
-					ErrorCount:   new(file.ValidationErrorCount),
-					WarningCount: new(file.ValidationWarningCount),
+					ErrorCount:   ptrTo(file.ValidationErrorCount),
+					WarningCount: ptrTo(file.ValidationWarningCount),
 				}
 				if file.ValidationResultWritten {
 					report.Validation.ResultWritten = displaySummaryPath(file.ValidationResultPath)
@@ -402,23 +402,27 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 		return report
 	}
 
-	report.EventFilesProcessed = new(summary.Processed)
+	report.EventFilesProcessed = ptrTo(summary.Processed)
 	report.Files = summary.Files
 	if config.validate {
 		report.Validation = &validationSummaryReport{
-			EventsWithErrors:       new(summary.EventsWithValidationErrors),
-			EventsWithWarningsOnly: new(summary.EventsWithValidationWarningsOnly),
-			TotalErrorCount:        new(summary.TotalValidationErrorCount),
-			TotalWarningCount:      new(summary.TotalValidationWarningCount),
+			EventsWithErrors:       ptrTo(summary.EventsWithValidationErrors),
+			EventsWithWarningsOnly: ptrTo(summary.EventsWithValidationWarningsOnly),
+			TotalErrorCount:        ptrTo(summary.TotalValidationErrorCount),
+			TotalWarningCount:      ptrTo(summary.TotalValidationWarningCount),
 		}
 	}
 	if config.enrich {
 		report.Enrichment = &enrichmentSummaryReport{
-			EventsWritten: new(summary.EnrichedEventsWritten),
-			EventsSkipped: new(summary.EnrichedEventsSkipped),
+			EventsWritten: ptrTo(summary.EnrichedEventsWritten),
+			EventsSkipped: ptrTo(summary.EnrichedEventsSkipped),
 		}
 	}
 	return report
+}
+
+func ptrTo[T any](value T) *T {
+	return &value
 }
 
 func buildSummaryMetadata() summaryMetadataReport {

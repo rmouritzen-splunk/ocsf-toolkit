@@ -252,7 +252,7 @@ For a complete working example of library usage, see the CLI implementation in `
 
 ## Development
 
-Local development requires Go and `golangci-lint`.
+Local development requires Go 1.25.0 or newer and `golangci-lint`.
 
 Run the standard local verification target before submitting changes:
 
