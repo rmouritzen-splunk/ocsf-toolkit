@@ -62,7 +62,7 @@ for platform in ${target_platforms}; do
 	cp "${binary_path}" "${package_root}/"
 	chmod 0755 "${package_root}/${binary_name}"
 
-	for file in README.md LICENSE NOTICE; do
+	for file in README.md LICENSE NOTICE THIRD_PARTY_LICENSES.md; do
 		if [ -f "${repo_root}/${file}" ]; then
 			cp "${repo_root}/${file}" "${package_root}/"
 		fi
