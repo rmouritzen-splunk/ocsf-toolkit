@@ -5,7 +5,7 @@ coverage_percentages_out := coverage-percentages.out
 go_vet_out := go-vet.out
 
 .PHONY: build
-build: build-ocsf-enrich build-ocsf-validate
+build: build-ocsf-toolkit
 
 .PHONY: build-dir
 build-dir: | $(build_dir)
@@ -14,15 +14,10 @@ ${build_dir}:
 	@echo "Creating build directory"
 	mkdir $@
 
-.PHONY: build-ocsf-enrich
-build-ocsf-enrich: build-dir
-	@echo "Building ocsf-enrich"
-	CGO_ENABLED=0 go build -C cmd/ocsf-enrich -o ${build_dir} -trimpath
-
-.PHONY: build-ocsf-validate
-build-ocsf-validate: build-dir
-	@echo "Building ocsf-validate"
-	CGO_ENABLED=0 go build -C cmd/ocsf-validate -o ${build_dir} -trimpath
+.PHONY: build-ocsf-toolkit
+build-ocsf-toolkit: build-dir
+	@echo "Building ocsf-toolkit"
+	CGO_ENABLED=0 go build -C cmd/ocsf-toolkit -o ${build_dir} -trimpath
 
 .PHONY: lint
 lint:
