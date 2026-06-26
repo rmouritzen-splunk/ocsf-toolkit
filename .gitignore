@@ -1,6 +1,7 @@
 .idea
 .vscode
 build
+dist
 coverage.out
 coverage-percentages.out
 go-vet.out

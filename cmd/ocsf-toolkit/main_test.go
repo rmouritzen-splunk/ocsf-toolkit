@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +15,16 @@ import (
 	"github.com/ocsf/ocsf-processor/jsonio"
 	"github.com/ocsf/ocsf-processor/jsonish"
 )
+
+func TestVersionOptionPrintsVersionAndExits(t *testing.T) {
+	assert := require.New(t)
+
+	exitCode, stdout, stderr := runCLI("--version")
+
+	assert.Equal(0, exitCode)
+	assert.Equal("ocsf-toolkit "+version+"\n", stdout)
+	assert.Empty(stderr)
+}
 
 func TestProcessSingleEventEnrichesInPlaceAndWritesValidation(t *testing.T) {
 	assert := require.New(t)
@@ -162,6 +173,7 @@ func TestProcessValidationSummaryCountsEventsWithWarningsOnly(t *testing.T) {
 
 	var summary summaryReport
 	readJSONFile(assert, summaryPath, &summary)
+	assertSummaryMetadata(assert, summary)
 	assert.Equal(eventPath, summary.EventFileProcessed)
 	assert.Nil(summary.EventFilesProcessed)
 	assert.NotNil(summary.Validation)
@@ -172,6 +184,46 @@ func TestProcessValidationSummaryCountsEventsWithWarningsOnly(t *testing.T) {
 	assert.Nil(summary.Validation.EventsWithWarningsOnly)
 	assert.Nil(summary.Validation.TotalErrorCount)
 	assert.Nil(summary.Validation.TotalWarningCount)
+}
+
+func TestProcessHumanSummaryOutputIncludesMetadata(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	validationPath := filepath.Join(dir, "event.validation.json")
+	summaryPath := filepath.Join(dir, "summary.txt")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--validation-output", validationPath,
+		"--summary-output", summaryPath,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Empty(stdout)
+	assert.Equal(summaryText(
+		"Event file processed: "+eventPath,
+		"Validation errors: 0",
+		"Validation warnings: 0",
+		"Validation result written: "+validationPath,
+	), stderr)
+
+	summaryBytes, err := os.ReadFile(summaryPath)
+	assert.NoError(err)
+	assert.Equal(
+		"ocsf-toolkit "+version+" "+runtime.GOOS+"/"+runtime.GOARCH+" "+runtime.Version()+"\n\n"+
+			summaryText(
+				"Event file processed: "+eventPath,
+				"Validation errors: 0",
+				"Validation warnings: 0",
+				"Validation result written: "+validationPath,
+			),
+		string(summaryBytes),
+	)
 }
 
 func TestProcessDirectoryPreservesRelativeOutputPathsAndWritesSummary(t *testing.T) {
@@ -207,6 +259,7 @@ func TestProcessDirectoryPreservesRelativeOutputPathsAndWritesSummary(t *testing
 
 	var summary summaryReport
 	readJSONFile(assert, summaryPath, &summary)
+	assertSummaryMetadata(assert, summary)
 	assert.Equal("", summary.EventFileProcessed)
 	assert.Equal(1, *summary.EventFilesProcessed)
 	assert.NotNil(summary.Validation)
@@ -243,6 +296,14 @@ func TestProcessDirectoryPreservesRelativeOutputPathsAndWritesSummary(t *testing
 	assert.NotContains(string(summaryJSON), `"validation_errors"`)
 	assert.NotContains(string(summaryJSON), `"validation_warnings"`)
 	assert.NotContains(string(summaryJSON), `"validation_failures"`)
+}
+
+func assertSummaryMetadata(assert *require.Assertions, summary summaryReport) {
+	assert.Equal("ocsf-toolkit", summary.Metadata.Tool.Name)
+	assert.Equal(version, summary.Metadata.Tool.Version)
+	assert.Equal(runtime.Version(), summary.Metadata.Tool.GoVersion)
+	assert.Equal(runtime.GOOS, summary.Metadata.Tool.Platform.OS)
+	assert.Equal(runtime.GOARCH, summary.Metadata.Tool.Platform.Architecture)
 }
 
 func TestProcessDirectoryValidationRequiresOutput(t *testing.T) {

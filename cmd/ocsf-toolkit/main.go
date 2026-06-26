@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -25,6 +26,8 @@ const (
 	stdinEventRelativePath = "event.json"
 )
 
+var version = "dev"
+
 type cliOptions struct {
 	General    generalOptions
 	Validation validationOptions
@@ -41,6 +44,7 @@ type generalOptions struct {
 	Overwrite         bool   `long:"overwrite" description:"Allow replacing existing output files"`
 	PrettyJSON        bool   `short:"p" long:"pretty-json" description:"Write pretty-printed JSON output"`
 	Quiet             bool   `short:"q" long:"quiet" description:"Suppress the default human-readable summary on stderr"`
+	Version           bool   `long:"version" description:"Print version information and exit"`
 }
 
 type validationOptions struct {
@@ -109,12 +113,29 @@ type processSummary struct {
 }
 
 type summaryReport struct {
+	Metadata            summaryMetadataReport    `json:"metadata"`
 	SchemaPath          string                   `json:"schema_path"`
 	EventFileProcessed  string                   `json:"event_file_processed,omitempty"`
 	EventFilesProcessed *int                     `json:"event_files_processed,omitempty"`
 	Validation          *validationSummaryReport `json:"validation,omitempty"`
 	Enrichment          *enrichmentSummaryReport `json:"enrichment,omitempty"`
 	Files               []fileSummary            `json:"files,omitempty"`
+}
+
+type summaryMetadataReport struct {
+	Tool toolMetadataReport `json:"tool"`
+}
+
+type toolMetadataReport struct {
+	Name      string                 `json:"name"`
+	Version   string                 `json:"version"`
+	GoVersion string                 `json:"go_version"`
+	Platform  platformMetadataReport `json:"platform"`
+}
+
+type platformMetadataReport struct {
+	OS           string `json:"os"`
+	Architecture string `json:"architecture"`
 }
 
 type validationSummaryReport struct {
@@ -218,6 +239,10 @@ func handleParseResult(
 		writeErrorUsage(stderr, parser)
 		return 2
 	}
+	if options.General.Version {
+		writef(stdout, "ocsf-toolkit %s\n", version)
+		return 0
+	}
 
 	config, err := options.toConfig()
 	if err != nil {
@@ -261,7 +286,7 @@ func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, 
 		}
 	}
 	if config.summaryOutput != "" {
-		if err := writeTextDestination(config.summaryOutput, humanSummary(report), config.overwrite, stdout); err != nil {
+		if err := writeTextDestination(config.summaryOutput, humanSummaryWithMetadata(report), config.overwrite, stdout); err != nil {
 			writef(stderr, "error: failed to write summary %q: %s\n", config.summaryOutput, err)
 			return 1
 		}
@@ -347,7 +372,10 @@ func writef(w io.Writer, format string, args ...any) {
 }
 
 func buildSummaryReport(config processConfig, summary processSummary) summaryReport {
-	report := summaryReport{SchemaPath: summary.SchemaPath}
+	report := summaryReport{
+		Metadata:   buildSummaryMetadata(),
+		SchemaPath: summary.SchemaPath,
+	}
 	if config.eventPath != "" {
 		report.EventFileProcessed = displayInputPath(config.eventPath)
 		if len(summary.Files) > 0 {
@@ -391,6 +419,32 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 		}
 	}
 	return report
+}
+
+func buildSummaryMetadata() summaryMetadataReport {
+	return summaryMetadataReport{
+		Tool: toolMetadataReport{
+			Name:      "ocsf-toolkit",
+			Version:   version,
+			GoVersion: runtime.Version(),
+			Platform: platformMetadataReport{
+				OS:           runtime.GOOS,
+				Architecture: runtime.GOARCH,
+			},
+		},
+	}
+}
+
+func humanSummaryWithMetadata(report summaryReport) string {
+	tool := report.Metadata.Tool
+	return fmt.Sprintf("%s %s %s/%s %s\n\n%s",
+		tool.Name,
+		tool.Version,
+		tool.Platform.OS,
+		tool.Platform.Architecture,
+		tool.GoVersion,
+		humanSummary(report),
+	)
 }
 
 func humanSummary(report summaryReport) string {
