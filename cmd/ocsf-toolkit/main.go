@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -330,8 +331,8 @@ func processHelpNotes() string {
 		"  --output-dir uses one output tree.",
 		"  Use --enrich-output-dir and --validation-output-dir for separate trees.",
 		"  Directory outputs preserve input-relative paths.",
-		"  With --events-dir, paths are relative to that directory.",
-		"  With --event, relative paths are preserved as supplied; absolute paths use the basename.",
+		"    With --events-dir, paths are relative to that directory.",
+		"    With --event, safe relative paths are preserved; absolute paths and paths with .. use the basename.",
 		"  Validation files use <base>-validation.json.",
 		"  Output directories are created if necessary.",
 		"  Output files are not replaced without --overwrite.",
@@ -353,8 +354,8 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 			file := summary.Files[0]
 			if config.validate {
 				report.Validation = &validationSummaryReport{
-					ErrorCount:   intPtr(file.ValidationErrorCount),
-					WarningCount: intPtr(file.ValidationWarningCount),
+					ErrorCount:   new(file.ValidationErrorCount),
+					WarningCount: new(file.ValidationWarningCount),
 				}
 				if file.ValidationResultWritten {
 					report.Validation.ResultWritten = displaySummaryPath(file.ValidationResultPath)
@@ -373,27 +374,23 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 		return report
 	}
 
-	report.EventFilesProcessed = intPtr(summary.Processed)
+	report.EventFilesProcessed = new(summary.Processed)
 	report.Files = summary.Files
 	if config.validate {
 		report.Validation = &validationSummaryReport{
-			EventsWithErrors:       intPtr(summary.EventsWithValidationErrors),
-			EventsWithWarningsOnly: intPtr(summary.EventsWithValidationWarningsOnly),
-			TotalErrorCount:        intPtr(summary.TotalValidationErrorCount),
-			TotalWarningCount:      intPtr(summary.TotalValidationWarningCount),
+			EventsWithErrors:       new(summary.EventsWithValidationErrors),
+			EventsWithWarningsOnly: new(summary.EventsWithValidationWarningsOnly),
+			TotalErrorCount:        new(summary.TotalValidationErrorCount),
+			TotalWarningCount:      new(summary.TotalValidationWarningCount),
 		}
 	}
 	if config.enrich {
 		report.Enrichment = &enrichmentSummaryReport{
-			EventsWritten: intPtr(summary.EnrichedEventsWritten),
-			EventsSkipped: intPtr(summary.EnrichedEventsSkipped),
+			EventsWritten: new(summary.EnrichedEventsWritten),
+			EventsSkipped: new(summary.EnrichedEventsSkipped),
 		}
 	}
 	return report
-}
-
-func intPtr(value int) *int {
-	return &value
 }
 
 func humanSummary(report summaryReport) string {
@@ -834,12 +831,20 @@ func selectedValidationOutputDir(config processConfig) string {
 
 func eventOutputRelativePath(input inputEvent) string {
 	if input.rel != "" {
-		return input.rel
+		return safeOutputRelativePath(input.rel)
 	}
 	if input.path != stdioPath && !filepath.IsAbs(input.path) {
-		return filepath.Clean(input.path)
+		return safeOutputRelativePath(input.path)
 	}
 	return filepath.Base(input.path)
+}
+
+func safeOutputRelativePath(path string) string {
+	cleanPath := filepath.Clean(path)
+	if slices.Contains(strings.Split(cleanPath, string(filepath.Separator)), "..") {
+		return filepath.Base(cleanPath)
+	}
+	return cleanPath
 }
 
 func validationRelativePath(inputRel string) string {

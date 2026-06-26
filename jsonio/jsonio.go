@@ -2,6 +2,7 @@ package jsonio
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -10,66 +11,73 @@ import (
 	"github.com/ocsf/ocsf-processor/jsonish"
 )
 
+// ReadObject reads a JSON object file from path.
+//
+// Numbers are decoded as json.Number values.
 func ReadObject(path string) (jsonish.Map, error) {
-	var err error
-	var f *os.File
-	if f, err = os.Open(path); err != nil {
+	f, err := os.Open(path)
+	if err != nil {
 		return nil, fmt.Errorf("failed to open JSON object file %q: %w", path, err)
 	}
-	defer func(f fs.File) { _ = f.Close() }(f)
-	var m jsonish.Map
-	if m, err = DecodeObject(f); err != nil {
+	defer func() { _ = f.Close() }()
+	m, err := DecodeObject(f)
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode JSON object file %q: %w", path, err)
-	} else {
-		return m, f.Close()
 	}
+	return m, nil
 }
 
+// ReadObjectFS reads a JSON object file from dirFS at path.
+//
+// Numbers are decoded as json.Number values.
 func ReadObjectFS(dirFS fs.FS, path string) (jsonish.Map, error) {
-	var f fs.File
-	var err error
-	if f, err = dirFS.Open(path); err != nil {
+	f, err := dirFS.Open(path)
+	if err != nil {
 		return nil, fmt.Errorf("failed to open JSON object file %q: %w", path, err)
 	}
-	defer func(f fs.File) { _ = f.Close() }(f)
-	var m jsonish.Map
-	if m, err = DecodeObject(f); err != nil {
+	defer func() { _ = f.Close() }()
+	m, err := DecodeObject(f)
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode JSON object file %q: %w", path, err)
-	} else {
-		return m, f.Close()
 	}
+	return m, nil
 }
 
+// ReadArrayOfObjects reads a JSON file containing an array of objects from path.
+//
+// Numbers are decoded as json.Number values.
 func ReadArrayOfObjects(path string) ([]jsonish.Map, error) {
-	var err error
-	var f *os.File
-	if f, err = os.Open(path); err != nil {
+	f, err := os.Open(path)
+	if err != nil {
 		return nil, fmt.Errorf("failed to open JSON array of objects file %q: %w", path, err)
 	}
-	defer func(f fs.File) { _ = f.Close() }(f)
-	var a []jsonish.Map
-	if a, err = DecodeArrayOfObjects(f); err != nil {
+	defer func() { _ = f.Close() }()
+	a, err := DecodeArrayOfObjects(f)
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode JSON array of objects file %q: %w", path, err)
-	} else {
-		return a, f.Close()
 	}
+	return a, nil
 }
 
+// ReadArrayOfObjectsFS reads a JSON file containing an array of objects from dirFS at path.
+//
+// Numbers are decoded as json.Number values.
 func ReadArrayOfObjectsFS(dirFS fs.FS, path string) ([]jsonish.Map, error) {
-	var f fs.File
-	var err error
-	if f, err = dirFS.Open(path); err != nil {
+	f, err := dirFS.Open(path)
+	if err != nil {
 		return nil, fmt.Errorf("failed to open JSON array of objects file %q: %w", path, err)
 	}
-	defer func(f fs.File) { _ = f.Close() }(f)
-	var a []jsonish.Map
-	if a, err = DecodeArrayOfObjects(f); err != nil {
+	defer func() { _ = f.Close() }()
+	a, err := DecodeArrayOfObjects(f)
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode JSON array of objects file %q: %w", path, err)
-	} else {
-		return a, f.Close()
 	}
+	return a, nil
 }
 
+// DecodeObject decodes one JSON object from r and rejects trailing JSON values.
+//
+// Numbers are decoded as json.Number values.
 func DecodeObject(r io.Reader) (jsonish.Map, error) {
 	decoder := json.NewDecoder(r)
 	decoder.UseNumber()
@@ -77,9 +85,15 @@ func DecodeObject(r io.Reader) (jsonish.Map, error) {
 	if err := decoder.Decode(&object); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON object: %w", err)
 	}
+	if err := ensureEOF(decoder); err != nil {
+		return nil, fmt.Errorf("failed to decode JSON object: %w", err)
+	}
 	return object, nil
 }
 
+// DecodeArrayOfObjects decodes one JSON array of objects from r and rejects trailing JSON values.
+//
+// Numbers are decoded as json.Number values.
 func DecodeArrayOfObjects(r io.Reader) ([]jsonish.Map, error) {
 	decoder := json.NewDecoder(r)
 	decoder.UseNumber()
@@ -87,5 +101,18 @@ func DecodeArrayOfObjects(r io.Reader) ([]jsonish.Map, error) {
 	if err := decoder.Decode(&objects); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON array of objects: %w", err)
 	}
+	if err := ensureEOF(decoder); err != nil {
+		return nil, fmt.Errorf("failed to decode JSON array of objects: %w", err)
+	}
 	return objects, nil
+}
+
+func ensureEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); err == io.EOF {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return errors.New("unexpected trailing JSON value")
 }

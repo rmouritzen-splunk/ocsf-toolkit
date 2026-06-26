@@ -479,6 +479,82 @@ func TestProcessSingleEventDirectoryOutputPreservesRelativeEventPath(t *testing.
 	assert.Contains(stderr, "Validation result written: "+filepath.Join(validationOutputDir, "events", "windows", "event-validation.json"))
 }
 
+func TestProcessSingleEventDirectoryOutputDoesNotEscapeOutputDir(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join("..", "event.json")
+	outputDir := filepath.Join(dir, "out")
+	workDir := filepath.Join(dir, "out-work")
+	writeJSONFile(assert, filepath.Join(dir, "event.json"), validCLIEvent())
+	assert.NoError(os.MkdirAll(workDir, 0o755))
+
+	previousWd, err := os.Getwd()
+	assert.NoError(err)
+	assert.NoError(os.Chdir(workDir))
+	defer func() {
+		assert.NoError(os.Chdir(previousWd))
+	}()
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--validate",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Empty(stdout)
+	enrichedEvent, err := jsonio.ReadObject(filepath.Join(outputDir, "event.json"))
+	assert.NoError(err)
+	assert.Equal("Alpha", enrichedEvent["class_name"])
+	assert.FileExists(filepath.Join(outputDir, "event-validation.json"))
+	assert.NoFileExists(filepath.Join(dir, "event-validation.json"))
+}
+
+func TestEventOutputRelativePathDoesNotPreserveTraversal(t *testing.T) {
+	assert := require.New(t)
+
+	testCases := []struct {
+		name  string
+		input inputEvent
+		want  string
+	}{
+		{
+			name:  "relative input starts with traversal",
+			input: inputEvent{path: filepath.Join("..", "event.json")},
+			want:  "event.json",
+		},
+		{
+			name:  "relative input contains traversal",
+			input: inputEvent{path: filepath.Join("events", "..", "event.json")},
+			want:  "event.json",
+		},
+		{
+			name:  "directory relative path contains traversal",
+			input: inputEvent{path: filepath.Join("events", "event.json"), rel: filepath.Join("nested", "..", "event.json")},
+			want:  "event.json",
+		},
+		{
+			name:  "safe relative path",
+			input: inputEvent{path: filepath.Join("events", "windows", "event.json")},
+			want:  filepath.Join("events", "windows", "event.json"),
+		},
+		{
+			name:  "absolute path uses basename",
+			input: inputEvent{path: filepath.Join(string(filepath.Separator), "tmp", "event.json")},
+			want:  "event.json",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(testCase.want, eventOutputRelativePath(testCase.input))
+		})
+	}
+}
+
 func TestProcessRejectsExistingOutputWithoutOverwrite(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
@@ -698,8 +774,9 @@ func TestHelp(t *testing.T) {
 	assert.Contains(stdout, "--output-dir uses one output tree.")
 	assert.Contains(stdout, "Use --enrich-output-dir and --validation-output-dir for separate trees.")
 	assert.Contains(stdout, "Directory outputs preserve input-relative paths.")
-	assert.Contains(stdout, "With --events-dir, paths are relative to that directory.")
-	assert.Contains(stdout, "With --event, relative paths are preserved as supplied; absolute paths use the basename.")
+	assert.Contains(stdout, "    With --events-dir, paths are relative to that directory.")
+	assert.Contains(stdout, "    With --event, safe relative paths are preserved;")
+	assert.Contains(stdout, "absolute paths and paths with .. use the basename.")
 	assert.Contains(stdout, "Validation files use <base>-validation.json.")
 	assert.Contains(stdout, "Output directories are created if necessary.")
 	assert.Contains(stdout, "Output files are not replaced without --overwrite.")
