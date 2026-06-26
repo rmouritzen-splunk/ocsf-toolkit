@@ -13,10 +13,145 @@ const expectedCompileVersion = 1
 
 // Schema is the top level interface for functions related to a specific OCSF schema version.
 type Schema interface {
-	// Enrich event in-place, adding OCSF enum siblings and/or OCSF observables based on flags.
-	// If neither flag is true, the event is unmodified.
-	// If event is malformed, it is ignored. A malformed event is one where class_uid is missing, invalid, or unknown.
-	Enrich(event jsonish.Map, addEnumSiblings, addObservables bool) error
+	// NewEventProcessor builds a reusable processor from the requested event processes.
+	NewEventProcessor(processes ...EventProcess) EventProcessor
+}
+
+// EventProcessor processes OCSF events in-place.
+type EventProcessor interface {
+	// ProcessEvent validates and/or enriches event in-place.
+	// Invalid events are reported in the returned ProcessingResult. The error return is for
+	// processor failures or unusable caller input, not OCSF validation failures.
+	ProcessEvent(event jsonish.Map) (ProcessingResult, error)
+}
+
+// EventProcess is a processing phase created by NewValidation, NewEnrichment, or future
+// phase constructors in this package.
+type EventProcess interface {
+	applyProcess(*processorConfig)
+}
+
+type eventProcessFunc func(*processorConfig)
+
+func (f eventProcessFunc) applyProcess(config *processorConfig) {
+	f(config)
+}
+
+type processorConfig struct {
+	validation validationConfig
+	enrichment enrichmentConfig
+}
+
+type validationConfig struct {
+	enabled                  bool
+	warnOnMissingRecommended bool
+}
+
+type enrichmentConfig struct {
+	enabled         bool
+	addEnumSiblings bool
+	addObservables  bool
+}
+
+// ValidationOption configures the validation event process.
+type ValidationOption interface {
+	applyValidation(*validationConfig)
+}
+
+type validationOptionFunc func(*validationConfig)
+
+func (f validationOptionFunc) applyValidation(config *validationConfig) {
+	f(config)
+}
+
+// NewValidation creates an event process that validates events.
+func NewValidation(options ...ValidationOption) EventProcess {
+	config := validationConfig{enabled: true}
+	for _, option := range options {
+		if option != nil {
+			option.applyValidation(&config)
+		}
+	}
+	return eventProcessFunc(func(processorConfig *processorConfig) {
+		processorConfig.validation = config
+	})
+}
+
+// WithWarnOnMissingRecommended reports missing recommended attributes as validation warnings.
+func WithWarnOnMissingRecommended() ValidationOption {
+	return validationOptionFunc(func(config *validationConfig) {
+		config.warnOnMissingRecommended = true
+	})
+}
+
+// EnrichmentOption configures the enrichment event process.
+type EnrichmentOption interface {
+	applyEnrichment(*enrichmentConfig)
+}
+
+type enrichmentOptionFunc func(*enrichmentConfig)
+
+func (f enrichmentOptionFunc) applyEnrichment(config *enrichmentConfig) {
+	f(config)
+}
+
+// NewEnrichment creates an event process that enriches events. Enum sibling and observable
+// enrichment are enabled by default.
+func NewEnrichment(options ...EnrichmentOption) EventProcess {
+	config := enrichmentConfig{
+		enabled:         true,
+		addEnumSiblings: true,
+		addObservables:  true,
+	}
+	for _, option := range options {
+		if option != nil {
+			option.applyEnrichment(&config)
+		}
+	}
+	return eventProcessFunc(func(processorConfig *processorConfig) {
+		processorConfig.enrichment = config
+	})
+}
+
+// WithAddEnumSiblings controls whether enum sibling captions are added during enrichment.
+func WithAddEnumSiblings(add bool) EnrichmentOption {
+	return enrichmentOptionFunc(func(config *enrichmentConfig) {
+		config.addEnumSiblings = add
+	})
+}
+
+// WithAddObservables controls whether observables are added during enrichment.
+func WithAddObservables(add bool) EnrichmentOption {
+	return enrichmentOptionFunc(func(config *enrichmentConfig) {
+		config.addObservables = add
+	})
+}
+
+type ProcessingResult struct {
+	Validation ValidationResult  `json:"validation"`
+	Enrichment EnrichmentResult  `json:"enrichment"`
+	Issues     []ProcessingIssue `json:"issues,omitempty"`
+}
+
+type ValidationResult struct {
+	Errors   []ProcessingIssue `json:"errors,omitempty"`
+	Warnings []ProcessingIssue `json:"warnings,omitempty"`
+}
+
+type EnrichmentResult struct {
+	EnumSiblingsAdded int `json:"enum_siblings_added"`
+	ObservablesAdded  int `json:"observables_added"`
+}
+
+type ProcessingIssue struct {
+	Phase         string      `json:"phase"`
+	Severity      string      `json:"severity"`
+	Code          string      `json:"code"`
+	Message       string      `json:"message"`
+	AttributePath string      `json:"attribute_path,omitempty"`
+	Attribute     string      `json:"attribute,omitempty"`
+	Value         any         `json:"value,omitempty"`
+	Details       jsonish.Map `json:"details,omitempty"`
 }
 
 func New(name string) (Schema, error) {
@@ -82,8 +217,9 @@ type deprecatedDefinition struct {
 }
 
 type enumDefinition struct {
-	Caption     string `json:"caption,omitempty"`
-	Description string `json:"description,omitempty"`
+	Deprecated  *deprecatedDefinition `json:"@deprecated,omitempty"`
+	Caption     string                `json:"caption,omitempty"`
+	Description string                `json:"description,omitempty"`
 }
 
 type commonAttributeDefinition struct {
@@ -113,6 +249,7 @@ type commonItemDefinition struct {
 	Caption     string                              `json:"caption,omitempty"`
 	Description string                              `json:"description,omitempty"`
 	Profiles    []string                            `json:"profiles,omitempty"`
+	Constraints map[string][]string                 `json:"constraints,omitempty"`
 	Attributes  map[string]*itemAttributeDefinition `json:"attributes,omitempty"`
 }
 
