@@ -1,0 +1,15 @@
+version: "2"
+
+run:
+  timeout: 5m
+  allow-parallel-runners: true
+
+linters:
+  enable:
+    - errorlint
+    - misspell
+    - modernize
+    - nilerr
+    - nilnil
+    - unconvert
+    - unparam
