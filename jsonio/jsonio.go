@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/ocsf/ocsf-processor/jsonish"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 // ReadObject reads a JSON object file from path.

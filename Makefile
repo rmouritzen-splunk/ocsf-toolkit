@@ -32,14 +32,17 @@ build-ocsf-toolkit-all-platforms: build-dir
 
 .PHONY: lint
 lint:
-	@echo "Checking Go formatting"
-	test -z "$$(gofmt -l .)"
 	@echo "Running golangci-lint"
 	command -v golangci-lint >/dev/null 2>&1 || ( \
 		echo "ERROR: golangci-lint is required for make lint."; \
 		exit 1 \
 	)
 	golangci-lint run
+
+.PHONY: gofmt-check
+gofmt-check:
+	@echo "Checking Go formatting"
+	test -z "$$(gofmt -l .)"
 
 .PHONY: govet
 govet:
@@ -77,10 +80,10 @@ gofmt:
 	gofmt -w .
 
 .PHONY: verify
-verify: gotidy-check lint test govet build
+verify: gotidy-check gofmt-check lint test govet build
 
 .PHONY: verify-all-platforms
-verify-all-platforms: gotidy-check lint coverage govet build-all-platforms
+verify-all-platforms: gotidy-check gofmt-check lint coverage govet build-all-platforms
 
 .PHONY: package-dist
 package-dist: build-all-platforms
@@ -88,7 +91,7 @@ package-dist: build-all-platforms
 	@BUILD_DIR="${build_dir}" DIST_DIR="${dist_dir}" TARGET_PLATFORMS="${target_platforms}" VERSION="${VERSION}" scripts/package-dist.sh
 
 .PHONY: package
-package: gotidy-check lint coverage govet package-dist
+package: gotidy-check gofmt-check lint coverage govet package-dist
 
 .PHONY: clean
 clean:

@@ -46,7 +46,9 @@ make verify-all-platforms
 make package VERSION=v0.1.0
 ```
 
-Inspect `dist/` if needed. It should contain archives for each target platform and `SHA256SUMS`.
+The local `make package` run is a preflight check. Prefer running it with the same Go version used by the release workflow when practical. The official release artifacts are produced by GitHub Actions after the tag is pushed.
+
+Inspect local `dist/` if needed. It should contain archives for each target platform and `SHA256SUMS`.
 
 ## Publishing
 

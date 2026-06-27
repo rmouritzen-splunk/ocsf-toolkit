@@ -1,8 +1,8 @@
 package eventschema
 
 import (
-	"github.com/ocsf/ocsf-processor/internal/coerce"
-	"github.com/ocsf/ocsf-processor/jsonish"
+	"github.com/ocsf/ocsf-toolkit/internal/coerce"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 type enrichmentProcessor struct {

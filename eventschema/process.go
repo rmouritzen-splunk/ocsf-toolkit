@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/ocsf/ocsf-processor/jsonish"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 var errNilEvent = errors.New("event is nil")

@@ -15,9 +15,9 @@ import (
 
 	flags "github.com/jessevdk/go-flags"
 
-	"github.com/ocsf/ocsf-processor/eventschema"
-	"github.com/ocsf/ocsf-processor/jsonio"
-	"github.com/ocsf/ocsf-processor/jsonish"
+	"github.com/ocsf/ocsf-toolkit/eventschema"
+	"github.com/ocsf/ocsf-toolkit/jsonio"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 const (

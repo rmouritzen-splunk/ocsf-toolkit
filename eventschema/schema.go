@@ -8,20 +8,36 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/ocsf/ocsf-processor/jsonish"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 const expectedCompileVersion = 1
 
 // Schema is a loaded compiled OCSF schema.
+//
+// Schema values are safe for concurrent use after construction.
 type Schema interface {
 	// NewEventProcessor builds a reusable processor from the requested event processes.
+	//
+	// Validation processes run after other processes, regardless of the order supplied, so
+	// validation observes the event after enrichment and any future mutating processors.
 	NewEventProcessor(processes ...EventProcess) EventProcessor
 }
 
 // EventProcessor processes OCSF events in-place.
+//
+// EventProcessor values are safe for concurrent use after construction, provided each concurrent
+// ProcessEvent call receives a distinct event map.
 type EventProcessor interface {
 	// ProcessEvent enriches and/or validates event in place.
+	//
+	// The event map and any nested maps or slices it contains must not be accessed or mutated
+	// concurrently while ProcessEvent is running.
+	//
+	// Processing is not transactional. When enrichment or future mutating processors are enabled,
+	// the event may be partially modified if ProcessEvent returns an error. Callers that need to
+	// preserve the original event should deep-copy it before processing.
+	//
 	// Invalid events are reported in the returned ProcessingResult. The error return is for
 	// processor failures or unusable caller input, not OCSF validation failures.
 	ProcessEvent(event jsonish.Map) (ProcessingResult, error)
@@ -121,7 +137,7 @@ func NewEnrichment(options ...EnrichmentOption) EventProcess {
 	})
 }
 
-// WithAddEnumSiblings controls whether enum sibling captions are added during enrichment.
+// WithAddEnumSiblings controls whether enum siblings are added during enrichment.
 func WithAddEnumSiblings(add bool) EnrichmentOption {
 	return enrichmentOptionFunc(func(config *enrichmentConfig) {
 		config.addEnumSiblings = add
@@ -160,7 +176,7 @@ type ValidationResult struct {
 
 // EnrichmentResult reports what enrichment added to the processed event.
 type EnrichmentResult struct {
-	// EnumSiblingsAdded is the number of enum sibling caption fields added to the event.
+	// EnumSiblingsAdded is the number of enum sibling fields added to the event.
 	EnumSiblingsAdded int `json:"enum_siblings_added"`
 
 	// ObservablesAdded is the number of observable entries added to the event.
@@ -175,7 +191,8 @@ type ProcessingIssue struct {
 	// Severity is the issue severity, such as error or warning.
 	Severity string `json:"severity"`
 
-	// Code is a stable issue code.
+	// Code is a short machine-readable issue identifier suitable for searching, grouping,
+	// metrics, and structured logs.
 	Code string `json:"code"`
 
 	// Message is a human-readable issue description.

@@ -1,4 +1,4 @@
-module github.com/ocsf/ocsf-processor
+module github.com/ocsf/ocsf-toolkit
 
 go 1.25.0
 

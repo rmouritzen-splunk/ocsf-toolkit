@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ocsf/ocsf-processor/jsonish"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 const testSchemaFilePath = "../test/schema_v1.8.0.json"

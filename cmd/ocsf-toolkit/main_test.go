@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ocsf/ocsf-processor/jsonio"
-	"github.com/ocsf/ocsf-processor/jsonish"
+	"github.com/ocsf/ocsf-toolkit/jsonio"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 func TestVersionOptionPrintsVersionAndExits(t *testing.T) {

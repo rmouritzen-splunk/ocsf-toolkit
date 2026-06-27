@@ -4,12 +4,14 @@ OCSF Toolkit provides a Go library and a command line tool for processing [OCSF]
 
 The current processors support:
 
-- Enrichment: add enum sibling captions and observables.
+- Enrichment: add enum siblings and observables.
 - Validation: validate a single event against a compiled schema.
 
 Enrichment runs before validation when both are enabled, so validation checks the event after local processing has been applied.
 
 ## CLI Usage
+
+### Install
 
 Download an archive from the repository's GitHub Releases page:
 <https://github.com/ocsf/ocsf-toolkit/releases>.
@@ -45,26 +47,33 @@ run a downloaded macOS binary, remove the quarantine attribute:
 xattr -d com.apple.quarantine ./ocsf-toolkit
 ```
 
+The CLI can also be built locally from a source checkout. See [Development](#development).
+
+### Quick Start
+
+The CLI needs three inputs: a compiled OCSF schema, one or more event JSON files, and at least one operation.
+
+Validate a single event and write the validation result to stdout:
+
+```sh
+ocsf-toolkit \
+  --schema ocsf-schema-v1.8.0.json \
+  --event event.json \
+  --validate \
+  --validation-output -
+```
+
+The `--schema` argument must point to a compiled OCSF schema file. See [Compiled Schema](#appendix-compiled-schema).
+
 General form:
 
 ```sh
 ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --validate) [options]
 ```
 
-The `--schema` argument must point to a compiled OCSF schema file. See [Compiled Schema](#appendix-compiled-schema).
+### CLI Examples
 
-Common single-event processing:
-
-```sh
-ocsf-toolkit \
-  --schema ocsf-schema-v1.8.0.json \
-  --event event.json \
-  --enrich \
-  --validate \
-  --output-dir out
-```
-
-Equivalent with common short options:
+Enrich and validate a single event, writing both outputs to one directory:
 
 ```sh
 ocsf-toolkit -s ocsf-schema-v1.8.0.json -e event.json -E -V -o out
@@ -75,7 +84,38 @@ This writes:
 - `out/event.json`
 - `out/event-validation.json`
 
-Process a directory tree:
+Enrich a single event without changing the input file:
+
+```sh
+ocsf-toolkit \
+  --schema ocsf-schema-v1.8.0.json \
+  --event event.json \
+  --enrich \
+  --enrich-output enriched-event.json
+```
+
+Enrich an event in place:
+
+```sh
+ocsf-toolkit \
+  --schema ocsf-schema-v1.8.0.json \
+  --event event.json \
+  --enrich \
+  --enrich-in-place
+```
+
+Validate in CI and fail the command when validation errors are found:
+
+```sh
+ocsf-toolkit \
+  --schema ocsf-schema-v1.8.0.json \
+  --events-dir events \
+  --validate \
+  --validation-output-dir validation-results \
+  --fail-on-validation-errors
+```
+
+Enrich and validate a directory tree:
 
 ```sh
 ocsf-toolkit \
@@ -111,19 +151,57 @@ ocsf-toolkit \
   --validation-output-dir validation-results
 ```
 
-### CLI Notes
+Read a single event from stdin and write enriched JSON to stdout:
 
-- Output directories are created if necessary.
-- Directory outputs preserve safe input-relative paths.
-  - With `--events-dir`, paths are relative to that input directory.
-  - With `--event`, safe relative paths are preserved as supplied. Absolute paths and paths with `..` use only the basename.
-- Output files are not replaced unless `--overwrite` is supplied.
-- `--enrich-in-place` replaces input event files and does not require `--overwrite` for enrichment.
-- `--validation-output -` writes validation results to stdout.
-- `--enrich-output -` writes enriched event JSON to stdout.
-- At most one selected output may write to stdout.
-- `--fail-on-validation-errors` exits non-zero when one or more events has validation errors.
-- `--skip-invalid-output` prevents non-validation outputs from being written for events with validation errors.
+```sh
+ocsf-toolkit \
+  --schema ocsf-schema-v1.8.0.json \
+  --event - \
+  --enrich \
+  --enrich-output -
+```
+
+### Output Behavior
+
+The CLI requires an explicit output destination for each selected operation. Enrichment uses `--enrich-output`, `--enrich-output-dir`, `--output-dir`, or `--enrich-in-place`. Validation uses `--validation-output`, `--validation-output-dir`, or `--output-dir`.
+
+Output directories are created if necessary. Output files are not replaced unless `--overwrite` is supplied, except that `--enrich-in-place` replaces the input event file for enrichment without requiring `--overwrite`.
+
+`--output-dir` writes enriched events and validation results to one output tree. Use `--enrich-output-dir` and `--validation-output-dir` for separate trees. These output directories may be the same directory because validation files use `<base>-validation.json` names.
+
+Validation outputs have this shape:
+
+```json
+{
+  "input_path": "event.json",
+  "validation": {
+    "errors": [
+      {
+        "phase": "validation",
+        "severity": "error",
+        "code": "attribute_required_missing",
+        "message": "Required attribute \"time\" is missing.",
+        "attribute_path": "time",
+        "attribute": "time"
+      }
+    ],
+    "warnings": []
+  }
+}
+```
+
+Enrichment output is the processed event JSON. For example, if the schema defines `activity_id` with the `activity_name` enum sibling, enrichment can add the sibling field:
+
+```json
+{
+  "activity_id": 1,
+  "activity_name": "Create"
+}
+```
+
+`--validation-output -`, `--enrich-output -`, `--summary-output -`, and `--summary-json-output -` write to stdout. At most one selected output may write to stdout.
+
+By default, a terse human-readable summary is written to stderr. Use `--quiet` to suppress it. `--summary-output` writes a human-readable summary with tool metadata, and `--summary-json-output` writes the same summary information as JSON.
 
 Path preservation differs slightly between directory and single-event processing. In directory mode,
 the toolkit walks files under `--events-dir` and computes each output path relative to that input
@@ -131,6 +209,16 @@ root. In single-event mode, `--event` is supplied directly by the user, so prese
 path or a relative path containing `..` could place output outside the selected output directory.
 For that reason, single-event output directories preserve only safe relative paths; unsafe paths use
 the input file's basename.
+
+Use `--skip-invalid-output` with `--enrich --validate` to avoid writing enriched events when validation errors are found.
+
+### Exit Codes
+
+- `0`: the command completed successfully.
+- `1`: processing failed, writing output failed, or validation errors were found with `--fail-on-validation-errors`.
+- `2`: command-line parsing or configuration failed.
+
+Validation errors do not change the exit code by default. Use `--fail-on-validation-errors` when validation errors should fail a CI job or script.
 
 Run full help:
 
@@ -146,8 +234,8 @@ Import the event schema and JSON helpers:
 import (
 	"fmt"
 
-	"github.com/ocsf/ocsf-processor/eventschema"
-	"github.com/ocsf/ocsf-processor/jsonio"
+	"github.com/ocsf/ocsf-toolkit/eventschema"
+	"github.com/ocsf/ocsf-toolkit/jsonio"
 )
 ```
 
@@ -179,7 +267,13 @@ if len(result.Validation.Errors) > 0 {
 }
 ```
 
-`ProcessEvent` mutates the event in place when enrichment is enabled. Validation failures are reported in `ProcessingResult`; they do not normally return a Go `error`. The `error` return is for tooling failures or unusable input.
+`Schema` and `EventProcessor` values are safe for concurrent use after construction when each `ProcessEvent` call receives a distinct event map. The event map and its nested maps or slices must not be accessed or mutated concurrently while processing is running.
+
+`ProcessEvent` mutates the event in place when enrichment is enabled. Processing is not transactional: if `ProcessEvent` returns an error, the event may already be partially modified. Callers that need to preserve the original event should deep-copy it before processing.
+
+Validation failures are reported in `ProcessingResult`; they do not normally return a Go `error`. The `error` return is for tooling failures or unusable input.
+
+For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` helpers do this for file input by using `json.Decoder.UseNumber()`. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
 
 ### Processors
 
@@ -252,7 +346,7 @@ For a complete working example of library usage, see the CLI implementation in `
 
 ## Development
 
-Local development requires Go 1.25.0 or newer and `golangci-lint`.
+Local development requires a local checkout of this repository, Go 1.25.0 or newer, and `golangci-lint`.
 
 Run the standard local verification target before submitting changes:
 
