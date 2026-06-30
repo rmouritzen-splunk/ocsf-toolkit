@@ -362,6 +362,12 @@ build/ocsf-toolkit
 
 See the `Makefile` for individual targets when you need to run one step directly.
 
+Project design and maintenance documentation:
+
+- [Architecture](docs/architecture.md)
+- [Roadmap](docs/roadmap.md)
+- [Release process](docs/release_process.md)
+
 ## Appendix: Compiled Schema
 
 The toolkit uses the compiled schema format produced by the [OCSF Schema Compiler](https://pypi.org/project/ocsf-schema-compiler/). It does not read the raw OCSF schema repository directly.
