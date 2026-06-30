@@ -57,7 +57,7 @@ type validationOptions struct {
 }
 
 type enrichmentOptions struct {
-	Enrich          bool   `short:"E" long:"enrich" description:"Enrich events: add enum siblings and observables"`
+	Enrich          bool   `short:"E" long:"enrich" description:"Enrich events; adds enum siblings and observables by default"`
 	NoEnumSiblings  bool   `long:"no-enum-siblings" description:"Do not add enum siblings"`
 	NoObservables   bool   `long:"no-observables" description:"Do not add observables"`
 	EnrichInPlace   bool   `short:"i" long:"enrich-in-place" description:"Overwrite input event files with enriched output"`
