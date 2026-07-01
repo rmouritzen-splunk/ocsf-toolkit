@@ -16,11 +16,12 @@ type processingContext struct {
 	validation *validationProcessor
 	enrichment *enrichmentProcessor
 
-	class            *classDefinition
-	activeProfiles   map[string]struct{}
-	classObservables map[string]int64
-	observables      []jsonish.Map
-	stopped          bool
+	class                *classDefinition
+	activeProfiles       map[string]struct{}
+	classObservables     map[string]int64
+	observables          []jsonish.Map
+	observableResolution *observableResolution
+	stopped              bool
 }
 
 type classVisit struct {
@@ -28,6 +29,36 @@ type classVisit struct {
 	classUID int64
 	profiles []string
 	status   classVisitStatus
+}
+
+type processingDiagnostic struct {
+	code    string
+	message string
+	details jsonish.Map
+}
+
+func newProcessingDiagnostic(code, message string, details jsonish.Map) *processingDiagnostic {
+	return &processingDiagnostic{code: code, message: message, details: details}
+}
+
+func (c *processingContext) addProcessorIssue(phase string, diagnostic *processingDiagnostic) {
+	issue := ProcessingIssue{
+		Phase:    phase,
+		Severity: issueSeverityWarning,
+		Code:     diagnostic.code,
+		Message:  diagnostic.message,
+		Details:  diagnostic.details,
+	}
+	if attributePath, ok := diagnostic.details["attribute_path"].(string); ok {
+		issue.AttributePath = attributePath
+	}
+	if attribute, ok := diagnostic.details["attribute"].(string); ok {
+		issue.Attribute = attribute
+	}
+	if value, present := diagnostic.details["value"]; present {
+		issue.Value = value
+	}
+	c.result.Issues = append(c.result.Issues, issue)
 }
 
 type classVisitStatus int
@@ -105,35 +136,6 @@ func (eventProcessVisitorBase) onObject(*processingContext, objectVisit)       {
 func (eventProcessVisitorBase) onObjectDone(*processingContext, itemVisit)     {}
 func (eventProcessVisitorBase) onAttribute(*processingContext, attributeVisit) {}
 func (eventProcessVisitorBase) onEventDone(*processingContext, jsonish.Map)    {}
-
-type eventProcessorImpl struct {
-	schema     *schemaImpl
-	processors []eventProcessVisitor
-}
-
-func (si *schemaImpl) NewEventProcessor(processes ...EventProcess) EventProcessor {
-	var config processorConfig
-	for _, process := range processes {
-		if process != nil {
-			process.applyProcess(&config)
-		}
-	}
-	factories := make([]processorFactory, 0, len(config.factories)+len(config.validationFactories))
-	factories = append(factories, config.factories...)
-	factories = append(factories, config.validationFactories...)
-	processors := make([]eventProcessVisitor, 0, len(factories))
-	for _, factory := range factories {
-		processors = append(processors, factory())
-	}
-	return &eventProcessorImpl{
-		schema:     si,
-		processors: processors,
-	}
-}
-
-func (p *eventProcessorImpl) ProcessEvent(event jsonish.Map) (ProcessingResult, error) {
-	return p.schema.processEvent(event, p.processors)
-}
 
 func (si *schemaImpl) processEvent(event jsonish.Map, processors []eventProcessVisitor) (ProcessingResult, error) {
 	if event == nil {

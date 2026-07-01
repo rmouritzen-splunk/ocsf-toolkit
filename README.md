@@ -5,9 +5,10 @@ OCSF Toolkit provides a Go library and a command line tool for processing [OCSF]
 The current processors support:
 
 - Enrichment: add enum siblings and observables.
+- Enrichment removal: safely or forcibly remove enum siblings and observables.
 - Validation: validate a single event against a compiled schema.
 
-Enrichment runs before validation when both are enabled, so validation checks the event after local processing has been applied.
+Event mutations run before validation, so validation checks the final processed event.
 
 ## CLI Usage
 
@@ -68,7 +69,7 @@ The `--schema` argument must point to a compiled OCSF schema file. See [Compiled
 General form:
 
 ```sh
-ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --validate) [options]
+ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --unenrich | --validate) [options]
 ```
 
 ### CLI Examples
@@ -91,7 +92,7 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --event event.json \
   --enrich \
-  --enrich-output enriched-event.json
+  --event-output enriched-event.json
 ```
 
 Enrich an event in place:
@@ -101,7 +102,7 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --event event.json \
   --enrich \
-  --enrich-in-place
+  --update-in-place
 ```
 
 Validate in CI and fail the command when validation errors are found:
@@ -111,7 +112,7 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --events-dir events \
   --validate \
-  --validation-output-dir validation-results \
+  --output-dir validation-results \
   --fail-on-validation-errors
 ```
 
@@ -139,17 +140,17 @@ out/windows/windows_service_activity.json
 out/windows/windows_service_activity-validation.json
 ```
 
-Use separate output trees when needed:
+Safely remove redundant enum siblings and observables, writing the processed event and issue report to one tree:
 
 ```sh
 ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --events-dir events \
-  --enrich \
-  --enrich-output-dir enriched-events \
-  --validate \
-  --validation-output-dir validation-results
+  --unenrich \
+  --output-dir processed
 ```
+
+This writes the processed event and `<base>-unenrich-issues.json`. Use `--force-remove-enum-siblings` or `--force-remove-observables` only when potentially non-redundant source content may be discarded. `--retain-enum-siblings` and `--retain-observables` disable the corresponding removal.
 
 Read a single event from stdin and write enriched JSON to stdout:
 
@@ -158,16 +159,16 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --event - \
   --enrich \
-  --enrich-output -
+  --event-output -
 ```
 
 ### Output Behavior
 
-The CLI requires an explicit output destination for each selected operation. Enrichment uses `--enrich-output`, `--enrich-output-dir`, `--output-dir`, or `--enrich-in-place`. Validation uses `--validation-output`, `--validation-output-dir`, or `--output-dir`.
+The CLI requires explicit destinations. Mutated events use `--event-output`, `--output-dir`, or `--update-in-place`. A single validation report may use `--validation-output`; a single enrichment-removal report may use `--unenrich-issues-output`. Directory mode writes selected event and report outputs beneath `--output-dir`.
 
-Output directories are created if necessary. Output files are not replaced unless `--overwrite` is supplied, except that `--enrich-in-place` replaces the input event file for enrichment without requiring `--overwrite`.
+Output directories are created if necessary. Output files are not replaced unless `--overwrite` is supplied, except that `--update-in-place` replaces input event files without requiring `--overwrite`.
 
-`--output-dir` writes enriched events and validation results to one output tree. Use `--enrich-output-dir` and `--validation-output-dir` for separate trees. These output directories may be the same directory because validation files use `<base>-validation.json` names.
+`--output-dir` writes processed events, validation results named `<base>-validation.json`, and enrichment-removal reports named `<base>-unenrich-issues.json` to one output tree.
 
 Validation outputs have this shape:
 
@@ -190,7 +191,29 @@ Validation outputs have this shape:
 }
 ```
 
-Enrichment output is the processed event JSON. For example, if the schema defines `activity_id` with the `activity_name` enum sibling, enrichment can add the sibling field:
+Enrichment-removal reports contain removal counts and issues explaining why observable entries were retained:
+
+```json
+{
+  "input_path": "event.json",
+  "enrichment_removal": {
+    "enum_siblings_removed": 2,
+    "enum_siblings_retained": 1,
+    "observables_removed": 3,
+    "observables_retained": 1
+  },
+  "issues": [
+    {
+      "phase": "enrichment_removal",
+      "severity": "warning",
+      "code": "observable_value_not_found",
+      "message": "The observable value is not present at its name path."
+    }
+  ]
+}
+```
+
+Event output is the processed event JSON. For example, if the schema defines `activity_id` with the `activity_name` enum sibling, enrichment can add the sibling field:
 
 ```json
 {
@@ -199,7 +222,7 @@ Enrichment output is the processed event JSON. For example, if the schema define
 }
 ```
 
-`--validation-output -`, `--enrich-output -`, `--summary-output -`, and `--summary-json-output -` write to stdout. At most one selected output may write to stdout.
+`--event-output -`, `--validation-output -`, `--unenrich-issues-output -`, `--summary-output -`, and `--summary-json-output -` write to stdout. At most one selected output may write to stdout.
 
 By default, a terse human-readable summary is written to stderr. Use `--quiet` to suppress it. `--summary-output` writes a human-readable summary with tool metadata, and `--summary-json-output` writes the same summary information as JSON.
 
@@ -210,7 +233,7 @@ path or a relative path containing `..` could place output outside the selected 
 For that reason, single-event output directories preserve only safe relative paths; unsafe paths use
 the input file's basename.
 
-Use `--skip-invalid-output` with `--enrich --validate` to avoid writing enriched events when validation errors are found.
+Use `--skip-invalid-output` with a mutating operation and `--validate` to avoid writing processed events when validation errors are found.
 
 ### Exit Codes
 
@@ -239,7 +262,7 @@ import (
 )
 ```
 
-Load a compiled schema, build a processor, and process an event:
+Load a compiled schema, build a processor pipeline, and process an event:
 
 ```go
 schema, err := eventschema.New("ocsf-schema-v1.8.0.json")
@@ -247,17 +270,20 @@ if err != nil {
 	return err
 }
 
-processor := schema.NewEventProcessor(
+pipeline, err := schema.NewEventProcessorPipeline(
 	eventschema.NewEnrichment(),
 	eventschema.NewValidation(),
 )
+if err != nil {
+	return err
+}
 
 event, err := jsonio.ReadObject("event.json")
 if err != nil {
 	return err
 }
 
-result, err := processor.ProcessEvent(event)
+result, err := pipeline.ProcessEvent(event)
 if err != nil {
 	return err
 }
@@ -267,9 +293,9 @@ if len(result.Validation.Errors) > 0 {
 }
 ```
 
-`Schema` and `EventProcessor` values are safe for concurrent use after construction when each `ProcessEvent` call receives a distinct event map. The event map and its nested maps or slices must not be accessed or mutated concurrently while processing is running.
+`Schema` and `EventProcessorPipeline` values are safe for concurrent use after construction when each `ProcessEvent` call receives a distinct event map. The event map and its nested maps or slices must not be accessed or mutated concurrently while processing is running.
 
-`ProcessEvent` mutates the event in place when enrichment is enabled. Processing is not transactional: if `ProcessEvent` returns an error, the event may already be partially modified. Callers that need to preserve the original event should deep-copy it before processing.
+`ProcessEvent` mutates the event in place when enrichment or enrichment removal is enabled. Processing is not transactional: if `ProcessEvent` returns an error, the event may already be partially modified. Callers that need to preserve the original event should deep-copy it before processing.
 
 Validation failures are reported in `ProcessingResult`; they do not normally return a Go `error`. The `error` return is for tooling failures or unusable input.
 
@@ -280,19 +306,36 @@ For JSON-encoded events, preserving numbers as `json.Number` is safer than decod
 Create an enrichment processor:
 
 ```go
-processor := schema.NewEventProcessor(eventschema.NewEnrichment())
+pipeline, err := schema.NewEventProcessorPipeline(eventschema.NewEnrichment())
 ```
 
 Create a validation processor:
 
 ```go
-processor := schema.NewEventProcessor(eventschema.NewValidation())
+pipeline, err := schema.NewEventProcessorPipeline(eventschema.NewValidation())
 ```
 
-Create a processor that enriches and then validates:
+Create a safe enrichment-removal processor:
 
 ```go
-processor := schema.NewEventProcessor(
+pipeline, err := schema.NewEventProcessorPipeline(eventschema.NewEnrichmentRemoval())
+```
+
+Safe removal preserves enum siblings and observables that cannot be proven redundant. Force removal is explicit:
+
+```go
+pipeline, err := schema.NewEventProcessorPipeline(
+	eventschema.NewEnrichmentRemoval(
+		eventschema.WithForceRemoveEnumSiblings(),
+		eventschema.WithForceRemoveObservables(),
+	),
+)
+```
+
+Create a pipeline that enriches and then validates:
+
+```go
+pipeline, err := schema.NewEventProcessorPipeline(
 	eventschema.NewEnrichment(),
 	eventschema.NewValidation(),
 )
@@ -301,7 +344,7 @@ processor := schema.NewEventProcessor(
 Options are applied to individual processors:
 
 ```go
-processor := schema.NewEventProcessor(
+pipeline, err := schema.NewEventProcessorPipeline(
 	eventschema.NewEnrichment(
 		eventschema.WithAddEnumSiblings(true),
 		eventschema.WithAddObservables(false),
@@ -314,6 +357,12 @@ processor := schema.NewEventProcessor(
 
 `NewEnrichment` adds enum siblings and observables by default. Use `WithAddEnumSiblings(false)` or `WithAddObservables(false)` to disable either enrichment.
 
+`NewEventProcessorPipeline` validates the complete processing configuration. It returns an aggregate error containing all detected problems with an empty or no-op configuration, duplicate processors, retain/force conflicts, or a configuration that adds and removes the same category. CLI flag validation reports equivalent conflicts using the relevant flag names.
+
+Enrichment preserves a non-empty existing `observables` attribute instead of replacing it. When malformed structure or existing data prevents requested enrichment, `ProcessingResult.Issues` contains a nonfatal issue with phase `enrichment`; enrichment does not attempt to duplicate general validation.
+
+`NewEnrichmentRemoval` safely removes supported scalar integral enum siblings and redundant observables by default. Use `WithRemoveEnumSiblings(false)` or `WithRemoveObservables(false)` to retain either category. Legacy enum arrays remain untouched. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using OCSF-compatible string conversion; object observables without values are removed only when their path resolves to a JSON object.
+
 `NewValidation` reports required validation errors by default. Use `WithWarnOnMissingRecommended()` to report missing recommended attributes as warnings.
 
 ### Result Model
@@ -322,9 +371,10 @@ processor := schema.NewEventProcessor(
 
 ```go
 type ProcessingResult struct {
-	Validation eventschema.ValidationResult
-	Enrichment eventschema.EnrichmentResult
-	Issues     []eventschema.ProcessingIssue
+	Validation        eventschema.ValidationResult
+	Enrichment        eventschema.EnrichmentResult
+	EnrichmentRemoval eventschema.EnrichmentRemovalResult
+	Issues            []eventschema.ProcessingIssue
 }
 ```
 
@@ -341,6 +391,17 @@ Enrichment counters report what was added:
 result.Enrichment.EnumSiblingsAdded
 result.Enrichment.ObservablesAdded
 ```
+
+Enrichment-removal counters report what was removed or retained:
+
+```go
+result.EnrichmentRemoval.EnumSiblingsRemoved
+result.EnrichmentRemoval.EnumSiblingsRetained
+result.EnrichmentRemoval.ObservablesRemoved
+result.EnrichmentRemoval.ObservablesRetained
+```
+
+`ProcessingResult.Issues` aggregates phase-specific processor diagnostics. Validation issues also appear in `Validation.Errors` or `Validation.Warnings`; enrichment and enrichment-removal issues explain requested mutations that could not be performed safely.
 
 For a complete working example of library usage, see the CLI implementation in `cmd/ocsf-toolkit`.
 

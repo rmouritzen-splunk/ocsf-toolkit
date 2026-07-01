@@ -54,6 +54,11 @@ test:
 	@echo "Running unit tests with coverage"
 	go test -v -cover -covermode=count -coverprofile=${coverage_out} -coverpkg ./... ./...
 
+.PHONY: test-race
+test-race:
+	@echo "Running unit tests with the race detector"
+	go test -race ./...
+
 .PHONY: coverage
 coverage: test
 	@echo "Generating coverage report"
@@ -80,10 +85,10 @@ gofmt:
 	gofmt -w .
 
 .PHONY: verify
-verify: gotidy-check gofmt-check lint test govet build
+verify: gotidy-check gofmt-check lint test test-race govet build
 
 .PHONY: verify-all-platforms
-verify-all-platforms: gotidy-check gofmt-check lint coverage govet build-all-platforms
+verify-all-platforms: gotidy-check gofmt-check lint coverage test-race govet build-all-platforms
 
 .PHONY: package-dist
 package-dist: build-all-platforms

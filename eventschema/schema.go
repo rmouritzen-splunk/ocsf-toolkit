@@ -17,52 +17,48 @@ const expectedCompileVersion = 1
 //
 // Schema values are safe for concurrent use after construction.
 type Schema interface {
-	// NewEventProcessor builds a reusable processor from the requested event processes.
+	// NewEventProcessorPipeline builds a reusable pipeline from the requested event processors.
 	//
-	// Validation processes run after other processes, regardless of the order supplied, so
+	// Validation processors run after other processors, regardless of the order supplied, so
 	// validation observes the event after enrichment and any future mutating processors.
-	NewEventProcessor(processes ...EventProcess) EventProcessor
+	// An error is returned when no processing action is enabled, a processor is configured
+	// more than once, or enrichment would both add and remove the same content. The returned
+	// error joins all detected configuration problems.
+	NewEventProcessorPipeline(processors ...EventProcessor) (EventProcessorPipeline, error)
 }
 
-// EventProcessor processes OCSF events in-place.
+// EventProcessorPipeline processes OCSF events in-place.
 //
-// EventProcessor values are safe for concurrent use after construction, provided each concurrent
-// ProcessEvent call receives a distinct event map.
-type EventProcessor interface {
-	// ProcessEvent enriches and/or validates event in place.
+// EventProcessorPipeline values are safe for concurrent use after construction, provided each
+// concurrent ProcessEvent call receives a distinct event map.
+type EventProcessorPipeline interface {
+	// ProcessEvent adds or removes enrichment and/or validates event in place.
 	//
 	// The event map and any nested maps or slices it contains must not be accessed or mutated
 	// concurrently while ProcessEvent is running.
 	//
-	// Processing is not transactional. When enrichment or future mutating processors are enabled,
-	// the event may be partially modified if ProcessEvent returns an error. Callers that need to
-	// preserve the original event should deep-copy it before processing.
+	// Processing is not transactional. When enrichment removal, enrichment, or future mutating
+	// processors are enabled, the event may be partially modified if ProcessEvent returns an error.
+	// Callers that need to preserve the original event should deep-copy it before processing.
 	//
 	// Invalid events are reported in the returned ProcessingResult. The error return is for
 	// processor failures or unusable caller input, not OCSF validation failures.
 	ProcessEvent(event jsonish.Map) (ProcessingResult, error)
 }
 
-// EventProcess configures one processing phase for an EventProcessor.
+// EventProcessor configures one processing phase in an EventProcessorPipeline.
 //
-// Callers normally create values with NewEnrichment, NewValidation, or future phase constructors
-// from this package.
-type EventProcess interface {
-	applyProcess(*processorConfig)
+// Callers normally create processors with NewEnrichment, NewEnrichmentRemoval, NewValidation,
+// or future processor constructors from this package.
+type EventProcessor interface {
+	applyProcessor(*pipelineConfig)
 }
 
-type eventProcessFunc func(*processorConfig)
+type eventProcessorFunc func(*pipelineConfig)
 
-func (f eventProcessFunc) applyProcess(config *processorConfig) {
+func (f eventProcessorFunc) applyProcessor(config *pipelineConfig) {
 	f(config)
 }
-
-type processorConfig struct {
-	factories           []processorFactory
-	validationFactories []processorFactory
-}
-
-type processorFactory func() eventProcessVisitor
 
 type validationConfig struct {
 	warnOnMissingRecommended bool
@@ -73,7 +69,16 @@ type enrichmentConfig struct {
 	addObservables  bool
 }
 
-// ValidationOption configures the validation process created by NewValidation.
+type enrichmentRemovalConfig struct {
+	removeEnumSiblings      bool
+	removeObservables       bool
+	forceRemoveEnumSiblings bool
+	forceRemoveObservables  bool
+	retainEnumSiblings      bool
+	retainObservables       bool
+}
+
+// ValidationOption configures the validation processor created by NewValidation.
 type ValidationOption interface {
 	applyValidation(*validationConfig)
 }
@@ -84,17 +89,20 @@ func (f validationOptionFunc) applyValidation(config *validationConfig) {
 	f(config)
 }
 
-// NewValidation creates an event process that validates OCSF events.
-func NewValidation(options ...ValidationOption) EventProcess {
+// NewValidation creates an event processor that validates OCSF events.
+func NewValidation(options ...ValidationOption) EventProcessor {
 	config := validationConfig{}
 	for _, option := range options {
 		if option != nil {
 			option.applyValidation(&config)
 		}
 	}
-	return eventProcessFunc(func(processorConfig *processorConfig) {
-		processorConfig.validationFactories = append(processorConfig.validationFactories, func() eventProcessVisitor {
-			return &validationProcessor{config: config}
+	return eventProcessorFunc(func(pipeline *pipelineConfig) {
+		pipeline.processors = append(pipeline.processors, configuredProcessor{
+			kind: processorKindValidation,
+			factory: func() eventProcessVisitor {
+				return &validationProcessor{config: config}
+			},
 		})
 	})
 }
@@ -106,7 +114,7 @@ func WithWarnOnMissingRecommended() ValidationOption {
 	})
 }
 
-// EnrichmentOption configures the enrichment process created by NewEnrichment.
+// EnrichmentOption configures the enrichment processor created by NewEnrichment.
 type EnrichmentOption interface {
 	applyEnrichment(*enrichmentConfig)
 }
@@ -117,10 +125,10 @@ func (f enrichmentOptionFunc) applyEnrichment(config *enrichmentConfig) {
 	f(config)
 }
 
-// NewEnrichment creates an event process that enriches OCSF events.
+// NewEnrichment creates an event processor that enriches OCSF events.
 //
 // Enum sibling and observable enrichment are enabled by default.
-func NewEnrichment(options ...EnrichmentOption) EventProcess {
+func NewEnrichment(options ...EnrichmentOption) EventProcessor {
 	config := enrichmentConfig{
 		addEnumSiblings: true,
 		addObservables:  true,
@@ -130,9 +138,13 @@ func NewEnrichment(options ...EnrichmentOption) EventProcess {
 			option.applyEnrichment(&config)
 		}
 	}
-	return eventProcessFunc(func(processorConfig *processorConfig) {
-		processorConfig.factories = append(processorConfig.factories, func() eventProcessVisitor {
-			return &enrichmentProcessor{config: config}
+	return eventProcessorFunc(func(pipeline *pipelineConfig) {
+		pipeline.processors = append(pipeline.processors, configuredProcessor{
+			kind:       processorKindEnrichment,
+			enrichment: config,
+			factory: func() eventProcessVisitor {
+				return &enrichmentProcessor{config: config}
+			},
 		})
 	})
 }
@@ -151,7 +163,76 @@ func WithAddObservables(add bool) EnrichmentOption {
 	})
 }
 
-// ProcessingResult is the result returned by EventProcessor.ProcessEvent.
+// EnrichmentRemovalOption configures the enrichment-removal processor created by NewEnrichmentRemoval.
+type EnrichmentRemovalOption interface {
+	applyEnrichmentRemoval(*enrichmentRemovalConfig)
+}
+
+type enrichmentRemovalOptionFunc func(*enrichmentRemovalConfig)
+
+func (f enrichmentRemovalOptionFunc) applyEnrichmentRemoval(config *enrichmentRemovalConfig) {
+	f(config)
+}
+
+// NewEnrichmentRemoval creates an event processor that removes redundant enrichment from OCSF events.
+//
+// Safe enum sibling and observable removal are enabled by default. Safe removal preserves values that
+// cannot be proven redundant. Force options may discard malformed or non-standard event content.
+func NewEnrichmentRemoval(options ...EnrichmentRemovalOption) EventProcessor {
+	config := enrichmentRemovalConfig{
+		removeEnumSiblings: true,
+		removeObservables:  true,
+	}
+	for _, option := range options {
+		if option != nil {
+			option.applyEnrichmentRemoval(&config)
+		}
+	}
+	return eventProcessorFunc(func(pipeline *pipelineConfig) {
+		pipeline.processors = append(pipeline.processors, configuredProcessor{
+			kind:    processorKindEnrichmentRemoval,
+			removal: config,
+			factory: func() eventProcessVisitor {
+				return &enrichmentRemovalProcessor{config: config}
+			},
+		})
+	})
+}
+
+// WithRemoveEnumSiblings controls whether scalar integral enum siblings are removed.
+func WithRemoveEnumSiblings(remove bool) EnrichmentRemovalOption {
+	return enrichmentRemovalOptionFunc(func(config *enrichmentRemovalConfig) {
+		config.removeEnumSiblings = remove
+		config.retainEnumSiblings = config.retainEnumSiblings || !remove
+	})
+}
+
+// WithRemoveObservables controls whether redundant observable entries are removed.
+func WithRemoveObservables(remove bool) EnrichmentRemovalOption {
+	return enrichmentRemovalOptionFunc(func(config *enrichmentRemovalConfig) {
+		config.removeObservables = remove
+		config.retainObservables = config.retainObservables || !remove
+	})
+}
+
+// WithForceRemoveEnumSiblings removes supported enum siblings without requiring them to match the schema caption.
+// Enum ID 99 siblings and unsupported enum forms are always retained.
+func WithForceRemoveEnumSiblings() EnrichmentRemovalOption {
+	return enrichmentRemovalOptionFunc(func(config *enrichmentRemovalConfig) {
+		config.removeEnumSiblings = true
+		config.forceRemoveEnumSiblings = true
+	})
+}
+
+// WithForceRemoveObservables removes the event's observables attribute regardless of its contents.
+func WithForceRemoveObservables() EnrichmentRemovalOption {
+	return enrichmentRemovalOptionFunc(func(config *enrichmentRemovalConfig) {
+		config.removeObservables = true
+		config.forceRemoveObservables = true
+	})
+}
+
+// ProcessingResult is the result returned by EventProcessorPipeline.ProcessEvent.
 //
 // Validation errors and warnings are reported here instead of through the Go error return.
 type ProcessingResult struct {
@@ -161,7 +242,10 @@ type ProcessingResult struct {
 	// Enrichment contains counts for values added to the event during enrichment.
 	Enrichment EnrichmentResult `json:"enrichment"`
 
-	// Issues contains non-fatal issues from enrichment or future processors.
+	// EnrichmentRemoval contains counts for values removed or retained during enrichment removal.
+	EnrichmentRemoval EnrichmentRemovalResult `json:"enrichment_removal"`
+
+	// Issues contains validation issues and non-fatal issues from enrichment or other processors.
 	Issues []ProcessingIssue `json:"issues,omitempty"`
 }
 
@@ -181,6 +265,21 @@ type EnrichmentResult struct {
 
 	// ObservablesAdded is the number of observable entries added to the event.
 	ObservablesAdded int `json:"observables_added"`
+}
+
+// EnrichmentRemovalResult reports what enrichment removal changed or retained in the processed event.
+type EnrichmentRemovalResult struct {
+	// EnumSiblingsRemoved is the number of enum sibling fields removed from the event.
+	EnumSiblingsRemoved int `json:"enum_siblings_removed"`
+
+	// EnumSiblingsRetained is the number of enum sibling fields retained because removal was unsafe or unsupported.
+	EnumSiblingsRetained int `json:"enum_siblings_retained"`
+
+	// ObservablesRemoved is the number of observable entries removed from the event.
+	ObservablesRemoved int `json:"observables_removed"`
+
+	// ObservablesRetained is the number of observable entries retained because removal was unsafe.
+	ObservablesRetained int `json:"observables_retained"`
 }
 
 // ProcessingIssue describes a validation, enrichment, or future processing issue.

@@ -18,6 +18,16 @@ func testPtrTo[T any](value T) *T {
 	return &value
 }
 
+func mustNewEventProcessorPipeline(
+	assert *require.Assertions,
+	schema Schema,
+	processors ...EventProcessor,
+) EventProcessorPipeline {
+	pipeline, err := schema.NewEventProcessorPipeline(processors...)
+	assert.NoError(err)
+	return pipeline
+}
+
 func TestLoadSchemaFromFile(t *testing.T) {
 	assert := require.New(t)
 	schema, err := New(testSchemaFilePath)
@@ -38,28 +48,26 @@ func checkSchema(assert *require.Assertions, schema Schema) {
 	var err error
 
 	emptyEvent := jsonish.Map{}
-	processor := schema.NewEventProcessor(NewValidation(), NewEnrichment())
-	result, err := processor.ProcessEvent(emptyEvent)
+	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation(), NewEnrichment())
+	result, err := pipeline.ProcessEvent(emptyEvent)
 	assert.NoError(err)
 	assert.Len(result.Validation.Errors, 1, "missing uid should fail validation")
 	assert.Equal(jsonish.Map{}, emptyEvent, "empty event should remain empty after error")
 
-	processor = schema.NewEventProcessor()
-	result, err = processor.ProcessEvent(emptyEvent)
-	assert.NoError(err, "should not fail when no enrichment asked for")
-	assert.Empty(result.Validation.Errors)
-	assert.Equal(jsonish.Map{}, emptyEvent, "empty event should remain empty after no enrichment")
+	pipeline, err = schema.NewEventProcessorPipeline()
+	assert.EqualError(err, "at least one event processing action is required")
+	assert.Nil(pipeline)
 
 	// negative numbered class uid values are never used
 	undefinedClassEvent := jsonish.Map{"class_uid": json.Number("-1")}
-	processor = schema.NewEventProcessor(NewValidation(), NewEnrichment())
-	result, err = processor.ProcessEvent(undefinedClassEvent)
+	pipeline = mustNewEventProcessorPipeline(assert, schema, NewValidation(), NewEnrichment())
+	result, err = pipeline.ProcessEvent(undefinedClassEvent)
 	assert.NoError(err, "undefined class uid should be a validation error")
 	assert.Len(result.Validation.Errors, 1)
 	assert.Equal(jsonish.Map{"class_uid": json.Number("-1")}, undefinedClassEvent, "undefined class event should remain unchanged")
 
 	badUidEvent := jsonish.Map{"class_uid": "bogus"}
-	result, err = processor.ProcessEvent(badUidEvent)
+	result, err = pipeline.ProcessEvent(badUidEvent)
 	assert.NoError(err, "bad class uid should be a validation error")
 	assert.Len(result.Validation.Errors, 1)
 	assert.Equal(jsonish.Map{"class_uid": "bogus"}, badUidEvent, "bad uid event should remain unchanged")
@@ -646,8 +654,8 @@ func TestClassObservablesWithSiblings(t *testing.T) {
 		},
 	}
 
-	processor := si.NewEventProcessor(NewEnrichment())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewEnrichment())
+	result, err := pipeline.ProcessEvent(event)
 	assert.NoError(err)
 	assert.Empty(result.Validation.Errors)
 	assert.Equal(1, result.Enrichment.EnumSiblingsAdded)
@@ -677,8 +685,8 @@ func TestClassObservablesWithoutSiblings(t *testing.T) {
 		},
 	}
 
-	processor := si.NewEventProcessor(NewEnrichment(WithAddEnumSiblings(false)))
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewEnrichment(WithAddEnumSiblings(false)))
+	result, err := pipeline.ProcessEvent(event)
 	assert.NoError(err)
 	assert.Empty(result.Validation.Errors)
 	assert.Equal(0, result.Enrichment.EnumSiblingsAdded)
@@ -718,11 +726,11 @@ func TestProcessEventValidationValidEvent(t *testing.T) {
 		},
 	}
 
-	processor := si.NewEventProcessor(
+	pipeline := mustNewEventProcessorPipeline(assert, si,
 		NewValidation(WithWarnOnMissingRecommended()),
 		NewEnrichment(),
 	)
-	result, err := processor.ProcessEvent(event)
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Empty(result.Validation.Errors)
@@ -750,8 +758,8 @@ func TestProcessEventValidationReportsExpectedIssues(t *testing.T) {
 		"surprise": true,
 	}
 
-	processor := si.NewEventProcessor(NewValidation(WithWarnOnMissingRecommended()))
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation(WithWarnOnMissingRecommended()))
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	errorCodes := issueCodes(result.Validation.Errors)
@@ -780,8 +788,8 @@ func TestProcessEventValidationLongTIsInt64(t *testing.T) {
 		"name":        "event name",
 		"red":         "recommended present",
 	}
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(validMaxInt64Event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(validMaxInt64Event)
 	assert.NoError(err)
 	assert.NotContains(issueCodes(result.Validation.Errors), "attribute_wrong_type")
 
@@ -793,7 +801,7 @@ func TestProcessEventValidationLongTIsInt64(t *testing.T) {
 		"name":        "event name",
 		"red":         "recommended present",
 	}
-	result, err = processor.ProcessEvent(tooLargeEvent)
+	result, err = pipeline.ProcessEvent(tooLargeEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_wrong_type")
 }
@@ -815,8 +823,8 @@ func TestProcessEventValidationObservableReference(t *testing.T) {
 		},
 	}
 
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "observable_name_invalid_reference")
@@ -829,8 +837,8 @@ func TestProcessEventValidationDoesNotEnrich(t *testing.T) {
 	event["mode_id"] = json.Number("1")
 	event["ball"] = jsonish.Map{"green": "go"}
 
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Empty(result.Validation.Errors)
@@ -849,8 +857,8 @@ func TestProcessEventValidationRunsAfterEnrichment(t *testing.T) {
 	event["mode_id"] = json.Number("1")
 	event["ball"] = jsonish.Map{"green": "go"}
 
-	processor := si.NewEventProcessor(NewValidation(), NewEnrichment())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation(), NewEnrichment())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Empty(result.Validation.Errors)
@@ -869,8 +877,8 @@ func TestProcessEventEnrichmentDoesNotValidate(t *testing.T) {
 		"mode_id":   json.Number("1"),
 	}
 
-	processor := si.NewEventProcessor(NewEnrichment())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewEnrichment())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Empty(result.Validation.Errors)
@@ -882,9 +890,9 @@ func TestProcessEventEnrichmentDoesNotValidate(t *testing.T) {
 func TestProcessEventNilEventReturnsError(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
-	processor := si.NewEventProcessor(NewValidation(), NewEnrichment())
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation(), NewEnrichment())
 
-	result, err := processor.ProcessEvent(nil)
+	result, err := pipeline.ProcessEvent(nil)
 
 	assert.ErrorIs(err, errNilEvent)
 	assert.Empty(result.Validation.Errors)
@@ -896,8 +904,8 @@ func TestProcessEventValidationUnknownClassUIDUsesInt64(t *testing.T) {
 	si := makeValidationTestSchema(assert)
 	event := jsonish.Map{"class_uid": json.Number("2147483648")}
 
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "class_uid_unknown")
@@ -910,15 +918,15 @@ func TestProcessEventValidationRecommendedWarningsAreOptional(t *testing.T) {
 
 	event := validValidationEvent()
 	delete(event, "red")
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 	assert.NoError(err)
 	assert.NotContains(issueCodes(result.Validation.Warnings), "attribute_recommended_missing")
 
 	event = validValidationEvent()
 	delete(event, "red")
-	processor = si.NewEventProcessor(NewValidation(WithWarnOnMissingRecommended()))
-	result, err = processor.ProcessEvent(event)
+	pipeline = mustNewEventProcessorPipeline(assert, si, NewValidation(WithWarnOnMissingRecommended()))
+	result, err = pipeline.ProcessEvent(event)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Warnings), "attribute_recommended_missing")
 }
@@ -929,8 +937,8 @@ func TestProcessEventValidationTypeUIDIncorrect(t *testing.T) {
 	event := validValidationEvent()
 	event["type_uid"] = json.Number("102")
 
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "type_uid_incorrect")
@@ -957,8 +965,8 @@ func TestProcessEventValidationTypeUIDOverflow(t *testing.T) {
 		"type_uid":    json.Number("1"),
 	}
 
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "type_uid_expected_value_overflow")
@@ -970,8 +978,8 @@ func TestProcessEventValidationInactiveProfileAttributeIsUnknown(t *testing.T) {
 	event := validValidationEvent()
 	event["profile_attr"] = "inactive"
 
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_unknown")
@@ -981,19 +989,19 @@ func TestProcessEventValidationInactiveProfileAttributeIsUnknown(t *testing.T) {
 func TestProcessEventValidationEnumSiblingWarnings(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
-	processor := si.NewEventProcessor(NewValidation())
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
 
 	incorrectSiblingEvent := validValidationEvent()
 	incorrectSiblingEvent["mode_id"] = json.Number("1")
 	incorrectSiblingEvent["mode"] = "Wrong"
-	result, err := processor.ProcessEvent(incorrectSiblingEvent)
+	result, err := pipeline.ProcessEvent(incorrectSiblingEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Warnings), "attribute_enum_sibling_incorrect")
 
 	suspiciousOtherEvent := validValidationEvent()
 	suspiciousOtherEvent["mode_id"] = json.Number("99")
 	suspiciousOtherEvent["mode"] = "Other"
-	result, err = processor.ProcessEvent(suspiciousOtherEvent)
+	result, err = pipeline.ProcessEvent(suspiciousOtherEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Warnings), "attribute_enum_sibling_suspicious_other")
 }
@@ -1001,25 +1009,25 @@ func TestProcessEventValidationEnumSiblingWarnings(t *testing.T) {
 func TestProcessEventValidationEnumArraySiblingErrors(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
-	processor := si.NewEventProcessor(NewValidation())
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
 
 	missingSiblingElementEvent := validValidationEvent()
 	missingSiblingElementEvent["status_ids"] = []any{json.Number("1"), json.Number("2")}
 	missingSiblingElementEvent["statuses"] = []any{"Open"}
-	result, err := processor.ProcessEvent(missingSiblingElementEvent)
+	result, err := pipeline.ProcessEvent(missingSiblingElementEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_enum_array_sibling_missing")
 
 	incorrectSiblingElementEvent := validValidationEvent()
 	incorrectSiblingElementEvent["status_ids"] = []any{json.Number("1")}
 	incorrectSiblingElementEvent["statuses"] = []any{"Closed"}
-	result, err = processor.ProcessEvent(incorrectSiblingElementEvent)
+	result, err = pipeline.ProcessEvent(incorrectSiblingElementEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_enum_array_sibling_incorrect")
 
 	unknownArrayValueEvent := validValidationEvent()
 	unknownArrayValueEvent["status_ids"] = []any{json.Number("3")}
-	result, err = processor.ProcessEvent(unknownArrayValueEvent)
+	result, err = pipeline.ProcessEvent(unknownArrayValueEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_enum_array_value_unknown")
 }
@@ -1027,33 +1035,33 @@ func TestProcessEventValidationEnumArraySiblingErrors(t *testing.T) {
 func TestProcessEventValidationConstraintEdgeCases(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
-	processor := si.NewEventProcessor(NewValidation())
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
 
 	dottedPathEvent := validValidationEvent()
 	delete(dottedPathEvent, "name")
 	dottedPathEvent["ball"] = jsonish.Map{"green": "go"}
-	result, err := processor.ProcessEvent(dottedPathEvent)
+	result, err := pipeline.ProcessEvent(dottedPathEvent)
 	assert.NoError(err)
 	assert.NotContains(issueCodes(result.Validation.Errors), "constraint_failed")
 
 	si = makeValidationTestSchema(assert)
 	si.classes[int64(1)].Constraints = map[string][]string{"just_one": {"name", "ball.green"}}
-	processor = si.NewEventProcessor(NewValidation())
+	pipeline = mustNewEventProcessorPipeline(assert, si, NewValidation())
 
 	onePresentEvent := validValidationEvent()
-	result, err = processor.ProcessEvent(onePresentEvent)
+	result, err = pipeline.ProcessEvent(onePresentEvent)
 	assert.NoError(err)
 	assert.NotContains(issueCodes(result.Validation.Errors), "constraint_failed")
 
 	nonePresentEvent := validValidationEvent()
 	delete(nonePresentEvent, "name")
-	result, err = processor.ProcessEvent(nonePresentEvent)
+	result, err = pipeline.ProcessEvent(nonePresentEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "constraint_failed")
 
 	twoPresentEvent := validValidationEvent()
 	twoPresentEvent["ball"] = jsonish.Map{"green": "go"}
-	result, err = processor.ProcessEvent(twoPresentEvent)
+	result, err = pipeline.ProcessEvent(twoPresentEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "constraint_failed")
 }
@@ -1061,47 +1069,47 @@ func TestProcessEventValidationConstraintEdgeCases(t *testing.T) {
 func TestProcessEventValidationTypeConstraintChecks(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
-	processor := si.NewEventProcessor(NewValidation())
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
 
 	inclusiveBoundsEvent := validValidationEvent()
 	inclusiveBoundsEvent["bounded_count"] = json.Number("-10")
-	result, err := processor.ProcessEvent(inclusiveBoundsEvent)
+	result, err := pipeline.ProcessEvent(inclusiveBoundsEvent)
 	assert.NoError(err)
 	assert.NotContains(issueCodes(result.Validation.Errors), "attribute_value_exceeds_range")
 
 	inclusiveBoundsEvent = validValidationEvent()
 	inclusiveBoundsEvent["bounded_count"] = json.Number("10")
-	result, err = processor.ProcessEvent(inclusiveBoundsEvent)
+	result, err = pipeline.ProcessEvent(inclusiveBoundsEvent)
 	assert.NoError(err)
 	assert.NotContains(issueCodes(result.Validation.Errors), "attribute_value_exceeds_range")
 
 	outOfRangeEvent := validValidationEvent()
 	outOfRangeEvent["bounded_count"] = json.Number("-11")
-	result, err = processor.ProcessEvent(outOfRangeEvent)
+	result, err = pipeline.ProcessEvent(outOfRangeEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_value_exceeds_range")
 
 	outOfRangeEvent = validValidationEvent()
 	outOfRangeEvent["bounded_count"] = json.Number("11")
-	result, err = processor.ProcessEvent(outOfRangeEvent)
+	result, err = pipeline.ProcessEvent(outOfRangeEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_value_exceeds_range")
 
 	maxLenEvent := validValidationEvent()
 	maxLenEvent["short_text"] = "abcd"
-	result, err = processor.ProcessEvent(maxLenEvent)
+	result, err = pipeline.ProcessEvent(maxLenEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_value_exceeds_max_len")
 
 	regexEvent := validValidationEvent()
 	regexEvent["code"] = "abc"
-	result, err = processor.ProcessEvent(regexEvent)
+	result, err = pipeline.ProcessEvent(regexEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Warnings), "attribute_value_regex_not_matched")
 
 	valuesEvent := validValidationEvent()
 	valuesEvent["level"] = json.Number("3")
-	result, err = processor.ProcessEvent(valuesEvent)
+	result, err = pipeline.ProcessEvent(valuesEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_value_not_in_type_values")
 }
@@ -1109,7 +1117,7 @@ func TestProcessEventValidationTypeConstraintChecks(t *testing.T) {
 func TestProcessEventValidationIntegerAndLongBounds(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
-	processor := si.NewEventProcessor(NewValidation())
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
 
 	testCases := []struct {
 		name      string
@@ -1134,7 +1142,7 @@ func TestProcessEventValidationIntegerAndLongBounds(t *testing.T) {
 			event := validValidationEvent()
 			event[testCase.attribute] = testCase.value
 
-			result, err := processor.ProcessEvent(event)
+			result, err := pipeline.ProcessEvent(event)
 
 			assert.NoError(err)
 			wrongTypePaths := issueAttributePaths(issuesWithCode(result.Validation.Errors, "attribute_wrong_type"))
@@ -1158,8 +1166,8 @@ func TestProcessEventValidationDeprecationWarnings(t *testing.T) {
 	event := validValidationEvent()
 	event["mode_id"] = json.Number("1")
 	event["ball"] = jsonish.Map{"green": "go"}
-	processor := si.NewEventProcessor(NewValidation())
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewValidation())
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	warningCodes := issueCodes(result.Validation.Warnings)
@@ -1176,8 +1184,8 @@ func TestProcessEventEnrichmentOptions(t *testing.T) {
 	event["mode_id"] = json.Number("1")
 	event["ball"] = jsonish.Map{"green": "go"}
 
-	processor := si.NewEventProcessor(NewEnrichment(WithAddObservables(false)))
-	result, err := processor.ProcessEvent(event)
+	pipeline := mustNewEventProcessorPipeline(assert, si, NewEnrichment(WithAddObservables(false)))
+	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Equal(3, result.Enrichment.EnumSiblingsAdded)

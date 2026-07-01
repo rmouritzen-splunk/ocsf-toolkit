@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	cliUsage               = "--schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --validate) [options]"
+	cliUsage               = "--schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --unenrich | --validate) [options]"
 	stdioPath              = "-"
 	stdinEventRelativePath = "event.json"
 )
@@ -30,15 +30,18 @@ var version = "dev"
 
 type cliOptions struct {
 	General    generalOptions
-	Validation validationOptions
 	Enrichment enrichmentOptions
+	Removal    enrichmentRemovalOptions
+	Validation validationOptions
 }
 
 type generalOptions struct {
 	Schema            string `short:"s" long:"schema" value-name:"COMPILED_SCHEMA_FILE" description:"Compiled OCSF schema file"`
 	Event             string `short:"e" long:"event" value-name:"FILE" description:"Single event JSON file, or - for stdin"`
 	EventsDir         string `short:"d" long:"events-dir" value-name:"DIR" description:"Directory tree of event JSON files"`
-	OutputDir         string `short:"o" long:"output-dir" value-name:"DIR" description:"Directory for generated event and validation output files"`
+	OutputDir         string `short:"o" long:"output-dir" value-name:"DIR" description:"Directory for generated event and report output files"`
+	UpdateInPlace     bool   `short:"i" long:"update-in-place" description:"Replace input event files with processed output"`
+	EventOutput       string `long:"event-output" value-name:"FILE" description:"Single processed event output file, or - for stdout"`
 	SummaryOutput     string `long:"summary-output" value-name:"FILE" description:"Human-readable summary output file, or - for stdout"`
 	SummaryJSONOutput string `long:"summary-json-output" value-name:"FILE" description:"JSON summary output file, or - for stdout"`
 	Overwrite         bool   `long:"overwrite" description:"Allow replacing existing output files"`
@@ -53,16 +56,21 @@ type validationOptions struct {
 	FailOnValidationErrors   bool   `long:"fail-on-validation-errors" description:"Exit non-zero when validation errors are found"`
 	SkipInvalidOutput        bool   `long:"skip-invalid-output" description:"Do not write non-validation outputs for events with validation errors"`
 	ValidationOutput         string `long:"validation-output" value-name:"FILE" description:"Validation result output file, or - for stdout"`
-	ValidationOutputDir      string `long:"validation-output-dir" value-name:"DIR" description:"Directory for validation result output tree"`
 }
 
 type enrichmentOptions struct {
-	Enrich          bool   `short:"E" long:"enrich" description:"Enrich events; adds enum siblings and observables by default"`
-	NoEnumSiblings  bool   `long:"no-enum-siblings" description:"Do not add enum siblings"`
-	NoObservables   bool   `long:"no-observables" description:"Do not add observables"`
-	EnrichInPlace   bool   `short:"i" long:"enrich-in-place" description:"Overwrite input event files with enriched output"`
-	EnrichOutput    string `long:"enrich-output" value-name:"FILE" description:"Single enriched event output file, or - for stdout"`
-	EnrichOutputDir string `long:"enrich-output-dir" value-name:"DIR" description:"Directory for enriched event output tree"`
+	Enrich         bool `short:"E" long:"enrich" description:"Enrich events; adds enum siblings and observables by default"`
+	NoEnumSiblings bool `long:"no-enum-siblings" description:"Do not add enum siblings"`
+	NoObservables  bool `long:"no-observables" description:"Do not add observables"`
+}
+
+type enrichmentRemovalOptions struct {
+	Unenrich                bool   `short:"u" long:"unenrich" description:"Remove enum siblings and observables when they are safely redundant"`
+	RetainEnumSiblings      bool   `long:"retain-enum-siblings" description:"Do not remove enum siblings"`
+	RetainObservables       bool   `long:"retain-observables" description:"Do not remove observables"`
+	ForceRemoveEnumSiblings bool   `long:"force-remove-enum-siblings" description:"Remove supported enum siblings even when they differ from schema captions"`
+	ForceRemoveObservables  bool   `long:"force-remove-observables" description:"Remove the observables attribute regardless of its contents"`
+	IssuesOutput            string `long:"unenrich-issues-output" value-name:"FILE" description:"Single enrichment-removal issues output file, or - for stdout"`
 }
 
 type processConfig struct {
@@ -75,24 +83,26 @@ type processConfig struct {
 	warnOnMissingRecommended bool
 	failOnValidationErrors   bool
 
-	enrich            bool
-	addEnumSiblings   bool
-	addObservables    bool
-	noEnumSiblings    bool
-	noObservables     bool
-	skipInvalidOutput bool
+	enrich                  bool
+	unenrich                bool
+	addEnumSiblings         bool
+	addObservables          bool
+	removeEnumSiblings      bool
+	removeObservables       bool
+	forceRemoveEnumSiblings bool
+	forceRemoveObservables  bool
+	skipInvalidOutput       bool
 
-	enrichInPlace       bool
-	outputDir           string
-	enrichOutput        string
-	enrichOutputDir     string
-	validationOutput    string
-	validationOutputDir string
-	summaryOutput       string
-	summaryJSONOutput   string
-	overwrite           bool
-	prettyJSON          bool
-	quiet               bool
+	updateInPlace        bool
+	outputDir            string
+	eventOutput          string
+	validationOutput     string
+	unenrichIssuesOutput string
+	summaryOutput        string
+	summaryJSONOutput    string
+	overwrite            bool
+	prettyJSON           bool
+	quiet                bool
 }
 
 type processSummary struct {
@@ -102,24 +112,28 @@ type processSummary struct {
 	ProcessingFailures               int           `json:"processing_failures"`
 	TotalValidationErrorCount        int           `json:"total_validation_error_count"`
 	TotalValidationWarningCount      int           `json:"total_validation_warning_count"`
-	EnrichedEventWriteFailures       int           `json:"enriched_event_write_failures"`
+	EventWriteFailures               int           `json:"event_write_failures"`
 	ValidationResultWriteFailures    int           `json:"validation_result_write_failures"`
+	UnenrichIssuesWriteFailures      int           `json:"unenrich_issues_write_failures"`
 	EventsWithValidationErrors       int           `json:"events_with_validation_errors"`
 	EventsWithValidationWarningsOnly int           `json:"events_with_validation_warnings_only"`
-	EnrichedEventsWritten            int           `json:"enriched_events_written"`
+	EventsWritten                    int           `json:"events_written"`
 	ValidationResultsWritten         int           `json:"validation_results_written"`
-	EnrichedEventsSkipped            int           `json:"enriched_events_skipped"`
+	EventsSkipped                    int           `json:"events_skipped"`
+	EventsWithRetainedEnumSiblings   int           `json:"events_with_retained_enum_siblings"`
+	EventsWithRetainedObservables    int           `json:"events_with_retained_observables"`
 	Files                            []fileSummary `json:"files"`
 }
 
 type summaryReport struct {
-	Metadata            summaryMetadataReport    `json:"metadata"`
-	SchemaPath          string                   `json:"schema_path"`
-	EventFileProcessed  string                   `json:"event_file_processed,omitempty"`
-	EventFilesProcessed *int                     `json:"event_files_processed,omitempty"`
-	Validation          *validationSummaryReport `json:"validation,omitempty"`
-	Enrichment          *enrichmentSummaryReport `json:"enrichment,omitempty"`
-	Files               []fileSummary            `json:"files,omitempty"`
+	Metadata            summaryMetadataReport           `json:"metadata"`
+	SchemaPath          string                          `json:"schema_path"`
+	EventFileProcessed  string                          `json:"event_file_processed,omitempty"`
+	EventFilesProcessed *int                            `json:"event_files_processed,omitempty"`
+	Validation          *validationSummaryReport        `json:"validation,omitempty"`
+	EventProcessing     *eventProcessingSummaryReport   `json:"event_processing,omitempty"`
+	EnrichmentRemoval   *enrichmentRemovalSummaryReport `json:"enrichment_removal,omitempty"`
+	Files               []fileSummary                   `json:"files,omitempty"`
 }
 
 type summaryMetadataReport struct {
@@ -148,11 +162,19 @@ type validationSummaryReport struct {
 	TotalWarningCount      *int   `json:"total_warning_count,omitempty"`
 }
 
-type enrichmentSummaryReport struct {
+type eventProcessingSummaryReport struct {
 	EventWritten  string `json:"event_written,omitempty"`
 	EventSkipped  string `json:"event_skipped,omitempty"`
 	EventsWritten *int   `json:"events_written,omitempty"`
 	EventsSkipped *int   `json:"events_skipped,omitempty"`
+}
+
+type enrichmentRemovalSummaryReport struct {
+	EnumSiblingsRemoved            *int   `json:"enum_siblings_removed,omitempty"`
+	ObservablesRemoved             *int   `json:"observables_removed,omitempty"`
+	IssuesWritten                  string `json:"issues_written,omitempty"`
+	EventsWithRetainedEnumSiblings *int   `json:"events_with_retained_enum_siblings,omitempty"`
+	EventsWithRetainedObservables  *int   `json:"events_with_retained_observables,omitempty"`
 }
 
 type fileSummary struct {
@@ -161,20 +183,33 @@ type fileSummary struct {
 	Processed                  bool   `json:"processed"`
 	ParseError                 string `json:"parse_error,omitempty"`
 	ProcessingError            string `json:"processing_error,omitempty"`
-	EnrichedEventPath          string `json:"enriched_event_path,omitempty"`
-	EnrichedEventWriteError    string `json:"enriched_event_write_error,omitempty"`
+	EventPath                  string `json:"event_path,omitempty"`
+	EventWriteError            string `json:"event_write_error,omitempty"`
 	ValidationResultPath       string `json:"validation_result_path,omitempty"`
 	ValidationResultWriteError string `json:"validation_result_write_error,omitempty"`
 	ValidationErrorCount       int    `json:"validation_error_count"`
 	ValidationWarningCount     int    `json:"validation_warning_count"`
-	EnrichedEventWritten       bool   `json:"enriched_event_written"`
+	EventWritten               bool   `json:"event_written"`
 	ValidationResultWritten    bool   `json:"validation_result_written"`
-	EnrichedEventSkipped       bool   `json:"enriched_event_skipped"`
+	EventSkipped               bool   `json:"event_skipped"`
+	EnumSiblingsRemoved        int    `json:"enum_siblings_removed"`
+	EnumSiblingsRetained       int    `json:"enum_siblings_retained"`
+	ObservablesRemoved         int    `json:"observables_removed"`
+	ObservablesRetained        int    `json:"observables_retained"`
+	UnenrichIssuesPath         string `json:"unenrich_issues_path,omitempty"`
+	UnenrichIssuesWriteError   string `json:"unenrich_issues_write_error,omitempty"`
+	UnenrichIssuesWritten      bool   `json:"unenrich_issues_written"`
 }
 
 type validationOutput struct {
 	InputPath  string                       `json:"input_path"`
 	Validation eventschema.ValidationResult `json:"validation"`
+}
+
+type unenrichIssuesOutput struct {
+	InputPath         string                              `json:"input_path"`
+	EnrichmentRemoval eventschema.EnrichmentRemovalResult `json:"enrichment_removal"`
+	Issues            []eventschema.ProcessingIssue       `json:"issues"`
 }
 
 type inputEvent struct {
@@ -202,9 +237,10 @@ func newParser() (*flags.Parser, *cliOptions) {
 	parser := flags.NewNamedParser("ocsf-toolkit", flags.HelpFlag|flags.PassDoubleDash)
 	parser.Usage = cliUsage
 	parser.ShortDescription = "Process OCSF event files."
-	parser.LongDescription = "Process OCSF event files by enriching and/or validating them with a compiled OCSF schema."
+	parser.LongDescription = "Process OCSF event files by adding or removing enrichment and/or validating them with a compiled OCSF schema."
 	addParserGroup(parser, "General Options", &options.General)
 	addParserGroup(parser, "Enrichment Options", &options.Enrichment)
+	addParserGroup(parser, "Enrichment Removal Options", &options.Removal)
 	addParserGroup(parser, "Validation Options", &options.Validation)
 	return parser, options
 }
@@ -318,17 +354,19 @@ func (options cliOptions) toConfig() (processConfig, error) {
 		warnOnMissingRecommended: options.Validation.WarnOnMissingRecommended,
 		failOnValidationErrors:   options.Validation.FailOnValidationErrors,
 		enrich:                   options.Enrichment.Enrich,
-		addEnumSiblings:          !options.Enrichment.NoEnumSiblings,
-		addObservables:           !options.Enrichment.NoObservables,
-		noEnumSiblings:           options.Enrichment.NoEnumSiblings,
-		noObservables:            options.Enrichment.NoObservables,
+		unenrich:                 options.Removal.Unenrich,
+		addEnumSiblings:          options.Enrichment.Enrich && !options.Enrichment.NoEnumSiblings,
+		addObservables:           options.Enrichment.Enrich && !options.Enrichment.NoObservables,
+		removeEnumSiblings:       options.Removal.Unenrich && !options.Removal.RetainEnumSiblings,
+		removeObservables:        options.Removal.Unenrich && !options.Removal.RetainObservables,
+		forceRemoveEnumSiblings:  options.Removal.ForceRemoveEnumSiblings,
+		forceRemoveObservables:   options.Removal.ForceRemoveObservables,
 		skipInvalidOutput:        options.Validation.SkipInvalidOutput,
-		enrichInPlace:            options.Enrichment.EnrichInPlace,
+		updateInPlace:            options.General.UpdateInPlace,
 		outputDir:                options.General.OutputDir,
-		enrichOutput:             options.Enrichment.EnrichOutput,
-		enrichOutputDir:          options.Enrichment.EnrichOutputDir,
+		eventOutput:              options.General.EventOutput,
 		validationOutput:         options.Validation.ValidationOutput,
-		validationOutputDir:      options.Validation.ValidationOutputDir,
+		unenrichIssuesOutput:     options.Removal.IssuesOutput,
 		summaryOutput:            options.General.SummaryOutput,
 		summaryJSONOutput:        options.General.SummaryJSONOutput,
 		overwrite:                options.General.Overwrite,
@@ -341,8 +379,32 @@ func (options cliOptions) toConfig() (processConfig, error) {
 	if (config.eventPath == "") == (config.eventsDir == "") {
 		return processConfig{}, errors.New("exactly one of --event or --events-dir is required")
 	}
-	if !config.validate && !config.enrich {
-		return processConfig{}, errors.New("at least one of --validate or --enrich is required")
+	if options.Enrichment.NoEnumSiblings || options.Enrichment.NoObservables {
+		if !config.enrich {
+			return processConfig{}, errors.New("--no-enum-siblings and --no-observables require --enrich")
+		}
+	}
+	if options.Removal.RetainEnumSiblings || options.Removal.RetainObservables ||
+		options.Removal.ForceRemoveEnumSiblings || options.Removal.ForceRemoveObservables || options.Removal.IssuesOutput != "" {
+		if !config.unenrich {
+			return processConfig{}, errors.New("enrichment-removal options require --unenrich")
+		}
+	}
+	if options.Removal.RetainEnumSiblings && options.Removal.ForceRemoveEnumSiblings {
+		return processConfig{}, errors.New("--retain-enum-siblings and --force-remove-enum-siblings are mutually exclusive")
+	}
+	if options.Removal.RetainObservables && options.Removal.ForceRemoveObservables {
+		return processConfig{}, errors.New("--retain-observables and --force-remove-observables are mutually exclusive")
+	}
+	if config.addEnumSiblings && config.removeEnumSiblings {
+		return processConfig{}, errors.New("adding and removing enum siblings are mutually exclusive")
+	}
+	if config.addObservables && config.removeObservables {
+		return processConfig{}, errors.New("adding and removing observables are mutually exclusive")
+	}
+	if !config.validate && !config.addEnumSiblings && !config.addObservables &&
+		!config.removeEnumSiblings && !config.removeObservables {
+		return processConfig{}, errors.New("at least one event processing action is required")
 	}
 	if err := validateOutputConfig(config); err != nil {
 		return processConfig{}, err
@@ -353,15 +415,15 @@ func (options cliOptions) toConfig() (processConfig, error) {
 func processHelpNotes() string {
 	return strings.Join([]string{
 		"Notes:",
-		"  --output-dir uses one output tree.",
-		"  Use --enrich-output-dir and --validation-output-dir for separate trees.",
+		"  --output-dir writes processed events and selected reports to one output tree.",
 		"  Directory outputs preserve input-relative paths.",
 		"    With --events-dir, paths are relative to that directory.",
 		"    With --event, safe relative paths are preserved; absolute paths and paths with .. use the basename.",
 		"  Validation files use <base>-validation.json.",
+		"  Enrichment-removal issue files use <base>-unenrich-issues.json.",
 		"  Output directories are created if necessary.",
 		"  Output files are not replaced without --overwrite.",
-		"  --enrich-in-place replaces input event files without --overwrite.",
+		"  --update-in-place replaces input event files without --overwrite.",
 	}, "\n")
 }
 
@@ -389,13 +451,22 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 					report.Validation.ResultWritten = displaySummaryPath(file.ValidationResultPath)
 				}
 			}
-			if config.enrich {
-				report.Enrichment = &enrichmentSummaryReport{}
+			if config.mutatesEvent() {
+				report.EventProcessing = &eventProcessingSummaryReport{}
 				switch {
-				case file.EnrichedEventWritten:
-					report.Enrichment.EventWritten = displaySummaryPath(file.EnrichedEventPath)
-				case file.EnrichedEventSkipped:
-					report.Enrichment.EventSkipped = "validation_errors_found"
+				case file.EventWritten:
+					report.EventProcessing.EventWritten = displaySummaryPath(file.EventPath)
+				case file.EventSkipped:
+					report.EventProcessing.EventSkipped = "validation_errors_found"
+				}
+			}
+			if config.unenrich {
+				report.EnrichmentRemoval = &enrichmentRemovalSummaryReport{
+					EnumSiblingsRemoved: ptrTo(file.EnumSiblingsRemoved),
+					ObservablesRemoved:  ptrTo(file.ObservablesRemoved),
+				}
+				if file.UnenrichIssuesWritten {
+					report.EnrichmentRemoval.IssuesWritten = displaySummaryPath(file.UnenrichIssuesPath)
 				}
 			}
 		}
@@ -412,10 +483,16 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 			TotalWarningCount:      ptrTo(summary.TotalValidationWarningCount),
 		}
 	}
-	if config.enrich {
-		report.Enrichment = &enrichmentSummaryReport{
-			EventsWritten: ptrTo(summary.EnrichedEventsWritten),
-			EventsSkipped: ptrTo(summary.EnrichedEventsSkipped),
+	if config.mutatesEvent() {
+		report.EventProcessing = &eventProcessingSummaryReport{
+			EventsWritten: ptrTo(summary.EventsWritten),
+			EventsSkipped: ptrTo(summary.EventsSkipped),
+		}
+	}
+	if config.unenrich {
+		report.EnrichmentRemoval = &enrichmentRemovalSummaryReport{
+			EventsWithRetainedEnumSiblings: ptrTo(summary.EventsWithRetainedEnumSiblings),
+			EventsWithRetainedObservables:  ptrTo(summary.EventsWithRetainedObservables),
 		}
 	}
 	return report
@@ -463,23 +540,38 @@ func humanSummary(report summaryReport) string {
 			fmt.Sprintf("Events with validation warnings (no errors): %d", *report.Validation.EventsWithWarningsOnly),
 		)
 	}
-	if report.Enrichment != nil {
-		lines = append(lines, fmt.Sprintf("Enriched events written: %d", *report.Enrichment.EventsWritten))
-		if *report.Enrichment.EventsSkipped > 0 {
-			lines = append(lines, fmt.Sprintf("Enriched events skipped: %d", *report.Enrichment.EventsSkipped))
+	if report.EventProcessing != nil {
+		lines = append(lines, fmt.Sprintf("Processed events written: %d", *report.EventProcessing.EventsWritten))
+		if *report.EventProcessing.EventsSkipped > 0 {
+			lines = append(lines, fmt.Sprintf("Processed events skipped: %d", *report.EventProcessing.EventsSkipped))
 		}
+	}
+	if report.EnrichmentRemoval != nil {
+		lines = append(lines,
+			fmt.Sprintf("Events with retained enum siblings: %d", *report.EnrichmentRemoval.EventsWithRetainedEnumSiblings),
+			fmt.Sprintf("Events with retained observables: %d", *report.EnrichmentRemoval.EventsWithRetainedObservables),
+		)
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
 
 func singleEventHumanSummary(report summaryReport) string {
 	lines := []string{"Event file processed: " + report.EventFileProcessed}
-	if report.Enrichment != nil {
+	if report.EventProcessing != nil {
 		switch {
-		case report.Enrichment.EventWritten != "":
-			lines = append(lines, "Enriched event written: "+report.Enrichment.EventWritten)
-		case report.Enrichment.EventSkipped != "":
-			lines = append(lines, "Enriched event skipped: validation errors found")
+		case report.EventProcessing.EventWritten != "":
+			lines = append(lines, "Processed event written: "+report.EventProcessing.EventWritten)
+		case report.EventProcessing.EventSkipped != "":
+			lines = append(lines, "Processed event skipped: validation errors found")
+		}
+	}
+	if report.EnrichmentRemoval != nil {
+		lines = append(lines,
+			fmt.Sprintf("Enum siblings removed: %d", *report.EnrichmentRemoval.EnumSiblingsRemoved),
+			fmt.Sprintf("Observables removed: %d", *report.EnrichmentRemoval.ObservablesRemoved),
+		)
+		if report.EnrichmentRemoval.IssuesWritten != "" {
+			lines = append(lines, "Enrichment-removal issues written: "+report.EnrichmentRemoval.IssuesWritten)
 		}
 	}
 	if report.Validation != nil {
@@ -516,11 +608,14 @@ func writeFailureDetails(w io.Writer, summary processSummary) {
 		if file.ProcessingError != "" {
 			writef(w, "%s: processing error: %s\n", file.InputPath, file.ProcessingError)
 		}
-		if file.EnrichedEventWriteError != "" {
-			writef(w, "%s: enrichment write error: %s\n", file.InputPath, file.EnrichedEventWriteError)
+		if file.EventWriteError != "" {
+			writef(w, "%s: event write error: %s\n", file.InputPath, file.EventWriteError)
 		}
 		if file.ValidationResultWriteError != "" {
 			writef(w, "%s: validation write error: %s\n", file.InputPath, file.ValidationResultWriteError)
+		}
+		if file.UnenrichIssuesWriteError != "" {
+			writef(w, "%s: enrichment-removal issues write error: %s\n", file.InputPath, file.UnenrichIssuesWriteError)
 		}
 	}
 }
@@ -529,55 +624,53 @@ func validateOutputConfig(config processConfig) error {
 	if !config.validate && (config.warnOnMissingRecommended || config.failOnValidationErrors || config.skipInvalidOutput) {
 		return errors.New("validation options require --validate")
 	}
-	if !config.enrich && (config.noEnumSiblings || config.noObservables ||
-		config.enrichInPlace || config.enrichOutput != "" || config.enrichOutputDir != "") {
-		return errors.New("enrichment options require --enrich")
+	if !config.mutatesEvent() && (config.updateInPlace || config.eventOutput != "") {
+		return errors.New("event output options require --enrich or --unenrich")
 	}
-	if config.skipInvalidOutput && !config.enrich {
-		return errors.New("--skip-invalid-output requires --enrich")
+	if config.skipInvalidOutput && !config.mutatesEvent() {
+		return errors.New("--skip-invalid-output requires --enrich or --unenrich")
 	}
-	if !config.validate && (config.validationOutput != "" || config.validationOutputDir != "") {
+	if !config.validate && config.validationOutput != "" {
 		return errors.New("validation output options require --validate")
 	}
 	if config.eventsDir == stdioPath {
 		return errors.New("--events-dir cannot be -")
 	}
-	if config.outputDir == stdioPath || config.enrichOutputDir == stdioPath || config.validationOutputDir == stdioPath {
+	if config.outputDir == stdioPath {
 		return errors.New("directory output options cannot be -")
 	}
 	if stdoutDestinationCount(config) > 1 {
 		return errors.New("only one output option can write to stdout")
 	}
-	if config.outputDir != "" && (config.enrichOutput != "" || config.enrichOutputDir != "" ||
-		config.validationOutput != "" || config.validationOutputDir != "") {
+	if config.outputDir != "" && (config.eventOutput != "" || config.validationOutput != "" ||
+		config.unenrichIssuesOutput != "") {
 		return errors.New("--output-dir cannot be used with operation-specific output options")
 	}
 	if config.summaryOutput != "" && samePath(config.summaryOutput, config.summaryJSONOutput) {
 		return errors.New("--summary-output and --summary-json-output must be different files")
 	}
-	if config.enrichInPlace && config.eventPath == stdioPath {
-		return errors.New("--enrich-in-place cannot be used with --event -")
+	if config.updateInPlace && config.eventPath == stdioPath {
+		return errors.New("--update-in-place cannot be used with --event -")
 	}
 
 	singleEventMode := config.eventPath != ""
 	if singleEventMode {
-		if config.enrich {
-			enrichOutputModes := countSet(
-				config.enrichInPlace,
-				config.outputDir != "",
-				config.enrichOutput != "",
-				config.enrichOutputDir != "",
-			)
-			if enrichOutputModes != 1 {
-				return errors.New("single event enrichment requires exactly one of --enrich-in-place, --output-dir DIR, --enrich-output FILE, or --enrich-output-dir DIR")
+		if config.mutatesEvent() {
+			if config.updateInPlace && config.eventOutput != "" {
+				return errors.New("--update-in-place and --event-output are mutually exclusive")
+			}
+			if !config.updateInPlace && countSet(config.outputDir != "", config.eventOutput != "") != 1 {
+				return errors.New("single event mutation requires exactly one of --update-in-place, --output-dir DIR, or --event-output FILE")
 			}
 		}
 		if config.validate && countSet(
 			config.outputDir != "",
 			config.validationOutput != "",
-			config.validationOutputDir != "",
 		) != 1 {
-			return errors.New("single event validation requires exactly one of --output-dir DIR, --validation-output FILE, or --validation-output-dir DIR")
+			return errors.New("single event validation requires exactly one of --output-dir DIR or --validation-output FILE")
+		}
+		if config.unenrich && countSet(config.outputDir != "", config.unenrichIssuesOutput != "") != 1 {
+			return errors.New("single event enrichment removal requires exactly one of --output-dir DIR or --unenrich-issues-output FILE")
 		}
 		if err := validateSingleFileOutputs(config); err != nil {
 			return err
@@ -585,13 +678,12 @@ func validateOutputConfig(config processConfig) error {
 		return nil
 	}
 
-	if config.enrich {
-		if config.enrichOutput != "" {
-			return errors.New("--enrich-output cannot be used with --events-dir")
+	if config.mutatesEvent() {
+		if config.eventOutput != "" {
+			return errors.New("--event-output cannot be used with --events-dir")
 		}
-		enrichOutputModes := countSet(config.enrichInPlace, config.outputDir != "", config.enrichOutputDir != "")
-		if enrichOutputModes != 1 {
-			return errors.New("directory enrichment requires exactly one of --enrich-in-place, --output-dir DIR, or --enrich-output-dir DIR")
+		if !config.updateInPlace && config.outputDir == "" {
+			return errors.New("directory event mutation requires exactly one of --update-in-place or --output-dir DIR")
 		}
 	}
 
@@ -599,26 +691,31 @@ func validateOutputConfig(config processConfig) error {
 		if config.validationOutput != "" {
 			return errors.New("--validation-output cannot be used with --events-dir")
 		}
-		if countSet(config.outputDir != "", config.validationOutputDir != "") != 1 {
-			return errors.New("directory validation requires exactly one of --output-dir DIR or --validation-output-dir DIR")
+		if config.outputDir == "" {
+			return errors.New("directory validation requires --output-dir DIR")
 		}
 	}
-	if config.enrich && selectedEnrichmentOutputDir(config) != "" && samePath(config.eventsDir, selectedEnrichmentOutputDir(config)) {
-		return errors.New("directory enrichment output must not be the events input directory; use --enrich-in-place")
+	if config.unenrich {
+		if config.unenrichIssuesOutput != "" {
+			return errors.New("--unenrich-issues-output cannot be used with --events-dir")
+		}
+		if config.outputDir == "" {
+			return errors.New("directory enrichment removal requires --output-dir DIR")
+		}
 	}
-	if config.validate && samePath(config.eventsDir, selectedValidationOutputDir(config)) {
-		return errors.New("directory validation output must not be the events input directory")
+	if config.outputDir != "" && pathIsWithin(config.eventsDir, config.outputDir) {
+		return errors.New("output directory must not be the events input directory or one of its descendants")
 	}
 	return nil
 }
 
 func validateSingleFileOutputs(config processConfig) error {
 	input := inputEvent{path: config.eventPath}
-	enrichmentOutput := ""
-	if config.enrich {
-		enrichmentOutput = enrichmentOutputPath(config, input)
-		if !config.enrichInPlace && samePath(config.eventPath, enrichmentOutput) {
-			return errors.New("enrichment output must not overwrite the event file; use --enrich-in-place")
+	eventOutput := ""
+	if config.mutatesEvent() {
+		eventOutput = eventOutputPath(config, input)
+		if !config.updateInPlace && samePath(config.eventPath, eventOutput) {
+			return errors.New("event output must not overwrite the event file; use --update-in-place")
 		}
 	}
 	if config.validate {
@@ -626,8 +723,15 @@ func validateSingleFileOutputs(config processConfig) error {
 		if samePath(config.eventPath, validationOutput) {
 			return errors.New("validation output must not overwrite the event file")
 		}
-		if enrichmentOutput != "" && !config.enrichInPlace && samePath(enrichmentOutput, validationOutput) {
-			return errors.New("validation output must not overwrite the enriched event output")
+		if eventOutput != "" && !config.updateInPlace && samePath(eventOutput, validationOutput) {
+			return errors.New("validation output must not overwrite the processed event output")
+		}
+	}
+	if config.unenrich {
+		issuesOutput := unenrichIssuesOutputPath(config, input)
+		if samePath(config.eventPath, issuesOutput) || samePath(eventOutput, issuesOutput) ||
+			samePath(validationOutputPath(config, input), issuesOutput) {
+			return errors.New("enrichment-removal issues output must not overwrite another selected output")
 		}
 	}
 	return nil
@@ -655,10 +759,27 @@ func samePath(left string, right string) bool {
 	return filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
 }
 
+func pathIsWithin(root, path string) bool {
+	if root == "" || path == "" || root == stdioPath || path == stdioPath {
+		return false
+	}
+	rootAbs, rootErr := filepath.Abs(root)
+	pathAbs, pathErr := filepath.Abs(path)
+	if rootErr != nil || pathErr != nil {
+		return samePath(root, path)
+	}
+	relative, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(pathAbs))
+	if err != nil {
+		return false
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 func stdoutDestinationCount(config processConfig) int {
 	return countSet(
-		config.enrichOutput == stdioPath,
+		config.eventOutput == stdioPath,
 		config.validationOutput == stdioPath,
+		config.unenrichIssuesOutput == stdioPath,
 		config.summaryOutput == stdioPath,
 		config.summaryJSONOutput == stdioPath,
 	)
@@ -670,12 +791,25 @@ func processEvents(config processConfig, stdin io.Reader, stdout io.Writer) (pro
 		return processSummary{}, false, err
 	}
 
-	processes := make([]eventschema.EventProcess, 0, 2)
+	processors := make([]eventschema.EventProcessor, 0, 3)
 	if config.enrich {
-		processes = append(processes, eventschema.NewEnrichment(
+		processors = append(processors, eventschema.NewEnrichment(
 			eventschema.WithAddEnumSiblings(config.addEnumSiblings),
 			eventschema.WithAddObservables(config.addObservables),
 		))
+	}
+	if config.unenrich {
+		removalOptions := []eventschema.EnrichmentRemovalOption{
+			eventschema.WithRemoveEnumSiblings(config.removeEnumSiblings),
+			eventschema.WithRemoveObservables(config.removeObservables),
+		}
+		if config.forceRemoveEnumSiblings {
+			removalOptions = append(removalOptions, eventschema.WithForceRemoveEnumSiblings())
+		}
+		if config.forceRemoveObservables {
+			removalOptions = append(removalOptions, eventschema.WithForceRemoveObservables())
+		}
+		processors = append(processors, eventschema.NewEnrichmentRemoval(removalOptions...))
 	}
 	// Keep validation last so it checks the event after all local processing,
 	// including enrichment. Future event processors should be inserted before it.
@@ -684,12 +818,18 @@ func processEvents(config processConfig, stdin io.Reader, stdout io.Writer) (pro
 		if config.warnOnMissingRecommended {
 			validationOptions = append(validationOptions, eventschema.WithWarnOnMissingRecommended())
 		}
-		processes = append(processes, eventschema.NewValidation(validationOptions...))
+		processors = append(processors, eventschema.NewValidation(validationOptions...))
 	}
-	processor := schema.NewEventProcessor(processes...)
+	pipeline, err := schema.NewEventProcessorPipeline(processors...)
+	if err != nil {
+		return processSummary{}, false, fmt.Errorf("configure event processor pipeline: %w", err)
+	}
 
 	inputs, err := collectInputs(config)
 	if err != nil {
+		return processSummary{}, false, err
+	}
+	if err := validateOutputPlan(config, inputs); err != nil {
 		return processSummary{}, false, err
 	}
 
@@ -699,15 +839,131 @@ func processEvents(config processConfig, stdin io.Reader, stdout io.Writer) (pro
 	}
 	runtimeFailure := false
 	for _, input := range inputs {
-		fileResult := processOneEvent(config, processor, input, stdin, stdout)
+		fileResult := processOneEvent(config, pipeline, input, stdin, stdout)
 		updateSummary(&summary, fileResult)
-		if fileResult.ParseError != "" || fileResult.ProcessingError != "" ||
-			fileResult.EnrichedEventWriteError != "" || fileResult.ValidationResultWriteError != "" {
+		if fileResult.ParseError != "" || fileResult.ProcessingError != "" || fileResult.EventWriteError != "" ||
+			fileResult.ValidationResultWriteError != "" || fileResult.UnenrichIssuesWriteError != "" {
 			runtimeFailure = true
 			break
 		}
 	}
 	return summary, runtimeFailure, nil
+}
+
+func validateOutputPlan(config processConfig, inputs []inputEvent) error {
+	outputs := make(map[string]string)
+	for _, input := range inputs {
+		if input.path == stdioPath {
+			continue
+		}
+		if err := reserveOutputPath(outputs, input.path, fmt.Sprintf("input event %q", input.path)); err != nil {
+			return err
+		}
+	}
+	for _, input := range inputs {
+		planned := make([]struct {
+			kind string
+			path string
+		}, 0, 3)
+		if config.mutatesEvent() && !config.updateInPlace {
+			planned = append(planned, struct {
+				kind string
+				path string
+			}{kind: "processed event", path: eventOutputPath(config, input)})
+		}
+		if config.validate {
+			planned = append(planned, struct {
+				kind string
+				path string
+			}{kind: "validation report", path: validationOutputPath(config, input)})
+		}
+		if config.unenrich {
+			planned = append(planned, struct {
+				kind string
+				path string
+			}{kind: "enrichment-removal report", path: unenrichIssuesOutputPath(config, input)})
+		}
+
+		for _, output := range planned {
+			if output.path == "" || output.path == stdioPath {
+				continue
+			}
+			if config.outputDir != "" {
+				if err := validatePathBeneathOutputRoot(config.outputDir, output.path); err != nil {
+					return err
+				}
+			}
+			description := fmt.Sprintf("%s for input %q", output.kind, input.path)
+			if err := reserveOutputPath(outputs, output.path, description); err != nil {
+				return err
+			}
+		}
+	}
+	for _, summary := range []struct {
+		kind string
+		path string
+	}{
+		{kind: "human-readable summary", path: config.summaryOutput},
+		{kind: "JSON summary", path: config.summaryJSONOutput},
+	} {
+		if summary.path == "" || summary.path == stdioPath {
+			continue
+		}
+		if err := reserveOutputPath(outputs, summary.path, summary.kind); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reserveOutputPath(paths map[string]string, path, description string) error {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve planned path %q: %w", path, err)
+	}
+	absolute = filepath.Clean(absolute)
+	if previous, collision := paths[absolute]; collision {
+		return fmt.Errorf("path %q is selected for both %s and %s", path, previous, description)
+	}
+	paths[absolute] = description
+	return nil
+}
+
+func validatePathBeneathOutputRoot(root, path string) error {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("failed to resolve output root %q: %w", root, err)
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve output path %q relative to root %q: %w", path, root, err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return fmt.Errorf("output path %q escapes output root %q", path, root)
+	}
+
+	current := root
+	directory := filepath.Dir(relative)
+	if directory == "." {
+		return nil
+	}
+	for component := range strings.SplitSeq(directory, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to inspect output directory %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("output path %q traverses symbolic link %q beneath output root %q", path, current, root)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("output path %q has non-directory parent %q", path, current)
+		}
+	}
+	return nil
 }
 
 func collectInputs(config processConfig) ([]inputEvent, error) {
@@ -751,7 +1007,7 @@ func collectInputs(config processConfig) ([]inputEvent, error) {
 
 func processOneEvent(
 	config processConfig,
-	processor eventschema.EventProcessor,
+	pipeline eventschema.EventProcessorPipeline,
 	input inputEvent,
 	stdin io.Reader,
 	stdout io.Writer,
@@ -767,7 +1023,7 @@ func processOneEvent(
 		return fileResult
 	}
 
-	result, err := processor.ProcessEvent(event)
+	result, err := pipeline.ProcessEvent(event)
 	if err != nil {
 		fileResult.ProcessingError = err.Error()
 		return fileResult
@@ -775,10 +1031,20 @@ func processOneEvent(
 	fileResult.Processed = true
 	fileResult.ValidationErrorCount = len(result.Validation.Errors)
 	fileResult.ValidationWarningCount = len(result.Validation.Warnings)
+	fileResult.EnumSiblingsRemoved = result.EnrichmentRemoval.EnumSiblingsRemoved
+	fileResult.EnumSiblingsRetained = result.EnrichmentRemoval.EnumSiblingsRetained
+	fileResult.ObservablesRemoved = result.EnrichmentRemoval.ObservablesRemoved
+	fileResult.ObservablesRetained = result.EnrichmentRemoval.ObservablesRetained
 
-	if config.enrich {
-		if err := writeEnrichmentOutput(config, input, event, result, &fileResult, stdout); err != nil {
-			fileResult.EnrichedEventWriteError = err.Error()
+	if config.mutatesEvent() {
+		if err := writeEventOutput(config, input, event, result, &fileResult, stdout); err != nil {
+			fileResult.EventWriteError = err.Error()
+			return fileResult
+		}
+	}
+	if config.unenrich {
+		if err := writeUnenrichIssuesOutput(config, input, result, &fileResult, stdout); err != nil {
+			fileResult.UnenrichIssuesWriteError = err.Error()
 			return fileResult
 		}
 	}
@@ -802,7 +1068,7 @@ func readInputEvent(input inputEvent, stdin io.Reader) (jsonish.Map, error) {
 	return jsonio.ReadObject(input.path)
 }
 
-func writeEnrichmentOutput(
+func writeEventOutput(
 	config processConfig,
 	input inputEvent,
 	event jsonish.Map,
@@ -811,31 +1077,31 @@ func writeEnrichmentOutput(
 	stdout io.Writer,
 ) error {
 	if config.skipInvalidOutput && len(result.Validation.Errors) > 0 {
-		fileResult.EnrichedEventSkipped = true
+		fileResult.EventSkipped = true
 		return nil
 	}
 
-	outputPath := enrichmentOutputPath(config, input)
-	fileResult.EnrichedEventPath = outputPath
+	outputPath := eventOutputPath(config, input)
+	fileResult.EventPath = outputPath
 	writeOptions := config.writeOptions()
-	if config.enrichInPlace {
+	if config.updateInPlace {
 		writeOptions.overwrite = true
 	}
 	if err := writeJSONDestination(outputPath, event, writeOptions, stdout); err != nil {
 		return err
 	}
-	fileResult.EnrichedEventWritten = true
+	fileResult.EventWritten = true
 	return nil
 }
 
-func enrichmentOutputPath(config processConfig, input inputEvent) string {
-	if config.enrichInPlace {
+func eventOutputPath(config processConfig, input inputEvent) string {
+	if config.updateInPlace {
 		return input.path
 	}
-	if config.eventPath != "" && config.enrichOutput != "" {
-		return config.enrichOutput
+	if config.eventPath != "" && config.eventOutput != "" {
+		return config.eventOutput
 	}
-	return filepath.Join(selectedEnrichmentOutputDir(config), eventOutputRelativePath(input))
+	return filepath.Join(config.outputDir, eventOutputRelativePath(input))
 }
 
 func writeValidationOutput(
@@ -866,25 +1132,47 @@ func validationOutputPath(config processConfig, input inputEvent) string {
 	if config.eventPath != "" && config.validationOutput != "" {
 		return config.validationOutput
 	}
-	outputDir := selectedValidationOutputDir(config)
-	if outputDir == "" {
+	if config.outputDir == "" {
 		return ""
 	}
-	return filepath.Join(outputDir, validationRelativePath(eventOutputRelativePath(input)))
+	return filepath.Join(config.outputDir, validationRelativePath(eventOutputRelativePath(input)))
 }
 
-func selectedEnrichmentOutputDir(config processConfig) string {
-	if config.outputDir != "" {
-		return config.outputDir
+func writeUnenrichIssuesOutput(
+	config processConfig,
+	input inputEvent,
+	result eventschema.ProcessingResult,
+	fileResult *fileSummary,
+	stdout io.Writer,
+) error {
+	issues := make([]eventschema.ProcessingIssue, 0)
+	for _, issue := range result.Issues {
+		if issue.Phase == "enrichment_removal" {
+			issues = append(issues, issue)
+		}
 	}
-	return config.enrichOutputDir
+	output := unenrichIssuesOutput{
+		InputPath:         input.path,
+		EnrichmentRemoval: result.EnrichmentRemoval,
+		Issues:            issues,
+	}
+	outputPath := unenrichIssuesOutputPath(config, input)
+	fileResult.UnenrichIssuesPath = outputPath
+	if err := writeJSONDestination(outputPath, output, config.writeOptions(), stdout); err != nil {
+		return err
+	}
+	fileResult.UnenrichIssuesWritten = true
+	return nil
 }
 
-func selectedValidationOutputDir(config processConfig) string {
-	if config.outputDir != "" {
-		return config.outputDir
+func unenrichIssuesOutputPath(config processConfig, input inputEvent) string {
+	if config.eventPath != "" && config.unenrichIssuesOutput != "" {
+		return config.unenrichIssuesOutput
 	}
-	return config.validationOutputDir
+	if config.outputDir == "" {
+		return ""
+	}
+	return filepath.Join(config.outputDir, unenrichIssuesRelativePath(eventOutputRelativePath(input)))
 }
 
 func eventOutputRelativePath(input inputEvent) string {
@@ -906,15 +1194,23 @@ func safeOutputRelativePath(path string) string {
 }
 
 func validationRelativePath(inputRel string) string {
+	return reportRelativePath(inputRel, "-validation.json")
+}
+
+func unenrichIssuesRelativePath(inputRel string) string {
+	return reportRelativePath(inputRel, "-unenrich-issues.json")
+}
+
+func reportRelativePath(inputRel, suffix string) string {
 	dir := filepath.Dir(inputRel)
 	base := filepath.Base(inputRel)
 	ext := filepath.Ext(base)
 	name := strings.TrimSuffix(base, ext)
-	validationName := name + "-validation.json"
+	reportName := name + suffix
 	if dir == "." {
-		return validationName
+		return reportName
 	}
-	return filepath.Join(dir, validationName)
+	return filepath.Join(dir, reportName)
 }
 
 func writeJSON(w io.Writer, value any, pretty bool) error {
@@ -948,21 +1244,34 @@ func updateSummary(summary *processSummary, fileResult fileSummary) {
 	} else if fileResult.ValidationWarningCount > 0 {
 		summary.EventsWithValidationWarningsOnly++
 	}
-	if fileResult.EnrichedEventWriteError != "" {
-		summary.EnrichedEventWriteFailures++
+	if fileResult.EventWriteError != "" {
+		summary.EventWriteFailures++
 	}
 	if fileResult.ValidationResultWriteError != "" {
 		summary.ValidationResultWriteFailures++
 	}
-	if fileResult.EnrichedEventWritten {
-		summary.EnrichedEventsWritten++
+	if fileResult.UnenrichIssuesWriteError != "" {
+		summary.UnenrichIssuesWriteFailures++
+	}
+	if fileResult.EventWritten {
+		summary.EventsWritten++
 	}
 	if fileResult.ValidationResultWritten {
 		summary.ValidationResultsWritten++
 	}
-	if fileResult.EnrichedEventSkipped {
-		summary.EnrichedEventsSkipped++
+	if fileResult.EventSkipped {
+		summary.EventsSkipped++
 	}
+	if fileResult.EnumSiblingsRetained > 0 {
+		summary.EventsWithRetainedEnumSiblings++
+	}
+	if fileResult.ObservablesRetained > 0 {
+		summary.EventsWithRetainedObservables++
+	}
+}
+
+func (config processConfig) mutatesEvent() bool {
+	return config.addEnumSiblings || config.addObservables || config.removeEnumSiblings || config.removeObservables
 }
 
 func writeJSONAtomic(path string, value any, options writeOptions) error {

@@ -8,12 +8,25 @@ import (
 	"strconv"
 )
 
-var errCannotConvertNullToString = errors.New("cannot convert null to string")
+var (
+	errCannotConvertToString     = errors.New("cannot convert value to string")
+	errCannotConvertNullToString = errors.New("cannot convert null to string")
+)
 
 // String converts common JSON-like scalar values to strings.
 //
 // Arrays, maps, and other structured values are converted with JSON encoding when possible.
 func String(value any) (string, error) {
+	return stringValue(value, true)
+}
+
+// StringLenient converts value to a string and returns an empty string when conversion fails.
+func StringLenient(value any) string {
+	valueString, _ := stringValue(value, false)
+	return valueString
+}
+
+func stringValue(value any, buildErrString bool) (string, error) {
 	switch value := value.(type) {
 	case string:
 		return value, nil
@@ -38,23 +51,15 @@ func String(value any) (string, error) {
 	case nil:
 		return "", errCannotConvertNullToString
 	default:
-		// return "", fmt.Errorf("cannot convert value of type %T to string", value)
 		// This handles arrays and maps. There is no universal string representation, so we'll use JSON.
 		jsonString, err := json.Marshal(value)
 		if err == nil {
 			return string(jsonString), nil
 		}
-		// JSON marshalling failed, so we'll fall back to Go's string representation.
-		return fmt.Sprintf("%v", value), nil
-	}
-}
-
-// StringLenient converts value to a string and returns an empty string when conversion fails.
-func StringLenient(value any) string {
-	if s, err := String(value); err != nil {
-		return ""
-	} else {
-		return s
+		if !buildErrString {
+			return "", errCannotConvertToString
+		}
+		return "", fmt.Errorf("cannot convert value of type %T to string: %w", value, err)
 	}
 }
 

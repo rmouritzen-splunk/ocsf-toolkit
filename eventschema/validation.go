@@ -1145,113 +1145,25 @@ func hasPathOrKey(eventItem jsonish.Map, path string) bool {
 }
 
 func (c *processingContext) validateObservables(event jsonish.Map) {
-	observablesValue := event["observables"]
-	observables, ok := asSlice(observablesValue)
-	if !ok {
-		return
-	}
-
-	for index, observableValue := range observables {
-		observable, ok := observableValue.(jsonish.Map)
-		if !ok {
-			continue
+	resolution := c.resolveObservables(event)
+	for _, entry := range resolution.entries {
+		if !entry.removed && entry.diagnostic != nil && !diagnosticCoveredByStructuralValidation(entry.diagnostic) {
+			c.addError(entry.diagnostic.code, entry.diagnostic.message, entry.diagnostic.details)
 		}
-		nameValue := observable["name"]
-		name, ok := nameValue.(string)
-		if !ok {
-			continue
-		}
-		nameParts := splitObservableName(name)
-		if c.getReferencedDefinition(nameParts, &c.class.commonItemDefinition) != nil {
-			continue
-		}
-
-		attributePath := makeAttributePath(makeArrayElementPath("observables", index), "name")
-		c.addError(
-			"observable_name_invalid_reference",
-			fmt.Sprintf(
-				"Observable index %d \"name\" value %q does not refer to an attribute defined in class %q uid %d.",
-				index,
-				name,
-				c.class.Name,
-				c.class.Uid,
-			),
-			jsonish.Map{
-				"attribute_path": attributePath,
-				"attribute":      "name",
-				"name":           name,
-				"class_uid":      c.class.Uid,
-				"class_name":     c.class.Name,
-			},
-		)
 	}
 }
 
-func (c *processingContext) getReferencedDefinition(
-	nameParts []string,
-	itemDefinition *commonItemDefinition,
-) *commonItemDefinition {
-	if len(nameParts) == 0 || itemDefinition == nil {
-		return nil
+func diagnosticCoveredByStructuralValidation(diagnostic *processingDiagnostic) bool {
+	switch diagnostic.code {
+	case "observable_array_wrong_type",
+		"observable_element_wrong_type",
+		"observable_name_missing",
+		"observable_name_wrong_type",
+		"observable_value_wrong_type":
+		return true
+	default:
+		return false
 	}
-
-	attributeKey, isArrayAccess := parseArrayNotation(nameParts[0])
-	attributes := c.filterAttributes(itemDefinition.Attributes)
-	attrDef, present := attributes[attributeKey]
-	if !present || attrDef == nil {
-		return nil
-	}
-	if len(nameParts) == 1 {
-		return itemDefinition
-	}
-	if isArrayAccess && (attrDef.IsArray == nil || !*attrDef.IsArray) {
-		return nil
-	}
-	if attrDef.Type != "object_t" || attrDef.ObjectType == nil {
-		return nil
-	}
-	objectDef, present := c.objects[*attrDef.ObjectType]
-	if !present || objectDef == nil {
-		return nil
-	}
-	return c.getReferencedDefinition(nameParts[1:], &objectDef.commonItemDefinition)
-}
-
-func parseArrayNotation(key string) (string, bool) {
-	openBracket := strings.IndexByte(key, '[')
-	if openBracket < 0 || !strings.HasSuffix(key, "]") {
-		return key, false
-	}
-	return key[:openBracket], true
-}
-
-func splitObservableName(name string) []string {
-	var parts []string
-	var current strings.Builder
-	bracketDepth := 0
-	for _, r := range name {
-		switch r {
-		case '.':
-			if bracketDepth == 0 {
-				parts = append(parts, current.String())
-				current.Reset()
-			} else {
-				current.WriteRune(r)
-			}
-		case '[':
-			bracketDepth++
-			current.WriteRune(r)
-		case ']':
-			if bracketDepth > 0 {
-				bracketDepth--
-			}
-			current.WriteRune(r)
-		default:
-			current.WriteRune(r)
-		}
-	}
-	parts = append(parts, current.String())
-	return parts
 }
 
 func (c *processingContext) addRequiredAttributeMissing(attributePath string, attributeName string) {
