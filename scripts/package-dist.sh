@@ -16,25 +16,38 @@ case "${version}" in
 		;;
 esac
 
+build_name="$(basename "${build_dir}")"
+if ! build_parent="$(CDPATH= cd -P "$(dirname "${build_dir}")" && pwd -P)"; then
+	echo "BUILD_DIR parent does not exist: ${build_dir}" >&2
+	exit 1
+fi
+build_dir="${build_parent}/${build_name}"
+if [ "${build_dir}" != "${repo_root}/build" ]; then
+	echo "BUILD_DIR must be the repository build scratch directory: ${build_dir}" >&2
+	exit 1
+fi
+
 dist_name="$(basename "${dist_dir}")"
-case "${dist_name}" in
-	"" | "." | "..")
-		echo "Refusing to use unsafe DIST_DIR: ${dist_dir}" >&2
-		exit 1
-		;;
-esac
 if ! dist_parent="$(CDPATH= cd -P "$(dirname "${dist_dir}")" && pwd)"; then
 	echo "DIST_DIR parent does not exist: ${dist_dir}" >&2
 	exit 1
 fi
 dist_dir="${dist_parent}/${dist_name}"
-case "${dist_dir}" in
-	"${repo_root}"/*) ;;
-	*)
-		echo "DIST_DIR must be beneath the repository root: ${dist_dir}" >&2
-		exit 1
-		;;
-esac
+if [ "${dist_dir}" != "${repo_root}/dist" ]; then
+	echo "DIST_DIR must be the repository dist scratch directory: ${dist_dir}" >&2
+	exit 1
+fi
+
+# Validate every target before deriving paths or clearing the dist scratchpad.
+for platform in ${target_platforms}; do
+	case "${platform}" in
+		darwin/amd64 | darwin/arm64 | linux/amd64 | linux/arm64 | windows/amd64 | windows/arm64) ;;
+		*)
+			echo "Invalid target platform: ${platform}" >&2
+			exit 1
+			;;
+	esac
+done
 
 rm -rf "${dist_dir}"
 mkdir -p "${dist_dir}"
@@ -44,14 +57,6 @@ mkdir -p "${staging_dir}"
 trap 'rm -rf "${staging_dir}"' EXIT HUP INT TERM
 
 for platform in ${target_platforms}; do
-	case "${platform}" in
-		*/*) ;;
-		*)
-			echo "Invalid target platform: ${platform}" >&2
-			exit 1
-			;;
-	esac
-
 	os="${platform%/*}"
 	arch="${platform#*/}"
 	platform_name="${os}_${arch}"

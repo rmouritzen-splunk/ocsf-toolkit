@@ -59,6 +59,11 @@ test-race:
 	@echo "Running unit tests with the race detector"
 	go test -race ./...
 
+.PHONY: test-release-scripts
+test-release-scripts:
+	@echo "Testing release script path safety"
+	@scripts/test-release-scripts.sh
+
 .PHONY: coverage
 coverage: test
 	@echo "Generating coverage report"
@@ -85,10 +90,10 @@ gofmt:
 	gofmt -w .
 
 .PHONY: verify
-verify: gotidy-check gofmt-check lint test test-race govet build
+verify: gotidy-check gofmt-check lint test test-race test-release-scripts govet build
 
 .PHONY: verify-all-platforms
-verify-all-platforms: gotidy-check gofmt-check lint coverage test-race govet build-all-platforms
+verify-all-platforms: gotidy-check gofmt-check lint coverage test-race test-release-scripts govet build-all-platforms
 
 .PHONY: package-dist
 package-dist: build-all-platforms
@@ -96,7 +101,7 @@ package-dist: build-all-platforms
 	@BUILD_DIR="${build_dir}" DIST_DIR="${dist_dir}" TARGET_PLATFORMS="${target_platforms}" VERSION="${VERSION}" scripts/package-dist.sh
 
 .PHONY: package
-package: gotidy-check gofmt-check lint coverage test-race govet package-dist
+package: gotidy-check gofmt-check lint coverage test-race test-release-scripts govet package-dist
 
 .PHONY: clean
 clean:
