@@ -360,13 +360,17 @@ func newSchemaImpl(sd *schemaDefinition) (*schemaImpl, error) {
 		}
 		classes[definition.Uid] = definition
 	}
+	observableTypes, err := makeObservableTypes(sd.Objects)
+	if err != nil {
+		return nil, err
+	}
 	return &schemaImpl{
 		classes:         classes,
 		objects:         sd.Objects,
 		dictionary:      sd.Dictionary,
 		profiles:        sd.Profiles,
 		version:         sd.Version,
-		observableTypes: makeObservableTypes(sd.Objects),
+		observableTypes: observableTypes,
 	}, nil
 }
 
@@ -404,22 +408,25 @@ func ensureSchemaEOF(decoder *json.Decoder) error {
 	return errors.New("unexpected trailing JSON value")
 }
 
-func makeObservableTypes(objects map[string]*objectDefinition) map[int64]string {
+func makeObservableTypes(objects map[string]*objectDefinition) (map[int64]string, error) {
 	observableObjectDef, objectDefPresent := objects["observable"]
 	if objectDefPresent && observableObjectDef != nil {
 		typeIDDef, typeIDDefPresent := observableObjectDef.Attributes["type_id"]
 		if typeIDDefPresent && typeIDDef != nil && typeIDDef.Enum != nil {
 			observableTypes := make(map[int64]string, len(typeIDDef.Enum))
 			for typeIDStr, enumDef := range typeIDDef.Enum {
+				if enumDef == nil {
+					return nil, fmt.Errorf("observable type enum %q has a null definition", typeIDStr)
+				}
 				i, err := strconv.ParseInt(typeIDStr, 10, 64)
 				if err == nil { // add if successfully parsed int, otherwise ignore err
 					observableTypes[i] = enumDef.Caption
 				}
 			}
-			return observableTypes
+			return observableTypes, nil
 		}
 	}
-	return make(map[int64]string)
+	return make(map[int64]string), nil
 }
 
 type deprecatedDefinition struct {

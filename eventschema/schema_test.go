@@ -563,6 +563,32 @@ func TestNewSchemaImplWithModernCompiledSchema(t *testing.T) {
 	assert.Equal("Modern Observable", si.observableTypes[int64(1000)])
 }
 
+func TestNewSchemaImplRejectsNilObservableTypeEnumDefinition(t *testing.T) {
+	assert := require.New(t)
+	var sd schemaDefinition
+	err := json.Unmarshal([]byte(`{
+		"compile_version": 1,
+		"classes": {
+			"alpha": {"name": "alpha", "uid": 1}
+		},
+		"objects": {
+			"observable": {
+				"attributes": {
+					"type_id": {
+						"enum": {"1000": null}
+					}
+				}
+			}
+		}
+	}`), &sd)
+	assert.NoError(err)
+
+	si, err := newSchemaImpl(&sd)
+
+	assert.Nil(si)
+	assert.ErrorContains(err, `observable type enum "1000" has a null definition`)
+}
+
 func TestNewSchemaImplWithUnsupportedCompiledSchemaVersion(t *testing.T) {
 	assert := require.New(t)
 	var sd schemaDefinition
