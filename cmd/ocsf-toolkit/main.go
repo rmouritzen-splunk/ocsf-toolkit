@@ -212,9 +212,48 @@ type unenrichIssuesOutput struct {
 	Issues            []eventschema.ProcessingIssue       `json:"issues"`
 }
 
+// inputEvent identifies an event source and, for directory input, its path relative to the
+// selected input root. It retains layout information; plannedEvent adds filesystem identity
+// and calculated output destinations.
 type inputEvent struct {
 	path string
 	rel  string
+}
+
+// filesystemPath keeps the representations needed to reason about one filesystem location.
+// display is the user-supplied or calculated path shown in output, absolute is its cleaned
+// absolute form without resolving symlinks, and resolved follows symlinks in the existing
+// prefix while retaining any suffix that does not exist yet.
+type filesystemPath struct {
+	display  string
+	absolute string
+	resolved string
+}
+
+// outputDestination associates an enabled output with its filesystem identity. A nil
+// destination means that output is disabled; a destination whose display path is "-"
+// writes to stdout and has empty absolute and resolved forms.
+type outputDestination struct {
+	path filesystemPath
+}
+
+// plannedEvent binds an input to every output selected for that event. It prevents runtime
+// path validation and writing from independently regenerating or normalizing destinations.
+type plannedEvent struct {
+	input            inputEvent
+	inputPath        *filesystemPath
+	eventOutput      *outputDestination
+	validationOutput *outputDestination
+	unenrichIssues   *outputDestination
+}
+
+// processingPlan is the immutable filesystem plan for one command. Path safety and
+// collisions are checked while building it; processing and summary writing consume the
+// same destinations afterward.
+type processingPlan struct {
+	events            []plannedEvent
+	summaryOutput     *outputDestination
+	summaryJSONOutput *outputDestination
 }
 
 type writeOptions struct {
@@ -300,7 +339,13 @@ func writeHelp(w io.Writer, help string) {
 }
 
 func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
-	summary, runtimeFailure, err := processEvents(config, stdin, stdout)
+	plan, err := buildProcessingPlan(config)
+	if err != nil {
+		writef(stderr, "error: %s\n", err)
+		return 1
+	}
+
+	summary, runtimeFailure, err := processEvents(config, plan, stdin, stdout)
 	if err != nil {
 		writef(stderr, "error: %s\n", err)
 		return 1
@@ -315,15 +360,17 @@ func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, 
 	}
 
 	report := buildSummaryReport(config, summary)
-	if config.summaryJSONOutput != "" {
-		if err := writeJSONDestination(config.summaryJSONOutput, report, config.writeOptions(), stdout); err != nil {
-			writef(stderr, "error: failed to write JSON summary %q: %s\n", config.summaryJSONOutput, err)
+	if plan.summaryJSONOutput != nil {
+		path := plan.summaryJSONOutput.path.display
+		if err := writeJSONDestination(path, report, config.writeOptions(), stdout); err != nil {
+			writef(stderr, "error: failed to write JSON summary %q: %s\n", path, err)
 			return 1
 		}
 	}
-	if config.summaryOutput != "" {
-		if err := writeTextDestination(config.summaryOutput, humanSummaryWithMetadata(report), config.overwrite, stdout); err != nil {
-			writef(stderr, "error: failed to write summary %q: %s\n", config.summaryOutput, err)
+	if plan.summaryOutput != nil {
+		path := plan.summaryOutput.path.display
+		if err := writeTextDestination(path, humanSummaryWithMetadata(report), config.overwrite, stdout); err != nil {
+			writef(stderr, "error: failed to write summary %q: %s\n", path, err)
 			return 1
 		}
 	}
@@ -646,9 +693,6 @@ func validateOutputConfig(config processConfig) error {
 		config.unenrichIssuesOutput != "") {
 		return errors.New("--output-dir cannot be used with operation-specific output options")
 	}
-	if config.summaryOutput != "" && samePath(config.summaryOutput, config.summaryJSONOutput) {
-		return errors.New("--summary-output and --summary-json-output must be different files")
-	}
 	if config.updateInPlace && config.eventPath == stdioPath {
 		return errors.New("--update-in-place cannot be used with --event -")
 	}
@@ -671,9 +715,6 @@ func validateOutputConfig(config processConfig) error {
 		}
 		if config.unenrich && countSet(config.outputDir != "", config.unenrichIssuesOutput != "") != 1 {
 			return errors.New("single event enrichment removal requires exactly one of --output-dir DIR or --unenrich-issues-output FILE")
-		}
-		if err := validateSingleFileOutputs(config); err != nil {
-			return err
 		}
 		return nil
 	}
@@ -703,37 +744,6 @@ func validateOutputConfig(config processConfig) error {
 			return errors.New("directory enrichment removal requires --output-dir DIR")
 		}
 	}
-	if config.outputDir != "" && pathIsWithin(config.eventsDir, config.outputDir) {
-		return errors.New("output directory must not be the events input directory or one of its descendants")
-	}
-	return nil
-}
-
-func validateSingleFileOutputs(config processConfig) error {
-	input := inputEvent{path: config.eventPath}
-	eventOutput := ""
-	if config.mutatesEvent() {
-		eventOutput = eventOutputPath(config, input)
-		if !config.updateInPlace && samePath(config.eventPath, eventOutput) {
-			return errors.New("event output must not overwrite the event file; use --update-in-place")
-		}
-	}
-	if config.validate {
-		validationOutput := validationOutputPath(config, input)
-		if samePath(config.eventPath, validationOutput) {
-			return errors.New("validation output must not overwrite the event file")
-		}
-		if eventOutput != "" && !config.updateInPlace && samePath(eventOutput, validationOutput) {
-			return errors.New("validation output must not overwrite the processed event output")
-		}
-	}
-	if config.unenrich {
-		issuesOutput := unenrichIssuesOutputPath(config, input)
-		if samePath(config.eventPath, issuesOutput) || samePath(eventOutput, issuesOutput) ||
-			samePath(validationOutputPath(config, input), issuesOutput) {
-			return errors.New("enrichment-removal issues output must not overwrite another selected output")
-		}
-	}
 	return nil
 }
 
@@ -747,32 +757,69 @@ func countSet(values ...bool) int {
 	return count
 }
 
-func samePath(left string, right string) bool {
-	if left == "" || right == "" || left == stdioPath || right == stdioPath {
-		return false
+func newFilesystemPath(display string) (filesystemPath, error) {
+	absolute, err := filepath.Abs(display)
+	if err != nil {
+		return filesystemPath{}, fmt.Errorf("resolve absolute path for %q: %w", display, err)
 	}
-	leftAbs, leftErr := filepath.Abs(left)
-	rightAbs, rightErr := filepath.Abs(right)
-	if leftErr != nil || rightErr != nil {
-		return filepath.Clean(left) == filepath.Clean(right)
+	absolute = filepath.Clean(absolute)
+	resolved, err := resolveExistingPathPrefix(absolute)
+	if err != nil {
+		return filesystemPath{}, fmt.Errorf("resolve symlinks for %q: %w", display, err)
 	}
-	return filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
+	return filesystemPath{display: display, absolute: absolute, resolved: resolved}, nil
 }
 
-func pathIsWithin(root, path string) bool {
-	if root == "" || path == "" || root == stdioPath || path == stdioPath {
-		return false
+func resolveExistingPathPrefix(absolute string) (string, error) {
+	current := absolute
+	missing := make([]string, 0)
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for _, component := range slices.Backward(missing) {
+				resolved = filepath.Join(resolved, component)
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("no existing ancestor for %q", absolute)
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
 	}
-	rootAbs, rootErr := filepath.Abs(root)
-	pathAbs, pathErr := filepath.Abs(path)
-	if rootErr != nil || pathErr != nil {
-		return samePath(root, path)
+}
+
+func newOutputDestination(display string) (*outputDestination, error) {
+	if display == stdioPath {
+		return &outputDestination{path: filesystemPath{display: display}}, nil
 	}
-	relative, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(pathAbs))
+	path, err := newFilesystemPath(display)
+	if err != nil {
+		return nil, err
+	}
+	return &outputDestination{path: path}, nil
+}
+
+func pathContains(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
 	if err != nil {
 		return false
 	}
-	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) &&
+		!filepath.IsAbs(relative)
+}
+
+func pathsOverlap(left, right filesystemPath) bool {
+	return pathContains(left.resolved, right.resolved) || pathContains(right.resolved, left.resolved)
 }
 
 func stdoutDestinationCount(config processConfig) int {
@@ -785,7 +832,12 @@ func stdoutDestinationCount(config processConfig) int {
 	)
 }
 
-func processEvents(config processConfig, stdin io.Reader, stdout io.Writer) (processSummary, bool, error) {
+func processEvents(
+	config processConfig,
+	plan processingPlan,
+	stdin io.Reader,
+	stdout io.Writer,
+) (processSummary, bool, error) {
 	schema, err := eventschema.New(config.schemaPath)
 	if err != nil {
 		return processSummary{}, false, err
@@ -825,21 +877,13 @@ func processEvents(config processConfig, stdin io.Reader, stdout io.Writer) (pro
 		return processSummary{}, false, fmt.Errorf("configure event processor pipeline: %w", err)
 	}
 
-	inputs, err := collectInputs(config)
-	if err != nil {
-		return processSummary{}, false, err
-	}
-	if err := validateOutputPlan(config, inputs); err != nil {
-		return processSummary{}, false, err
-	}
-
 	summary := processSummary{
 		SchemaPath: config.schemaPath,
-		Files:      make([]fileSummary, 0, len(inputs)),
+		Files:      make([]fileSummary, 0, len(plan.events)),
 	}
 	runtimeFailure := false
-	for _, input := range inputs {
-		fileResult := processOneEvent(config, pipeline, input, stdin, stdout)
+	for _, planned := range plan.events {
+		fileResult := processOneEvent(config, pipeline, planned, stdin, stdout)
 		updateSummary(&summary, fileResult)
 		if fileResult.ParseError != "" || fileResult.ProcessingError != "" || fileResult.EventWriteError != "" ||
 			fileResult.ValidationResultWriteError != "" || fileResult.UnenrichIssuesWriteError != "" {
@@ -850,118 +894,166 @@ func processEvents(config processConfig, stdin io.Reader, stdout io.Writer) (pro
 	return summary, runtimeFailure, nil
 }
 
-func validateOutputPlan(config processConfig, inputs []inputEvent) error {
-	outputs := make(map[string]string)
-	for _, input := range inputs {
-		if input.path == stdioPath {
-			continue
+func buildProcessingPlan(config processConfig) (processingPlan, error) {
+	var outputRoot *filesystemPath
+	if config.outputDir != "" {
+		path, err := newFilesystemPath(config.outputDir)
+		if err != nil {
+			return processingPlan{}, fmt.Errorf("resolve output directory: %w", err)
 		}
-		if err := reserveOutputPath(outputs, input.path, fmt.Sprintf("input event %q", input.path)); err != nil {
-			return err
+		outputRoot = &path
+	}
+	if config.eventsDir != "" && outputRoot != nil {
+		inputRoot, err := newFilesystemPath(config.eventsDir)
+		if err != nil {
+			return processingPlan{}, fmt.Errorf("resolve events input directory: %w", err)
+		}
+		if pathsOverlap(inputRoot, *outputRoot) {
+			return processingPlan{}, errors.New("input and output directory trees must not overlap")
 		}
 	}
+
+	inputs, err := collectInputs(config)
+	if err != nil {
+		return processingPlan{}, err
+	}
+	plan := processingPlan{events: make([]plannedEvent, 0, len(inputs))}
+	reserved := make(map[string]string)
 	for _, input := range inputs {
-		planned := make([]struct {
-			kind string
-			path string
-		}, 0, 3)
-		if config.mutatesEvent() && !config.updateInPlace {
-			planned = append(planned, struct {
-				kind string
-				path string
-			}{kind: "processed event", path: eventOutputPath(config, input)})
+		planned := plannedEvent{input: input}
+		if input.path != stdioPath {
+			path, err := newFilesystemPath(input.path)
+			if err != nil {
+				return processingPlan{}, fmt.Errorf("resolve input event %q: %w", input.path, err)
+			}
+			planned.inputPath = &path
+			if err := reservePlannedPath(reserved, path, fmt.Sprintf("input event %q", input.path)); err != nil {
+				return processingPlan{}, err
+			}
+		}
+
+		if config.mutatesEvent() {
+			planned.eventOutput, err = planOutputDestination(
+				outputRoot, eventOutputPath(config, input), "processed event", input.path, reserved, !config.updateInPlace,
+			)
+			if err != nil {
+				return processingPlan{}, err
+			}
 		}
 		if config.validate {
-			planned = append(planned, struct {
-				kind string
-				path string
-			}{kind: "validation report", path: validationOutputPath(config, input)})
+			planned.validationOutput, err = planOutputDestination(
+				outputRoot, validationOutputPath(config, input), "validation report", input.path, reserved, true,
+			)
+			if err != nil {
+				return processingPlan{}, err
+			}
 		}
 		if config.unenrich {
-			planned = append(planned, struct {
-				kind string
-				path string
-			}{kind: "enrichment-removal report", path: unenrichIssuesOutputPath(config, input)})
+			planned.unenrichIssues, err = planOutputDestination(
+				outputRoot, unenrichIssuesOutputPath(config, input), "enrichment-removal report", input.path, reserved, true,
+			)
+			if err != nil {
+				return processingPlan{}, err
+			}
 		}
+		plan.events = append(plan.events, planned)
+	}
 
-		for _, output := range planned {
-			if output.path == "" || output.path == stdioPath {
-				continue
-			}
-			if config.outputDir != "" {
-				if err := validatePathBeneathOutputRoot(config.outputDir, output.path); err != nil {
-					return err
-				}
-			}
-			description := fmt.Sprintf("%s for input %q", output.kind, input.path)
-			if err := reserveOutputPath(outputs, output.path, description); err != nil {
-				return err
-			}
+	if config.summaryOutput != "" {
+		plan.summaryOutput, err = planOutputDestination(
+			nil, config.summaryOutput, "human-readable summary", "", reserved, true,
+		)
+		if err != nil {
+			return processingPlan{}, err
 		}
 	}
-	for _, summary := range []struct {
-		kind string
-		path string
-	}{
-		{kind: "human-readable summary", path: config.summaryOutput},
-		{kind: "JSON summary", path: config.summaryJSONOutput},
-	} {
-		if summary.path == "" || summary.path == stdioPath {
-			continue
-		}
-		if err := reserveOutputPath(outputs, summary.path, summary.kind); err != nil {
-			return err
+	if config.summaryJSONOutput != "" {
+		plan.summaryJSONOutput, err = planOutputDestination(
+			nil, config.summaryJSONOutput, "JSON summary", "", reserved, true,
+		)
+		if err != nil {
+			return processingPlan{}, err
 		}
 	}
+	return plan, nil
+}
+
+func planOutputDestination(
+	outputRoot *filesystemPath,
+	display string,
+	kind string,
+	input string,
+	reserved map[string]string,
+	reserve bool,
+) (*outputDestination, error) {
+	destination, err := newOutputDestination(display)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s path %q: %w", kind, display, err)
+	}
+	if destination.path.display == stdioPath {
+		return destination, nil
+	}
+	if outputRoot != nil {
+		if err := validatePathBeneathOutputRoot(*outputRoot, destination.path); err != nil {
+			return nil, err
+		}
+	}
+	if !reserve {
+		return destination, nil
+	}
+	description := kind
+	if input != "" {
+		description = fmt.Sprintf("%s for input %q", kind, input)
+	}
+	if err := reservePlannedPath(reserved, destination.path, description); err != nil {
+		return nil, err
+	}
+	return destination, nil
+}
+
+func reservePlannedPath(paths map[string]string, path filesystemPath, description string) error {
+	if previous, collision := paths[path.resolved]; collision {
+		return fmt.Errorf("path %q is selected for both %s and %s", path.display, previous, description)
+	}
+	paths[path.resolved] = description
 	return nil
 }
 
-func reserveOutputPath(paths map[string]string, path, description string) error {
-	absolute, err := filepath.Abs(path)
+func validatePathBeneathOutputRoot(root, path filesystemPath) error {
+	relative, err := filepath.Rel(root.absolute, path.absolute)
 	if err != nil {
-		return fmt.Errorf("failed to resolve planned path %q: %w", path, err)
-	}
-	absolute = filepath.Clean(absolute)
-	if previous, collision := paths[absolute]; collision {
-		return fmt.Errorf("path %q is selected for both %s and %s", path, previous, description)
-	}
-	paths[absolute] = description
-	return nil
-}
-
-func validatePathBeneathOutputRoot(root, path string) error {
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return fmt.Errorf("failed to resolve output root %q: %w", root, err)
-	}
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return fmt.Errorf("failed to resolve output path %q relative to root %q: %w", path, root, err)
+		return fmt.Errorf("failed to resolve output path %q relative to root %q: %w", path.display, root.display, err)
 	}
 	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return fmt.Errorf("output path %q escapes output root %q", path, root)
+		return fmt.Errorf("output path %q escapes output root %q", path.display, root.display)
 	}
-
-	current := root
+	current := root.absolute
 	directory := filepath.Dir(relative)
-	if directory == "." {
-		return nil
+	if directory != "." {
+		for component := range strings.SplitSeq(directory, string(filepath.Separator)) {
+			current = filepath.Join(current, component)
+			info, err := os.Lstat(current)
+			if errors.Is(err, fs.ErrNotExist) {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("failed to inspect output directory %q: %w", current, err)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf(
+					"output path %q traverses symbolic link %q beneath output root %q",
+					path.display,
+					current,
+					root.display,
+				)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("output path %q has non-directory parent %q", path.display, current)
+			}
+		}
 	}
-	for component := range strings.SplitSeq(directory, string(filepath.Separator)) {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("failed to inspect output directory %q: %w", current, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("output path %q traverses symbolic link %q beneath output root %q", path, current, root)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("output path %q has non-directory parent %q", path, current)
-		}
+	if !pathContains(root.resolved, path.resolved) {
+		return fmt.Errorf("output path %q resolves outside output root %q", path.display, root.display)
 	}
 	return nil
 }
@@ -1008,10 +1100,11 @@ func collectInputs(config processConfig) ([]inputEvent, error) {
 func processOneEvent(
 	config processConfig,
 	pipeline eventschema.EventProcessorPipeline,
-	input inputEvent,
+	planned plannedEvent,
 	stdin io.Reader,
 	stdout io.Writer,
 ) fileSummary {
+	input := planned.input
 	fileResult := fileSummary{
 		InputPath:    input.path,
 		RelativePath: input.rel,
@@ -1037,19 +1130,19 @@ func processOneEvent(
 	fileResult.ObservablesRetained = result.EnrichmentRemoval.ObservablesRetained
 
 	if config.mutatesEvent() {
-		if err := writeEventOutput(config, input, event, result, &fileResult, stdout); err != nil {
+		if err := writeEventOutput(config, planned.eventOutput, event, result, &fileResult, stdout); err != nil {
 			fileResult.EventWriteError = err.Error()
 			return fileResult
 		}
 	}
 	if config.unenrich {
-		if err := writeUnenrichIssuesOutput(config, input, result, &fileResult, stdout); err != nil {
+		if err := writeUnenrichIssuesOutput(config, input, planned.unenrichIssues, result, &fileResult, stdout); err != nil {
 			fileResult.UnenrichIssuesWriteError = err.Error()
 			return fileResult
 		}
 	}
 	if config.validate {
-		if err := writeValidationOutput(config, input, result, &fileResult, stdout); err != nil {
+		if err := writeValidationOutput(config, input, planned.validationOutput, result, &fileResult, stdout); err != nil {
 			fileResult.ValidationResultWriteError = err.Error()
 			return fileResult
 		}
@@ -1070,7 +1163,7 @@ func readInputEvent(input inputEvent, stdin io.Reader) (jsonish.Map, error) {
 
 func writeEventOutput(
 	config processConfig,
-	input inputEvent,
+	destination *outputDestination,
 	event jsonish.Map,
 	result eventschema.ProcessingResult,
 	fileResult *fileSummary,
@@ -1081,7 +1174,7 @@ func writeEventOutput(
 		return nil
 	}
 
-	outputPath := eventOutputPath(config, input)
+	outputPath := destination.path.display
 	fileResult.EventPath = outputPath
 	writeOptions := config.writeOptions()
 	if config.updateInPlace {
@@ -1107,6 +1200,7 @@ func eventOutputPath(config processConfig, input inputEvent) string {
 func writeValidationOutput(
 	config processConfig,
 	input inputEvent,
+	destination *outputDestination,
 	result eventschema.ProcessingResult,
 	fileResult *fileSummary,
 	stdout io.Writer,
@@ -1115,10 +1209,7 @@ func writeValidationOutput(
 		InputPath:  input.path,
 		Validation: result.Validation,
 	}
-	outputPath := validationOutputPath(config, input)
-	if outputPath == "" {
-		return nil
-	}
+	outputPath := destination.path.display
 
 	fileResult.ValidationResultPath = outputPath
 	if err := writeJSONDestination(outputPath, output, config.writeOptions(), stdout); err != nil {
@@ -1141,6 +1232,7 @@ func validationOutputPath(config processConfig, input inputEvent) string {
 func writeUnenrichIssuesOutput(
 	config processConfig,
 	input inputEvent,
+	destination *outputDestination,
 	result eventschema.ProcessingResult,
 	fileResult *fileSummary,
 	stdout io.Writer,
@@ -1156,7 +1248,7 @@ func writeUnenrichIssuesOutput(
 		EnrichmentRemoval: result.EnrichmentRemoval,
 		Issues:            issues,
 	}
-	outputPath := unenrichIssuesOutputPath(config, input)
+	outputPath := destination.path.display
 	fileResult.UnenrichIssuesPath = outputPath
 	if err := writeJSONDestination(outputPath, output, config.writeOptions(), stdout); err != nil {
 		return err

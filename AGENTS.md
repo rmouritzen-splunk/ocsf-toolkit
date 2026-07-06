@@ -62,6 +62,8 @@ The library does not impose a general input-size limit. Callers are responsible 
 
 Update tests when behavior changes. Cover useful behavior and meaningful edge cases rather than targeting coverage percentages alone.
 
+For bug fixes and regressions, prefer a fail-first workflow: add a focused test that expresses the desired behavior, run it to confirm that it fails for the expected reason, then change the implementation to make it pass. After the fix, add coverage for other meaningful edge cases identified during the investigation.
+
 Treat existing tests as behavioral contracts and regression checks. Do not weaken, remove, or rewrite an existing test merely to make an immediate change pass. Change an existing test only when behavior is materially changing, the implementation is being refactored and the test must adapt while retaining its original intent, or the test is demonstrably incorrect. Explain the reason for removing a test and preserve equivalent regression coverage where applicable.
 
 Keep tests deterministic and local. Prefer clear interfaces, small fakes, and dependency injection over mocking frameworks. Avoid tests that merely restate a thin adapter's implementation.
