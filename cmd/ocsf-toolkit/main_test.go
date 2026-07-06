@@ -420,33 +420,33 @@ func TestProcessDirectoryRejectsOutputDirectoryInsideInputTree(t *testing.T) {
 func TestProcessDirectoryRejectsSymlinkResolvedDirectoryOverlap(t *testing.T) {
 	testCases := []struct {
 		name  string
-		paths func(*require.Assertions, string) (string, string)
+		paths func(*testing.T, *require.Assertions, string) (string, string)
 	}{
 		{
 			name: "nonexistent output descendant reached through symlink",
-			paths: func(assert *require.Assertions, dir string) (string, string) {
+			paths: func(t *testing.T, assert *require.Assertions, dir string) (string, string) {
 				actualRoot := filepath.Join(dir, "actual")
 				eventsDir := filepath.Join(actualRoot, "events")
 				writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
 				alias := filepath.Join(dir, "alias")
-				assert.NoError(os.Symlink(actualRoot, alias))
+				makeTestSymlink(t, actualRoot, alias)
 				return eventsDir, filepath.Join(alias, "events", "new", "output")
 			},
 		},
 		{
 			name: "input descendant reached through output symlink",
-			paths: func(assert *require.Assertions, dir string) (string, string) {
+			paths: func(t *testing.T, assert *require.Assertions, dir string) (string, string) {
 				actualOutput := filepath.Join(dir, "actual-output")
 				eventsDir := filepath.Join(actualOutput, "events")
 				writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
 				outputAlias := filepath.Join(dir, "output-alias")
-				assert.NoError(os.Symlink(actualOutput, outputAlias))
+				makeTestSymlink(t, actualOutput, outputAlias)
 				return eventsDir, outputAlias
 			},
 		},
 		{
 			name: "output directory is direct ancestor of input",
-			paths: func(assert *require.Assertions, dir string) (string, string) {
+			paths: func(_ *testing.T, assert *require.Assertions, dir string) (string, string) {
 				outputDir := filepath.Join(dir, "output")
 				eventsDir := filepath.Join(outputDir, "events")
 				writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
@@ -460,7 +460,7 @@ func TestProcessDirectoryRejectsSymlinkResolvedDirectoryOverlap(t *testing.T) {
 			assert := require.New(t)
 			dir := t.TempDir()
 			schemaPath := writeTestSchema(assert, dir)
-			eventsDir, outputDir := testCase.paths(assert, dir)
+			eventsDir, outputDir := testCase.paths(t, assert, dir)
 
 			exitCode, _, stderr := runCLI(
 				"--schema", schemaPath,
@@ -485,7 +485,7 @@ func TestProcessDirectoryAllowsSymlinkAsSelectedOutputRoot(t *testing.T) {
 	actualOutput := filepath.Join(dir, "actual-output")
 	assert.NoError(os.Mkdir(actualOutput, 0o755))
 	outputAlias := filepath.Join(dir, "output-alias")
-	assert.NoError(os.Symlink(actualOutput, outputAlias))
+	makeTestSymlink(t, actualOutput, outputAlias)
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -504,7 +504,7 @@ func TestNewFilesystemPathResolvesExistingPrefixAndRetainsMissingSuffix(t *testi
 	actual := filepath.Join(dir, "actual")
 	assert.NoError(os.Mkdir(actual, 0o755))
 	alias := filepath.Join(dir, "alias")
-	assert.NoError(os.Symlink(actual, alias))
+	makeTestSymlink(t, actual, alias)
 	display := filepath.Join(alias, "missing", "nested")
 
 	path, err := newFilesystemPath(display)
@@ -521,7 +521,7 @@ func TestNewFilesystemPathRejectsDanglingSymlink(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	dangling := filepath.Join(dir, "dangling")
-	assert.NoError(os.Symlink(filepath.Join(dir, "missing-target"), dangling))
+	makeTestSymlink(t, filepath.Join(dir, "missing-target"), dangling)
 
 	_, err := newFilesystemPath(filepath.Join(dangling, "output"))
 
@@ -950,7 +950,7 @@ func TestProcessDirectoryRejectsOutputPathThroughSymlink(t *testing.T) {
 	writeJSONFile(assert, filepath.Join(eventsDir, "nested", "event.json"), validCLIEvent())
 	assert.NoError(os.MkdirAll(outputDir, 0o755))
 	assert.NoError(os.MkdirAll(outsideDir, 0o755))
-	assert.NoError(os.Symlink(outsideDir, filepath.Join(outputDir, "nested")))
+	makeTestSymlink(t, outsideDir, filepath.Join(outputDir, "nested"))
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -993,7 +993,7 @@ func TestProcessRejectsSymlinkAliasedOutputCollision(t *testing.T) {
 	eventPath := filepath.Join(dir, "event.json")
 	validationAlias := filepath.Join(dir, "validation-alias.json")
 	writeJSONFile(assert, eventPath, validCLIEvent())
-	assert.NoError(os.Symlink(eventPath, validationAlias))
+	makeTestSymlink(t, eventPath, validationAlias)
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -1628,6 +1628,16 @@ func writeJSONFile(assert *require.Assertions, path string, value any) {
 	assert.NoError(err)
 	data = append(data, '\n')
 	assert.NoError(os.WriteFile(path, data, 0o644))
+}
+
+func makeTestSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symbolic links are unavailable on this Windows host: %s", err)
+		}
+		require.NoError(t, err)
+	}
 }
 
 func readValidationOutput(assert *require.Assertions, path string) validationOutput {

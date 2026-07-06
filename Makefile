@@ -96,7 +96,7 @@ package-dist: build-all-platforms
 	@BUILD_DIR="${build_dir}" DIST_DIR="${dist_dir}" TARGET_PLATFORMS="${target_platforms}" VERSION="${VERSION}" scripts/package-dist.sh
 
 .PHONY: package
-package: gotidy-check gofmt-check lint coverage govet package-dist
+package: gotidy-check gofmt-check lint coverage test-race govet package-dist
 
 .PHONY: clean
 clean:

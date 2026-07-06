@@ -53,3 +53,30 @@ jobs:
 
       - name: Verify all target platforms
         run: make verify-all-platforms
+
+  native-tests:
+    name: Native tests on ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: go.sum
+
+      - name: Show Go version
+        run: go version
+
+      - name: Run native tests
+        run: go test ./...

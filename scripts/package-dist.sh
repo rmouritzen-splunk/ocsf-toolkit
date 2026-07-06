@@ -2,7 +2,7 @@
 set -eu
 
 script_dir="$(dirname "$0")"
-repo_root="$(CDPATH= cd "${script_dir}/.." && pwd)"
+repo_root="$(CDPATH= cd -P "${script_dir}/.." && pwd -P)"
 build_dir="${BUILD_DIR:-"$repo_root/build"}"
 dist_dir="${DIST_DIR:-"$repo_root/dist"}"
 target_platforms="${TARGET_PLATFORMS:-darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64}"
@@ -16,9 +16,22 @@ case "${version}" in
 		;;
 esac
 
-case "${dist_dir}" in
-	"" | "/")
+dist_name="$(basename "${dist_dir}")"
+case "${dist_name}" in
+	"" | "." | "..")
 		echo "Refusing to use unsafe DIST_DIR: ${dist_dir}" >&2
+		exit 1
+		;;
+esac
+if ! dist_parent="$(CDPATH= cd -P "$(dirname "${dist_dir}")" && pwd)"; then
+	echo "DIST_DIR parent does not exist: ${dist_dir}" >&2
+	exit 1
+fi
+dist_dir="${dist_parent}/${dist_name}"
+case "${dist_dir}" in
+	"${repo_root}"/*) ;;
+	*)
+		echo "DIST_DIR must be beneath the repository root: ${dist_dir}" >&2
 		exit 1
 		;;
 esac

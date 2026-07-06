@@ -63,7 +63,7 @@ GitHub Actions runs `.github/workflows/release.yml`. The workflow:
 
 - Sets up the pinned release Go toolchain, currently Go 1.26.4.
 - Installs the pinned `golangci-lint` version.
-- Runs `make package VERSION="${GITHUB_REF_NAME}"`.
+- Runs `make package VERSION="${GITHUB_REF_NAME}"`, including unit and race tests.
 - Creates the GitHub Release.
 - Uploads `dist/*`.
 
