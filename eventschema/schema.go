@@ -224,7 +224,7 @@ func WithForceRemoveEnumSiblings() EnrichmentRemovalOption {
 	})
 }
 
-// WithForceRemoveObservables removes the event's observables attribute regardless of its contents.
+// WithForceRemoveObservables removes the event's observables attribute without inspecting its entries.
 func WithForceRemoveObservables() EnrichmentRemovalOption {
 	return enrichmentRemovalOptionFunc(func(config *enrichmentRemovalConfig) {
 		config.removeObservables = true

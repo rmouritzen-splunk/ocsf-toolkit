@@ -175,7 +175,7 @@ func TestEnrichmentRemovalResolvesNestedObjectArrays(t *testing.T) {
 	assert.Equal(2, result.EnrichmentRemoval.ObservablesRemoved)
 }
 
-func TestEnrichmentRemovalReportsMalformedObservableAndForceRemovesIt(t *testing.T) {
+func TestEnrichmentRemovalForceRemovesMalformedObservableWithoutAnalysis(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	event := validValidationEvent()
@@ -190,9 +190,7 @@ func TestEnrichmentRemovalReportsMalformedObservableAndForceRemovesIt(t *testing
 	assert.NoError(err)
 	assert.NotContains(event, "observables")
 	assert.Equal(1, result.EnrichmentRemoval.ObservablesRemoved)
-	assert.Len(result.Issues, 1)
-	assert.Equal(issuePhaseEnrichmentRemoval, result.Issues[0].Phase)
-	assert.Equal("observable_name_invalid_syntax", result.Issues[0].Code)
+	assert.Empty(result.Issues)
 }
 
 func TestEnrichmentRemovalReportsMalformedObservables(t *testing.T) {
@@ -305,7 +303,7 @@ func TestValidationIgnoresObservableEntriesRemovedBeforeTraversal(t *testing.T) 
 	assert.NoError(err)
 	assert.NotContains(event, "observables")
 	assert.Empty(result.Validation.Errors, "validation should inspect the final event after removal")
-	assert.Contains(issueCodes(result.Issues), "observable_name_invalid_syntax")
+	assert.Empty(result.Issues, "forced removal should not inspect observable entries")
 }
 
 func TestValidationUsesObservableValuesAndObjectReferences(t *testing.T) {

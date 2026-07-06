@@ -85,6 +85,10 @@ func (p *enrichmentRemovalProcessor) removeObservables(context *processingContex
 	if !present {
 		return
 	}
+	if p.config.forceRemoveObservables {
+		p.forceRemoveObservablesWithoutAnalysis(context, event)
+		return
+	}
 
 	resolution := context.resolveObservables(event)
 	for _, entry := range resolution.entries {
@@ -94,16 +98,6 @@ func (p *enrichmentRemovalProcessor) removeObservables(context *processingContex
 	}
 
 	observables, isArray := asSlice(value)
-	if p.config.forceRemoveObservables {
-		if isArray {
-			context.result.EnrichmentRemoval.ObservablesRemoved += len(observables)
-		}
-		for index := range resolution.entries {
-			resolution.entries[index].removed = true
-		}
-		delete(event, "observables")
-		return
-	}
 	if !isArray {
 		context.result.EnrichmentRemoval.ObservablesRetained++
 		return

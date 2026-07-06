@@ -150,7 +150,7 @@ ocsf-toolkit \
   --output-dir processed
 ```
 
-This writes the processed event and `<base>-unenrich-issues.json`. Use `--force-remove-enum-siblings` or `--force-remove-observables` only when potentially non-redundant source content may be discarded. `--retain-enum-siblings` and `--retain-observables` disable the corresponding removal.
+This writes the processed event and `<base>-unenrich-issues.json`. Use `--force-remove-enum-siblings` or `--force-remove-observables` only when potentially non-redundant source content may be discarded. Forced observable removal deletes the entire `observables` attribute without inspecting its entries. `--retain-enum-siblings` and `--retain-observables` disable the corresponding removal.
 
 Read a single event from stdin and write enriched JSON to stdout:
 

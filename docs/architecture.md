@@ -33,7 +33,7 @@ pipeline, err := schema.NewEventProcessorPipeline(
 
 Options belong to the processor they configure. Enrichment adds enum siblings and observables by default; callers can disable either behavior with `WithAddEnumSiblings(false)` or `WithAddObservables(false)`. Validation reports missing recommended attributes only when `WithWarnOnMissingRecommended()` is supplied.
 
-Enrichment removal safely removes scalar integral enum siblings and observables by default. Safe removal preserves values that cannot be proven redundant. Callers can disable either category with `WithRemoveEnumSiblings(false)` or `WithRemoveObservables(false)`, or explicitly request destructive behavior with `WithForceRemoveEnumSiblings()` and `WithForceRemoveObservables()`. Enum sibling arrays are legacy forms and remain untouched.
+Enrichment removal safely removes scalar integral enum siblings and observables by default. Safe removal preserves values that cannot be proven redundant. Callers can disable either category with `WithRemoveEnumSiblings(false)` or `WithRemoveObservables(false)`, or explicitly request destructive behavior with `WithForceRemoveEnumSiblings()` and `WithForceRemoveObservables()`. Forced observable removal deletes the entire `observables` attribute without analyzing individual entries. Enum sibling arrays are legacy forms and remain untouched.
 
 `EventProcessor` and its option interfaces are intentionally sealed. They provide a small construction API without exposing the internal visitor protocol.
 
