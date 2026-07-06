@@ -187,8 +187,7 @@ Validation outputs have this shape:
         "attribute_path": "time",
         "attribute": "time"
       }
-    ],
-    "warnings": []
+    ]
   }
 }
 ```
