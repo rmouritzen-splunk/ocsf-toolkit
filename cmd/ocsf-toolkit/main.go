@@ -223,11 +223,13 @@ type inputEvent struct {
 // filesystemPath keeps the representations needed to reason about one filesystem location.
 // display is the user-supplied or calculated path shown in output, absolute is its cleaned
 // absolute form without resolving symlinks, and resolved follows symlinks in the existing
-// prefix while retaining any suffix that does not exist yet.
+// prefix while retaining any suffix that does not exist yet. caseInsensitive records how
+// the filesystem containing that existing prefix compares path names.
 type filesystemPath struct {
-	display  string
-	absolute string
-	resolved string
+	display         string
+	absolute        string
+	resolved        string
+	caseInsensitive bool
 }
 
 // outputDestination associates an enabled output with its filesystem identity. A nil
@@ -469,6 +471,7 @@ func processHelpNotes() string {
 		"  Validation files use <base>-validation.json.",
 		"  Enrichment-removal issue files use <base>-unenrich-issues.json.",
 		"  Output directories are created if necessary.",
+		"  Input and output directory trees must not overlap, including through symbolic links.",
 		"  Output files are not replaced without --overwrite.",
 		"  --update-in-place replaces input event files without --overwrite.",
 	}, "\n")
@@ -763,39 +766,86 @@ func newFilesystemPath(display string) (filesystemPath, error) {
 		return filesystemPath{}, fmt.Errorf("resolve absolute path for %q: %w", display, err)
 	}
 	absolute = filepath.Clean(absolute)
-	resolved, err := resolveExistingPathPrefix(absolute)
+	resolved, existingPrefix, err := resolveExistingPathPrefix(absolute)
 	if err != nil {
 		return filesystemPath{}, fmt.Errorf("resolve symlinks for %q: %w", display, err)
 	}
-	return filesystemPath{display: display, absolute: absolute, resolved: resolved}, nil
+	return filesystemPath{
+		display:         display,
+		absolute:        absolute,
+		resolved:        resolved,
+		caseInsensitive: pathLookupIsCaseInsensitive(existingPrefix),
+	}, nil
 }
 
-func resolveExistingPathPrefix(absolute string) (string, error) {
+func resolveExistingPathPrefix(absolute string) (string, string, error) {
 	current := absolute
 	missing := make([]string, 0)
 	for {
 		_, err := os.Lstat(current)
 		if err == nil {
-			resolved, err := filepath.EvalSymlinks(current)
+			resolvedPrefix, err := filepath.EvalSymlinks(current)
 			if err != nil {
-				return "", err
+				return "", "", err
 			}
+			resolved := resolvedPrefix
 			for _, component := range slices.Backward(missing) {
 				resolved = filepath.Join(resolved, component)
 			}
-			return filepath.Clean(resolved), nil
+			return filepath.Clean(resolved), filepath.Clean(resolvedPrefix), nil
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
-			return "", err
+			return "", "", err
 		}
 
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", fmt.Errorf("no existing ancestor for %q", absolute)
+			return "", "", fmt.Errorf("no existing ancestor for %q", absolute)
 		}
 		missing = append(missing, filepath.Base(current))
 		current = parent
 	}
+}
+
+func pathLookupIsCaseInsensitive(existingPath string) bool {
+	for current := existingPath; ; current = filepath.Dir(current) {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return defaultPathLookupIsCaseInsensitive()
+		}
+		alternate, changed := togglePathNameCase(filepath.Base(current))
+		if !changed {
+			continue
+		}
+		info, err := os.Stat(current)
+		if err != nil {
+			return defaultPathLookupIsCaseInsensitive()
+		}
+		alternateInfo, err := os.Stat(filepath.Join(parent, alternate))
+		if err == nil {
+			return os.SameFile(info, alternateInfo)
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return false
+		}
+		return defaultPathLookupIsCaseInsensitive()
+	}
+}
+
+func defaultPathLookupIsCaseInsensitive() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+}
+
+func togglePathNameCase(name string) (string, bool) {
+	for index, char := range name {
+		switch {
+		case char >= 'a' && char <= 'z':
+			return name[:index] + string(char-'a'+'A') + name[index+1:], true
+		case char >= 'A' && char <= 'Z':
+			return name[:index] + string(char-'A'+'a') + name[index+1:], true
+		}
+	}
+	return name, false
 }
 
 func newOutputDestination(display string) (*outputDestination, error) {
@@ -809,8 +859,21 @@ func newOutputDestination(display string) (*outputDestination, error) {
 	return &outputDestination{path: path}, nil
 }
 
-func pathContains(root, path string) bool {
-	relative, err := filepath.Rel(root, path)
+func pathIdentity(path filesystemPath) string {
+	if path.caseInsensitive {
+		return strings.ToUpper(path.resolved)
+	}
+	return path.resolved
+}
+
+func pathContains(root, path filesystemPath) bool {
+	rootResolved := root.resolved
+	pathResolved := path.resolved
+	if root.caseInsensitive || path.caseInsensitive {
+		rootResolved = strings.ToUpper(rootResolved)
+		pathResolved = strings.ToUpper(pathResolved)
+	}
+	relative, err := filepath.Rel(rootResolved, pathResolved)
 	if err != nil {
 		return false
 	}
@@ -819,7 +882,7 @@ func pathContains(root, path string) bool {
 }
 
 func pathsOverlap(left, right filesystemPath) bool {
-	return pathContains(left.resolved, right.resolved) || pathContains(right.resolved, left.resolved)
+	return pathContains(left, right) || pathContains(right, left)
 }
 
 func stdoutDestinationCount(config processConfig) int {
@@ -1012,10 +1075,11 @@ func planOutputDestination(
 }
 
 func reservePlannedPath(paths map[string]string, path filesystemPath, description string) error {
-	if previous, collision := paths[path.resolved]; collision {
+	identity := pathIdentity(path)
+	if previous, collision := paths[identity]; collision {
 		return fmt.Errorf("path %q is selected for both %s and %s", path.display, previous, description)
 	}
-	paths[path.resolved] = description
+	paths[identity] = description
 	return nil
 }
 
@@ -1052,7 +1116,7 @@ func validatePathBeneathOutputRoot(root, path filesystemPath) error {
 			}
 		}
 	}
-	if !pathContains(root.resolved, path.resolved) {
+	if !pathContains(root, path) {
 		return fmt.Errorf("output path %q resolves outside output root %q", path.display, root.display)
 	}
 	return nil

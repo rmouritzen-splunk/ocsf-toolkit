@@ -168,6 +168,8 @@ The CLI requires explicit destinations. Mutated events use `--event-output`, `--
 
 Output directories are created if necessary. Output files are not replaced unless `--overwrite` is supplied, except that `--update-in-place` replaces input event files without requiring `--overwrite`.
 
+Input and output directory trees must not overlap, including when symbolic links make differently written paths refer to the same location. The selected output directory itself may be a symbolic link, but generated paths may not traverse symbolic links beneath that root. Planned path collisions are checked using the case-sensitivity of the containing filesystem.
+
 `--output-dir` writes processed events, validation results named `<base>-validation.json`, and enrichment-removal reports named `<base>-unenrich-issues.json` to one output tree.
 
 Validation outputs have this shape:

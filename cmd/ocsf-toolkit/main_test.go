@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1006,6 +1007,53 @@ func TestProcessRejectsSymlinkAliasedOutputCollision(t *testing.T) {
 	event, err := jsonio.ReadObject(eventPath)
 	assert.NoError(err)
 	assert.Equal(validCLIEvent(), event)
+}
+
+func TestProcessRejectsCaseAliasedOutputCollision(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	caseProbe := filepath.Join(dir, "CaseProbe")
+	assert.NoError(os.Mkdir(caseProbe, 0o755))
+	if _, err := os.Stat(filepath.Join(dir, "caseprobe")); errors.Is(err, os.ErrNotExist) {
+		t.Skip("filesystem is case-sensitive")
+	} else {
+		assert.NoError(err)
+	}
+
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	eventOutput := filepath.Join(dir, "processed.json")
+	validationOutput := filepath.Join(dir, "PROCESSED.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--event-output", eventOutput,
+		"--validate",
+		"--validation-output", validationOutput,
+		"--overwrite",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "is selected for both")
+	assert.NoFileExists(eventOutput)
+}
+
+func TestReservePlannedPathUsesFilesystemCaseSensitivity(t *testing.T) {
+	reserved := make(map[string]string)
+	first := filesystemPath{display: "result.json", resolved: "/output/result.json", caseInsensitive: true}
+	second := filesystemPath{display: "RESULT.json", resolved: "/output/RESULT.json", caseInsensitive: true}
+
+	require.NoError(t, reservePlannedPath(reserved, first, "first output"))
+	require.ErrorContains(t, reservePlannedPath(reserved, second, "second output"), "is selected for both")
+
+	reserved = make(map[string]string)
+	first.caseInsensitive = false
+	second.caseInsensitive = false
+	require.NoError(t, reservePlannedPath(reserved, first, "first output"))
+	require.NoError(t, reservePlannedPath(reserved, second, "second output"))
 }
 
 func TestProcessOverwriteAllowsExistingOutput(t *testing.T) {
