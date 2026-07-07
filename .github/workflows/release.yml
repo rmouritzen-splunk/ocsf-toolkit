@@ -21,6 +21,20 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          # This is intentionally a simple typo guard, not full SemVer validation.
+          # A stricter regular expression can be added if full SemVer enforcement becomes necessary.
+          case "${GITHUB_REF_NAME}" in
+            v[0-9]*) ;;
+            *)
+              printf 'Release tag must begin with v followed by a digit: %s\n' \
+                "${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Check out repository
         uses: actions/checkout@v7
         with:

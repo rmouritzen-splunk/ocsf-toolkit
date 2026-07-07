@@ -111,6 +111,13 @@ func pathsOverlap(left, right filesystemPath) bool {
 
 func buildProcessingDestinations(config processConfig) (processingDestinations, error) {
 	destinations := processingDestinations{}
+	schemaPath, err := newFilesystemPath(config.schemaPath)
+	if err != nil {
+		return processingDestinations{}, fmt.Errorf("resolve schema %q: %w", config.schemaPath, err)
+	}
+	reserved := map[string]string{
+		schemaPath.resolved: fmt.Sprintf("schema %q", config.schemaPath),
+	}
 	var inputRoot *filesystemPath
 	if config.outputDir != "" {
 		outputRoot, err := newFilesystemPath(config.outputDir)
@@ -134,7 +141,18 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 		}
 	}
 
-	reserved := make(map[string]string)
+	if destinations.outputRoot != nil {
+		for _, name := range activeOutputNamespaces(config) {
+			if pathContains(outputNamespace(*destinations.outputRoot, name), schemaPath) {
+				return processingDestinations{}, fmt.Errorf(
+					"schema path %q conflicts with reserved output namespace %q",
+					config.schemaPath,
+					name,
+				)
+			}
+		}
+	}
+
 	if config.eventPath != "" && config.eventPath != stdioPath {
 		inputPath, err := newFilesystemPath(config.eventPath)
 		if err != nil {
@@ -143,7 +161,6 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 		reserved[inputPath.resolved] = fmt.Sprintf("input event %q", config.eventPath)
 	}
 
-	var err error
 	if config.eventPath != "" {
 		input := inputEvent{path: config.eventPath, rel: stdinEventRelativePath}
 		if config.eventPath != stdioPath {
@@ -264,14 +281,7 @@ func directoryIsEmpty(path string) (bool, error) {
 }
 
 func validateOutputNamespaces(config processConfig, outputRoot filesystemPath) error {
-	names := make([]string, 0, 2)
-	if config.mutatesEvent() {
-		names = append(names, eventsOutputDirectory)
-	}
-	if config.generatesReport() {
-		names = append(names, reportsOutputDirectory)
-	}
-	for _, name := range names {
+	for _, name := range activeOutputNamespaces(config) {
 		root := filepath.Join(outputRoot.absolute, name)
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if errors.Is(err, fs.ErrNotExist) && path == root {
@@ -293,6 +303,17 @@ func validateOutputNamespaces(config processConfig, outputRoot filesystemPath) e
 		}
 	}
 	return nil
+}
+
+func activeOutputNamespaces(config processConfig) []string {
+	names := make([]string, 0, 2)
+	if config.mutatesEvent() {
+		names = append(names, eventsOutputDirectory)
+	}
+	if config.generatesReport() {
+		names = append(names, reportsOutputDirectory)
+	}
+	return names
 }
 
 func resolveDistinctDestination(

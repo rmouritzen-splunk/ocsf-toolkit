@@ -253,6 +253,56 @@ func TestProcessRejectsExplicitOutputAliasingInput(t *testing.T) {
 	assert.Contains(stderr, "is selected for both")
 }
 
+func TestProcessRejectsExplicitOutputAliasingSchema(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	originalSchema, err := os.ReadFile(schemaPath)
+	assert.NoError(err)
+	eventPath := filepath.Join(dir, "event.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", schemaPath,
+		"--overwrite",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "is selected for both")
+	actualSchema, err := os.ReadFile(schemaPath)
+	assert.NoError(err)
+	assert.Equal(originalSchema, actualSchema)
+}
+
+func TestProcessDirectoryRejectsSchemaInsideOutputNamespace(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	eventsDir := filepath.Join(dir, "input")
+	outputDir := filepath.Join(dir, "output")
+	schemaPath := writeTestSchema(assert, filepath.Join(outputDir, reportsOutputDirectory))
+	originalSchema, err := os.ReadFile(schemaPath)
+	assert.NoError(err)
+	writeJSONFile(assert, filepath.Join(eventsDir, "schema.json"), validCLIEvent())
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--output-dir", outputDir,
+		"--validate",
+		"--overwrite",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "schema path")
+	assert.Contains(stderr, "reserved output namespace")
+	actualSchema, err := os.ReadFile(schemaPath)
+	assert.NoError(err)
+	assert.Equal(originalSchema, actualSchema)
+}
+
 func TestProcessRejectsSummaryInsideReservedNamespace(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()

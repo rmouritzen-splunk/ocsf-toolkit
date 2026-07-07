@@ -20,6 +20,13 @@ func TestDecodeObjectRejectsTrailingJSONValue(t *testing.T) {
 	assert.ErrorContains(err, "unexpected trailing JSON value")
 }
 
+func TestDecodeObjectRejectsNull(t *testing.T) {
+	object, err := DecodeObject(strings.NewReader(`null`))
+
+	require.Nil(t, object)
+	require.ErrorContains(t, err, "unexpected JSON null")
+}
+
 func TestDecodeArrayOfObjectsRejectsTrailingJSONValue(t *testing.T) {
 	assert := require.New(t)
 
@@ -27,6 +34,20 @@ func TestDecodeArrayOfObjectsRejectsTrailingJSONValue(t *testing.T) {
 
 	assert.Nil(objects)
 	assert.ErrorContains(err, "unexpected trailing JSON value")
+}
+
+func TestDecodeArrayOfObjectsRejectsNull(t *testing.T) {
+	objects, err := DecodeArrayOfObjects(strings.NewReader(`null`))
+
+	require.Nil(t, objects)
+	require.ErrorContains(t, err, "unexpected JSON null")
+}
+
+func TestDecodeArrayOfObjectsRejectsNullElement(t *testing.T) {
+	objects, err := DecodeArrayOfObjects(strings.NewReader(`[{} , null]`))
+
+	require.Nil(t, objects)
+	require.ErrorContains(t, err, "element 1 is JSON null")
 }
 
 func TestDecodeObjectPreservesNumbers(t *testing.T) {
@@ -51,6 +72,19 @@ func TestReadObject(t *testing.T) {
 
 	_, err = ReadObject(filepath.Join(dir, "missing.json"))
 	assert.ErrorContains(err, "failed to open JSON object file")
+}
+
+func TestReadObjectRejectsNullWithPath(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "event.json")
+	assert.NoError(os.WriteFile(path, []byte(`null`), 0o644))
+
+	object, err := ReadObject(path)
+
+	assert.Nil(object)
+	assert.ErrorContains(err, `failed to decode JSON object file "`+path+`"`)
+	assert.ErrorContains(err, "unexpected JSON null")
 }
 
 func TestReadObjectFS(t *testing.T) {

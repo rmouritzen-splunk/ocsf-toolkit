@@ -379,7 +379,7 @@ pipeline, err := schema.NewEventProcessorPipeline(
 
 Enrichment preserves a non-empty existing `observables` attribute instead of replacing it. When malformed structure or existing data prevents requested enrichment, `ProcessingResult.Issues` contains a nonfatal issue with phase `enrichment`; enrichment does not attempt to duplicate general validation.
 
-`NewEnrichmentRemoval` safely removes supported scalar integral enum siblings and redundant observables by default. Use `WithRemoveEnumSiblings(false)` or `WithRemoveObservables(false)` to retain either category. Legacy enum arrays remain untouched. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using OCSF-compatible string conversion; object observables without values are removed only when their path resolves to a JSON object.
+`NewEnrichmentRemoval` safely removes supported scalar integral enum siblings and redundant observables by default. Use `WithRemoveEnumSiblings(false)` or `WithRemoveObservables(false)` to retain either category. Legacy enum arrays remain untouched. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using OCSF-compatible string conversion, and an explicit null value matches either null or missing event content. Object observables without values are removed only when their path resolves to a JSON object.
 
 `NewValidation` reports required validation errors by default. Use `WithWarnOnMissingRecommended()` to report missing recommended attributes as warnings.
 

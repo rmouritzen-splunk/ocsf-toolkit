@@ -61,6 +61,7 @@ git push origin v0.1.0
 
 GitHub Actions runs `.github/workflows/release.yml`. The workflow:
 
+- Rejects an obvious mistyped release tag unless it begins with `v` followed by a digit. This is a typo guard, not full semantic-version validation.
 - Sets up the pinned release Go toolchain, currently Go 1.26.4.
 - Installs the pinned `golangci-lint` version.
 - Runs `make package VERSION="${GITHUB_REF_NAME}"`, including unit and race tests.

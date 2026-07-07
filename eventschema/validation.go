@@ -571,7 +571,7 @@ func (c *processingContext) validateTypeValues(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.firstTypeWithValues(attributeTypeName)
+	typeName, typeDef := c.resolveValuesConstraint(attributeTypeName)
 	if typeDef == nil {
 		return
 	}
@@ -614,7 +614,7 @@ func (c *processingContext) validateNumberRange(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.firstTypeWithRange(attributeTypeName)
+	typeName, typeDef := c.resolveRangeConstraint(attributeTypeName)
 	if typeDef == nil || len(typeDef.Range) != 2 {
 		return
 	}
@@ -671,7 +671,7 @@ func (c *processingContext) validateStringMaxLen(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.firstTypeWithMaxLen(attributeTypeName)
+	typeName, typeDef := c.resolveMaxLenConstraint(attributeTypeName)
 	if typeDef == nil || typeDef.MaxLen == nil {
 		return
 	}
@@ -719,7 +719,7 @@ func (c *processingContext) validateStringRegex(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.firstTypeWithRegex(attributeTypeName)
+	typeName, typeDef := c.resolveRegexConstraint(attributeTypeName)
 	if typeDef == nil || typeDef.RegEx == nil {
 		return
 	}
@@ -767,31 +767,31 @@ func (c *processingContext) validateStringRegex(
 	c.addWarning(code, message, details)
 }
 
-func (c *processingContext) firstTypeWithValues(typeName string) (string, *typeDefinition) {
-	return c.firstTypeWith(typeName, func(typeDef *typeDefinition) bool {
+func (c *processingContext) resolveValuesConstraint(typeName string) (string, *typeDefinition) {
+	return c.resolveTypeConstraint(typeName, func(typeDef *typeDefinition) bool {
 		return len(typeDef.Values) > 0
 	})
 }
 
-func (c *processingContext) firstTypeWithRange(typeName string) (string, *typeDefinition) {
-	return c.firstTypeWith(typeName, func(typeDef *typeDefinition) bool {
+func (c *processingContext) resolveRangeConstraint(typeName string) (string, *typeDefinition) {
+	return c.resolveTypeConstraint(typeName, func(typeDef *typeDefinition) bool {
 		return len(typeDef.Range) > 0
 	})
 }
 
-func (c *processingContext) firstTypeWithMaxLen(typeName string) (string, *typeDefinition) {
-	return c.firstTypeWith(typeName, func(typeDef *typeDefinition) bool {
+func (c *processingContext) resolveMaxLenConstraint(typeName string) (string, *typeDefinition) {
+	return c.resolveTypeConstraint(typeName, func(typeDef *typeDefinition) bool {
 		return typeDef.MaxLen != nil
 	})
 }
 
-func (c *processingContext) firstTypeWithRegex(typeName string) (string, *typeDefinition) {
-	return c.firstTypeWith(typeName, func(typeDef *typeDefinition) bool {
+func (c *processingContext) resolveRegexConstraint(typeName string) (string, *typeDefinition) {
+	return c.resolveTypeConstraint(typeName, func(typeDef *typeDefinition) bool {
 		return typeDef.RegEx != nil
 	})
 }
 
-func (c *processingContext) firstTypeWith(
+func (c *processingContext) resolveTypeConstraint(
 	typeName string,
 	predicate func(*typeDefinition) bool,
 ) (string, *typeDefinition) {

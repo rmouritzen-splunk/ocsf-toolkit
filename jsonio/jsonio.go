@@ -75,7 +75,7 @@ func ReadArrayOfObjectsFS(dirFS fs.FS, path string) ([]jsonish.Map, error) {
 	return a, nil
 }
 
-// DecodeObject decodes one JSON object from r and rejects trailing JSON values.
+// DecodeObject decodes one non-null JSON object from r and rejects trailing JSON values.
 //
 // Numbers are decoded as json.Number values.
 func DecodeObject(r io.Reader) (jsonish.Map, error) {
@@ -88,10 +88,13 @@ func DecodeObject(r io.Reader) (jsonish.Map, error) {
 	if err := ensureEOF(decoder); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON object: %w", err)
 	}
+	if object == nil {
+		return nil, errors.New("unexpected JSON null; expected a JSON object")
+	}
 	return object, nil
 }
 
-// DecodeArrayOfObjects decodes one JSON array of objects from r and rejects trailing JSON values.
+// DecodeArrayOfObjects decodes one non-null JSON array of non-null objects from r and rejects trailing JSON values.
 //
 // Numbers are decoded as json.Number values.
 func DecodeArrayOfObjects(r io.Reader) ([]jsonish.Map, error) {
@@ -103,6 +106,14 @@ func DecodeArrayOfObjects(r io.Reader) ([]jsonish.Map, error) {
 	}
 	if err := ensureEOF(decoder); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON array of objects: %w", err)
+	}
+	if objects == nil {
+		return nil, errors.New("unexpected JSON null; expected a JSON array of objects")
+	}
+	for index, object := range objects {
+		if object == nil {
+			return nil, fmt.Errorf("element %d is JSON null; expected a JSON object", index)
+		}
 	}
 	return objects, nil
 }

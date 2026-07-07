@@ -24,6 +24,11 @@ type observablePath struct {
 	segments []observablePathSegment
 }
 
+type observablePathResolution struct {
+	values  []any
+	missing bool
+}
+
 type observablePathSegment struct {
 	attribute string
 	selectors []observableArraySelector
@@ -123,8 +128,10 @@ func (c *processingContext) resolveObservableEntry(
 		return result
 	}
 
-	candidates := resolveObservablePath(event, path)
-	if len(candidates) == 0 {
+	pathResolution := resolveObservablePath(event, path)
+	observableValue, valuePresent := observable["value"]
+	nullMatchesMissing := valuePresent && observableValue == nil && pathResolution.missing
+	if len(pathResolution.values) == 0 && !nullMatchesMissing {
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_path_not_found",
 			fmt.Sprintf("Observable index %d name %q does not resolve to a value in the event.", index, name),
@@ -133,9 +140,8 @@ func (c *processingContext) resolveObservableEntry(
 		return result
 	}
 
-	observableValue, valuePresent := observable["value"]
 	if !valuePresent {
-		if anyObservableObject(candidates) {
+		if anyObservableObject(pathResolution.values) {
 			result.removable = true
 			return result
 		}
@@ -147,7 +153,7 @@ func (c *processingContext) resolveObservableEntry(
 		return result
 	}
 	if observableValue == nil {
-		if anyNilObservableValue(candidates) {
+		if pathResolution.missing || anyNilObservableValue(pathResolution.values) {
 			result.removable = true
 			return result
 		}
@@ -167,7 +173,7 @@ func (c *processingContext) resolveObservableEntry(
 		)
 		return result
 	}
-	if observableStringValueFound(candidates, valueString) {
+	if observableStringValueFound(pathResolution.values, valueString) {
 		result.removable = true
 		return result
 	}
@@ -290,26 +296,35 @@ func (c *processingContext) observablePathDefined(path observablePath) bool {
 	return false
 }
 
-func resolveObservablePath(event jsonish.Map, path observablePath) []any {
+func resolveObservablePath(event jsonish.Map, path observablePath) observablePathResolution {
 	current := []any{event}
+	resolution := observablePathResolution{}
 	for _, segment := range path.segments {
 		next := make([]any, 0)
 		for _, value := range current {
-			resolveObservableSegment(value, segment, &next)
+			resolveObservableSegment(value, segment, &next, &resolution.missing)
 		}
 		if len(next) == 0 {
-			return nil
+			return resolution
 		}
 		current = next
 	}
-	return flattenObservableCandidates(current)
+	resolution.values = flattenObservableCandidates(current)
+	return resolution
 }
 
-func resolveObservableSegment(value any, segment observablePathSegment, result *[]any) {
+func resolveObservableSegment(value any, segment observablePathSegment, result *[]any, missing *bool) {
 	if values, ok := asSlice(value); ok {
-		for _, element := range values {
-			resolveObservableSegment(element, segment, result)
+		if len(values) == 0 {
+			*missing = true
 		}
+		for _, element := range values {
+			resolveObservableSegment(element, segment, result, missing)
+		}
+		return
+	}
+	if value == nil {
+		*missing = true
 		return
 	}
 	item, ok := value.(jsonish.Map)
@@ -318,11 +333,14 @@ func resolveObservableSegment(value any, segment observablePathSegment, result *
 	}
 	value, present := item[segment.attribute]
 	if !present {
+		*missing = true
 		return
 	}
 	selected := []any{value}
 	for _, selector := range segment.selectors {
-		selected = applyObservableSelector(selected, selector)
+		var selectionMissing bool
+		selected, selectionMissing = applyObservableSelector(selected, selector)
+		*missing = *missing || selectionMissing
 		if len(selected) == 0 {
 			return
 		}
@@ -330,22 +348,28 @@ func resolveObservableSegment(value any, segment observablePathSegment, result *
 	*result = append(*result, selected...)
 }
 
-func applyObservableSelector(values []any, selector observableArraySelector) []any {
+func applyObservableSelector(values []any, selector observableArraySelector) ([]any, bool) {
 	result := make([]any, 0)
+	missing := false
 	for _, value := range values {
 		array, ok := asSlice(value)
 		if !ok {
 			continue
 		}
 		if selector.all {
+			if len(array) == 0 {
+				missing = true
+			}
 			result = append(result, array...)
 			continue
 		}
 		if selector.index < len(array) {
 			result = append(result, array[selector.index])
+		} else {
+			missing = true
 		}
 	}
-	return result
+	return result, missing
 }
 
 func flattenObservableCandidates(values []any) []any {
