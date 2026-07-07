@@ -317,7 +317,7 @@ if len(result.Validation.Errors) > 0 {
 
 Validation failures are reported in `ProcessingResult`; they do not normally return a Go `error`. The `error` return is for tooling failures or unusable input.
 
-For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` helpers do this for file input by using `json.Decoder.UseNumber()`. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
+For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` file and object helpers do this automatically. Use `jsonio.NewDecoder` when decoding another JSON shape, such as a typed structure, with the same number-preserving behavior. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
 
 ### Processors
 
@@ -376,6 +376,8 @@ pipeline, err := schema.NewEventProcessorPipeline(
 `NewEnrichment` adds enum siblings and observables by default. Use `WithAddEnumSiblings(false)` or `WithAddObservables(false)` to disable either enrichment.
 
 `NewEventProcessorPipeline` validates the complete processing configuration. It returns an aggregate error containing all detected problems with an empty or no-op configuration, duplicate processors, retain/force conflicts, or a configuration that adds and removes the same category. CLI flag validation reports equivalent conflicts using the relevant flag names.
+
+Across event processing, an object attribute whose value is null is treated as missing. Null array elements remain invalid because no OCSF array element type permits null.
 
 Enrichment preserves a non-empty existing `observables` attribute instead of replacing it. When malformed structure or existing data prevents requested enrichment, `ProcessingResult.Issues` contains a nonfatal issue with phase `enrichment`; enrichment does not attempt to duplicate general validation.
 

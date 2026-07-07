@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/ocsf/ocsf-toolkit/jsonio"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
@@ -321,7 +322,7 @@ func New(name string) (Schema, error) {
 	}
 	defer func(f *os.File) { _ = f.Close() }(f)
 	var sd schemaDefinition
-	decoder := json.NewDecoder(f)
+	decoder := jsonio.NewDecoder(f)
 	if err = decoder.Decode(&sd); err != nil {
 		return nil, fmt.Errorf("failed to decode schema file %q: %w", name, err)
 	}

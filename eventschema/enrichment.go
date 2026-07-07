@@ -86,7 +86,7 @@ func (p *enrichmentProcessor) addEnumSibling(context *processingContext, visit a
 	valueString := coerce.StringLenient(visit.value)
 	enumDetail := visit.attrDef.Enum[valueString]
 	if visit.attrDef.Sibling != nil {
-		if _, siblingPresent := visit.item[*visit.attrDef.Sibling]; !siblingPresent &&
+		if _, siblingPresent := attributeValue(visit.item, *visit.attrDef.Sibling); !siblingPresent &&
 			(valueString == "" || enumDetail == nil || enumDetail.Caption == "") {
 			context.addProcessorIssue(issuePhaseEnrichment, newProcessingDiagnostic(
 				"enrichment_enum_sibling_not_added",
@@ -140,7 +140,7 @@ func (c *processingContext) addEnumSibling(
 		return
 	}
 	sibling := *attrDef.Sibling
-	if _, siblingPresent := item[sibling]; siblingPresent {
+	if _, siblingPresent := attributeValue(item, sibling); siblingPresent {
 		return
 	}
 	if valueString == "" {

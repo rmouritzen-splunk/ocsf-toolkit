@@ -11,6 +11,13 @@ import (
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
+// NewDecoder returns a JSON decoder that preserves numbers as json.Number values.
+func NewDecoder(r io.Reader) *json.Decoder {
+	decoder := json.NewDecoder(r)
+	decoder.UseNumber()
+	return decoder
+}
+
 // ReadObject reads a JSON object file from path.
 //
 // Numbers are decoded as json.Number values.
@@ -79,8 +86,7 @@ func ReadArrayOfObjectsFS(dirFS fs.FS, path string) ([]jsonish.Map, error) {
 //
 // Numbers are decoded as json.Number values.
 func DecodeObject(r io.Reader) (jsonish.Map, error) {
-	decoder := json.NewDecoder(r)
-	decoder.UseNumber()
+	decoder := NewDecoder(r)
 	object := jsonish.Map{}
 	if err := decoder.Decode(&object); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON object: %w", err)
@@ -98,8 +104,7 @@ func DecodeObject(r io.Reader) (jsonish.Map, error) {
 //
 // Numbers are decoded as json.Number values.
 func DecodeArrayOfObjects(r io.Reader) ([]jsonish.Map, error) {
-	decoder := json.NewDecoder(r)
-	decoder.UseNumber()
+	decoder := NewDecoder(r)
 	var objects []jsonish.Map
 	if err := decoder.Decode(&objects); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON array of objects: %w", err)

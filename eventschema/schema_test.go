@@ -3,6 +3,8 @@ package eventschema
 import (
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -33,6 +35,34 @@ func TestLoadSchemaFromFile(t *testing.T) {
 	schema, err := New(testSchemaFilePath)
 	assert.NoError(err)
 	checkSchema(assert, schema)
+}
+
+func TestLoadSchemaFromFilePreservesTypeValueNumbers(t *testing.T) {
+	assert := require.New(t)
+	path := filepath.Join(t.TempDir(), "schema.json")
+	assert.NoError(os.WriteFile(path, []byte(`{
+		"compile_version": 1,
+		"classes": {
+			"base_event": {"name": "base_event", "uid": 0}
+		},
+		"dictionary": {
+			"types": {
+				"attributes": {
+					"precise_t": {"values": [9007199254740993]}
+				}
+			}
+		}
+	}`), 0o600))
+
+	schema, err := New(path)
+
+	assert.NoError(err)
+	implementation, ok := schema.(*schemaImpl)
+	assert.True(ok)
+	assert.Equal(
+		[]any{json.Number("9007199254740993")},
+		implementation.dictionary.Types.Attributes["precise_t"].Values,
+	)
 }
 
 func checkSchema(assert *require.Assertions, schema Schema) {
@@ -1090,6 +1120,86 @@ func TestProcessEventValidationConstraintEdgeCases(t *testing.T) {
 	result, err = pipeline.ProcessEvent(twoPresentEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "constraint_failed")
+
+	nullPresentEvent := validValidationEvent()
+	nullPresentEvent["name"] = nil
+	result, err = pipeline.ProcessEvent(nullPresentEvent)
+	assert.NoError(err)
+	assert.Contains(issueCodes(result.Validation.Errors), "constraint_failed")
+
+	nullDottedPathEvent := validValidationEvent()
+	delete(nullDottedPathEvent, "name")
+	nullDottedPathEvent["ball"] = jsonish.Map{"green": nil}
+	result, err = pipeline.ProcessEvent(nullDottedPathEvent)
+	assert.NoError(err)
+	assert.Contains(issueCodes(result.Validation.Errors), "constraint_failed")
+}
+
+func TestProcessEventTreatsNullAttributesAsMissing(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+
+	t.Run("unknown attribute", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["unknown"] = nil
+
+		result, err := mustNewEventProcessorPipeline(assert, schema, NewValidation()).ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.NotContains(issueCodes(result.Validation.Errors), "attribute_unknown")
+	})
+
+	t.Run("enum sibling validation", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["mode_id"] = json.Number("1")
+		event["mode"] = nil
+
+		result, err := mustNewEventProcessorPipeline(assert, schema, NewValidation()).ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.NotContains(issueCodes(result.Validation.Warnings), "attribute_enum_sibling_incorrect")
+	})
+
+	t.Run("enum sibling enrichment", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["mode_id"] = json.Number("1")
+		event["mode"] = nil
+
+		result, err := mustNewEventProcessorPipeline(
+			assert,
+			schema,
+			NewEnrichment(WithAddObservables(false)),
+		).ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.Equal("Known", event["mode"])
+		assert.Equal(3, result.Enrichment.EnumSiblingsAdded)
+	})
+
+	t.Run("observables validation", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["observables"] = nil
+
+		result, err := mustNewEventProcessorPipeline(assert, schema, NewValidation()).ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.Empty(result.Validation.Errors)
+	})
+
+	t.Run("null array element", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["statuses"] = []any{nil}
+
+		result, err := mustNewEventProcessorPipeline(assert, schema, NewValidation()).ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.Contains(issueAttributePaths(issuesWithCode(result.Validation.Errors, "attribute_wrong_type")), "statuses[0]")
+	})
 }
 
 func TestProcessEventValidationTypeConstraintChecks(t *testing.T) {
@@ -1138,6 +1248,19 @@ func TestProcessEventValidationTypeConstraintChecks(t *testing.T) {
 	result, err = pipeline.ProcessEvent(valuesEvent)
 	assert.NoError(err)
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_value_not_in_type_values")
+}
+
+func TestProcessEventValidationTypeValuesDoNotRequireJSONNumbers(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	si.dictionary.Types.Attributes["level_t"].Values = []any{int64(9007199254740993)}
+	event := validValidationEvent()
+	event["level"] = json.Number("9007199254740993")
+
+	result, err := mustNewEventProcessorPipeline(assert, si, NewValidation()).ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.NotContains(issueCodes(result.Validation.Errors), "attribute_value_not_in_type_values")
 }
 
 func TestProcessEventValidationIntegerAndLongBounds(t *testing.T) {

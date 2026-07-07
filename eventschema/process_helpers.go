@@ -10,6 +10,13 @@ import (
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
+// attributeValue implements OCSF's equivalence between a missing attribute and
+// an attribute whose value is null.
+func attributeValue(item jsonish.Map, attribute string) (any, bool) {
+	value, present := item[attribute]
+	return value, present && value != nil
+}
+
 func getInt64(value any) (int64, bool, bool) {
 	if value == nil {
 		return 0, false, false

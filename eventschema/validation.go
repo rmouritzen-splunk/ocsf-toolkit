@@ -320,7 +320,7 @@ func (c *processingContext) validateEnumSibling(
 		return
 	}
 	siblingName := *attrDef.Sibling
-	siblingValue, siblingPresent := item[siblingName]
+	siblingValue, siblingPresent := attributeValue(item, siblingName)
 	if !siblingPresent {
 		return
 	}
@@ -382,7 +382,7 @@ func (c *processingContext) validateEnumArraySibling(
 	}
 
 	siblingName := *attrDef.Sibling
-	siblingArrayValue, siblingPresent := item[siblingName]
+	siblingArrayValue, siblingPresent := attributeValue(item, siblingName)
 	if !siblingPresent {
 		return
 	}
@@ -829,6 +829,9 @@ func (c *processingContext) validateUnknownKeys(
 	sort.Strings(eventKeys)
 
 	for _, key := range eventKeys {
+		if item[key] == nil {
+			continue
+		}
 		if _, present := filteredAttributes[key]; present {
 			continue
 		}
@@ -864,7 +867,7 @@ func (c *processingContext) validateVersion(event jsonish.Map) {
 	if !ok {
 		return
 	}
-	versionValue, present := metadata["version"]
+	versionValue, present := attributeValue(metadata, "version")
 	if !present {
 		return
 	}
@@ -1122,13 +1125,13 @@ func countConstraintPathsPresent(eventItem jsonish.Map, paths []string) int {
 }
 
 func hasPathOrKey(eventItem jsonish.Map, path string) bool {
-	if _, present := eventItem[path]; present {
+	if _, present := attributeValue(eventItem, path); present {
 		return true
 	}
 	parts := strings.Split(path, ".")
 	current := eventItem
 	for index, part := range parts {
-		value, present := current[part]
+		value, present := attributeValue(current, part)
 		if !present {
 			return false
 		}

@@ -231,11 +231,11 @@ func (c *processingContext) processItem(
 	attributeNames := sortedAttributeNames(filteredAttributes)
 	for _, attributeName := range attributeNames {
 		attrDef := filteredAttributes[attributeName]
-		value, present := item[attributeName]
+		value, present := attributeValue(item, attributeName)
 		validationPath := makeAttributePath(validationParentPath, attributeName)
 		enrichmentPath := makeAttributePath(enrichmentParentPath, attributeName)
 
-		if !present || value == nil {
+		if !present {
 			c.visitAttribute(attributeVisit{
 				item:           item,
 				validationPath: validationPath,

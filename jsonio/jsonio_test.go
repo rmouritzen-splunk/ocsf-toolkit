@@ -59,6 +59,17 @@ func TestDecodeObjectPreservesNumbers(t *testing.T) {
 	assert.Equal(json.Number("1"), object["class_uid"])
 }
 
+func TestNewDecoderPreservesNumbers(t *testing.T) {
+	assert := require.New(t)
+	var value any
+
+	decoder := NewDecoder(strings.NewReader(`9007199254740993`))
+	err := decoder.Decode(&value)
+
+	assert.NoError(err)
+	assert.Equal(json.Number("9007199254740993"), value)
+}
+
 func TestReadObject(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()

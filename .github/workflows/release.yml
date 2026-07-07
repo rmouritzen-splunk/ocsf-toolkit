@@ -27,6 +27,14 @@ jobs:
           # This is intentionally a simple typo guard, not full SemVer validation.
           # A stricter regular expression can be added if full SemVer enforcement becomes necessary.
           case "${GITHUB_REF_NAME}" in
+            *+*)
+              printf 'Release tags must not contain build metadata (+): %s\n' \
+                "${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          case "${GITHUB_REF_NAME}" in
             v[0-9]*) ;;
             *)
               printf 'Release tag must begin with v followed by a digit: %s\n' \

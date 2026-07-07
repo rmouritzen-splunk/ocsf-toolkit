@@ -18,7 +18,7 @@ Recommended repository policy:
 
 ## Version Tags
 
-Use annotated tags. Release tags should start with `v` and use semantic versioning.
+Use annotated tags. Release tags should start with `v` and use semantic versioning. Do not include SemVer build metadata (`+...`) in release tags.
 
 Examples:
 

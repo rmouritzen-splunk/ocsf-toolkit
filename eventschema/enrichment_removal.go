@@ -50,6 +50,11 @@ func (p *enrichmentRemovalProcessor) removeEnumSiblingsFromItem(
 		if !siblingPresent {
 			continue
 		}
+		if siblingValue == nil {
+			delete(item, siblingName)
+			context.result.EnrichmentRemoval.EnumSiblingsRemoved++
+			continue
+		}
 		if !context.supportedEnumSibling(attrDef, attributes[siblingName]) {
 			context.result.EnrichmentRemoval.EnumSiblingsRetained++
 			continue
@@ -83,6 +88,10 @@ func (p *enrichmentRemovalProcessor) removeObservables(context *processingContex
 	}
 	value, present := event["observables"]
 	if !present {
+		return
+	}
+	if value == nil {
+		delete(event, "observables")
 		return
 	}
 	if p.config.forceRemoveObservables {

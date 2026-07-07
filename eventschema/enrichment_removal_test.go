@@ -82,6 +82,46 @@ func TestEnrichmentRemovalForceRetainsEnumID99Sibling(t *testing.T) {
 	}
 }
 
+func TestEnrichmentRemovalTreatsNullAttributesAsMissing(t *testing.T) {
+	t.Run("enum sibling", func(t *testing.T) {
+		assert := require.New(t)
+		schema := makeValidationTestSchema(assert)
+		event := validValidationEvent()
+		event["mode_id"] = json.Number("1")
+		event["mode"] = nil
+
+		result, err := mustNewEventProcessorPipeline(
+			assert,
+			schema,
+			NewEnrichmentRemoval(WithRemoveObservables(false)),
+		).ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.NotContains(event, "mode")
+		assert.Equal(1, result.EnrichmentRemoval.EnumSiblingsRemoved)
+		assert.Zero(result.EnrichmentRemoval.EnumSiblingsRetained)
+	})
+
+	t.Run("observables", func(t *testing.T) {
+		assert := require.New(t)
+		schema := makeValidationTestSchema(assert)
+		event := validValidationEvent()
+		event["observables"] = nil
+
+		result, err := mustNewEventProcessorPipeline(
+			assert,
+			schema,
+			NewEnrichmentRemoval(WithRemoveEnumSiblings(false)),
+		).ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.NotContains(event, "observables")
+		assert.Zero(result.EnrichmentRemoval.ObservablesRemoved)
+		assert.Zero(result.EnrichmentRemoval.ObservablesRetained)
+		assert.Empty(result.Issues)
+	})
+}
+
 func TestEnrichmentRemovalSafelyRemovesScalarAndObjectObservables(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)

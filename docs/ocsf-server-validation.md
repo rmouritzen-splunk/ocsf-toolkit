@@ -24,6 +24,7 @@ The local OCSF Server work has used the `fix-validator2` branch. The `long_t` ra
 - `just_one` passes with exactly one present value.
 - `just_one` fails with zero present values.
 - `just_one` fails with more than one present value.
+- Constraint paths treat explicit null values as missing.
 
 ## Type Constraints
 

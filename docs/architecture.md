@@ -65,6 +65,8 @@ If `class_uid` is missing, has the wrong type, or does not identify a compiled c
 
 `ProcessEvent` mutates its `jsonish.Map` argument in place when enrichment or another mutating processor is enabled. Processing is not transactional. If it returns a Go error, the map may already be partially modified; callers that need the original event must deep-copy it first.
 
+OCSF object attributes with an explicit null value are treated as missing throughout validation, enrichment, and enrichment removal. This applies to requirements, constraints, unknown-attribute checks, enum siblings, and the top-level `observables` attribute. A null array element is not missing and fails validation because no OCSF array element type permits null. Observable entries are the format-driven exception: an omitted `value` denotes an object observable, while an explicit null `value` denotes a scalar observable referring to null or missing event content.
+
 OCSF validation failures are returned in `ProcessingResult.Validation`, not as Go errors. A Go error means the processor could not operate on the supplied input. `ProcessingIssue.Code` is a stable machine-readable identifier intended for searching, grouping, metrics, and structured logs; `Message` is human-readable.
 
 The event map and its nested maps and slices must not be accessed concurrently during processing. Separate events may be processed concurrently by the same processor.

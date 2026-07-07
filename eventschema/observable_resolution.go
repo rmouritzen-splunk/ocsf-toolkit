@@ -46,7 +46,7 @@ func (c *processingContext) resolveObservables(event jsonish.Map) *observableRes
 	resolution := &observableResolution{}
 	c.observableResolution = resolution
 
-	value, present := event["observables"]
+	value, present := attributeValue(event, "observables")
 	if !present {
 		return resolution
 	}
@@ -87,7 +87,7 @@ func (c *processingContext) resolveObservableEntry(
 		return result
 	}
 
-	nameValue, namePresent := observable["name"]
+	nameValue, namePresent := attributeValue(observable, "name")
 	if !namePresent {
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_name_missing",
