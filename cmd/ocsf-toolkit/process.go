@@ -1,34 +1,109 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"path/filepath"
+	"strings"
 
 	"github.com/ocsf/ocsf-toolkit/eventschema"
 	"github.com/ocsf/ocsf-toolkit/jsonio"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
-type validationOutput struct {
-	InputPath  string                       `json:"input_path"`
-	Validation eventschema.ValidationResult `json:"validation"`
-}
+var errStopProcessing = errors.New("stop event processing")
 
-type unenrichIssuesOutput struct {
-	InputPath         string                              `json:"input_path"`
-	EnrichmentRemoval eventschema.EnrichmentRemovalResult `json:"enrichment_removal"`
-	Issues            []eventschema.ProcessingIssue       `json:"issues"`
+var walkEventDirectory = filepath.WalkDir
+
+type eventReport struct {
+	EventSource       string                               `json:"event_source"`
+	EventDestination  string                               `json:"event_destination,omitempty"`
+	Validation        *eventschema.ValidationResult        `json:"validation,omitempty"`
+	Enrichment        *eventschema.EnrichmentResult        `json:"enrichment,omitempty"`
+	EnrichmentRemoval *eventschema.EnrichmentRemovalResult `json:"enrichment_removal,omitempty"`
+	Issues            []eventschema.ProcessingIssue        `json:"issues,omitempty"`
 }
 
 func processEvents(
 	config processConfig,
-	layout processingLayout,
+	destinations processingDestinations,
 	stdin io.Reader,
-	stdout io.Writer,
+	outputs *destinationWriter,
 ) (processSummary, bool, error) {
-	schema, err := eventschema.New(config.schemaPath)
+	pipeline, err := newEventProcessorPipeline(config)
 	if err != nil {
 		return processSummary{}, false, err
+	}
+
+	summary := processSummary{SchemaPath: config.schemaPath}
+	retainFileSummaries := config.eventPath != "" || config.summaryJSONFile != ""
+	if config.eventPath != "" {
+		input := inputEvent{path: config.eventPath, rel: stdinEventRelativePath}
+		if config.eventPath != stdioPath {
+			input.rel = ""
+		}
+		fileResult := processOneEvent(
+			config,
+			pipeline,
+			input,
+			destinations.eventOutput,
+			destinations.reportOutput,
+			stdin,
+			outputs,
+		)
+		updateSummary(&summary, fileResult, retainFileSummaries)
+		return summary, fileResult.failed(), nil
+	}
+
+	err = walkEventDirectory(config.eventsDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || !strings.EqualFold(filepath.Ext(path), ".json") {
+			return nil
+		}
+		rel, err := filepath.Rel(config.eventsDir, path)
+		if err != nil {
+			return err
+		}
+		input := inputEvent{path: path, rel: rel}
+		var eventOutput *outputDestination
+		if config.mutatesEvent() {
+			eventOutput = displayDestination(eventOutputPath(config, input))
+		}
+		var reportOutput *outputDestination
+		if config.generatesReport() {
+			reportOutput = displayDestination(reportOutputPath(config, input))
+		}
+		fileResult := processOneEvent(config, pipeline, input, eventOutput, reportOutput, stdin, outputs)
+		updateSummary(&summary, fileResult, retainFileSummaries)
+		if fileResult.failed() {
+			return errStopProcessing
+		}
+		return nil
+	})
+	if errors.Is(err, errStopProcessing) {
+		return summary, true, nil
+	}
+	if err != nil {
+		return summary, false, fmt.Errorf("failed to walk events directory %q: %w", config.eventsDir, err)
+	}
+	return summary, false, nil
+}
+
+func newEventProcessorPipeline(config processConfig) (eventschema.EventProcessorPipeline, error) {
+	schema, err := eventschema.New(config.schemaPath)
+	if err != nil {
+		return nil, err
 	}
 
 	processors := make([]eventschema.EventProcessor, 0, 3)
@@ -51,8 +126,7 @@ func processEvents(
 		}
 		processors = append(processors, eventschema.NewEnrichmentRemoval(removalOptions...))
 	}
-	// Keep validation last so it checks the event after all local processing,
-	// including enrichment. Future event processors should be inserted before it.
+	// Keep validation last so it checks the event after all local processing.
 	if config.validate {
 		validationOptions := make([]eventschema.ValidationOption, 0, 1)
 		if config.warnOnMissingRecommended {
@@ -62,34 +136,20 @@ func processEvents(
 	}
 	pipeline, err := schema.NewEventProcessorPipeline(processors...)
 	if err != nil {
-		return processSummary{}, false, fmt.Errorf("configure event processor pipeline: %w", err)
+		return nil, fmt.Errorf("configure event processor pipeline: %w", err)
 	}
-
-	summary := processSummary{
-		SchemaPath: config.schemaPath,
-		Files:      make([]fileSummary, 0, len(layout.events)),
-	}
-	runtimeFailure := false
-	for _, eventLayout := range layout.events {
-		fileResult := processOneEvent(config, pipeline, eventLayout, stdin, stdout)
-		updateSummary(&summary, fileResult)
-		if fileResult.ParseError != "" || fileResult.ProcessingError != "" || fileResult.EventWriteError != "" ||
-			fileResult.ValidationResultWriteError != "" || fileResult.UnenrichIssuesWriteError != "" {
-			runtimeFailure = true
-			break
-		}
-	}
-	return summary, runtimeFailure, nil
+	return pipeline, nil
 }
 
 func processOneEvent(
 	config processConfig,
 	pipeline eventschema.EventProcessorPipeline,
-	eventLayout eventFileLayout,
+	input inputEvent,
+	eventOutput *outputDestination,
+	reportOutput *outputDestination,
 	stdin io.Reader,
-	stdout io.Writer,
+	outputs *destinationWriter,
 ) fileSummary {
-	input := eventLayout.input
 	fileResult := fileSummary{
 		InputPath:    input.path,
 		RelativePath: input.rel,
@@ -114,25 +174,76 @@ func processOneEvent(
 	fileResult.ObservablesRemoved = result.EnrichmentRemoval.ObservablesRemoved
 	fileResult.ObservablesRetained = result.EnrichmentRemoval.ObservablesRetained
 
-	if config.mutatesEvent() {
-		if err := writeEventOutput(config, eventLayout.eventOutput, event, result, &fileResult, stdout); err != nil {
+	skipOutputs := config.skipInvalidOutput && len(result.Validation.Errors) > 0
+	if skipOutputs {
+		fileResult.EventSkipped = config.mutatesEvent()
+	} else if config.mutatesEvent() {
+		outputPath := eventOutput.path.display
+		fileResult.EventPath = outputPath
+		if err := writeProcessedJSON(config, outputs, outputPath, "processed event", event); err != nil {
 			fileResult.EventWriteError = err.Error()
 			return fileResult
 		}
+		fileResult.EventWritten = true
 	}
-	if config.unenrich {
-		if err := writeUnenrichIssuesOutput(config, input, eventLayout.unenrichIssues, result, &fileResult, stdout); err != nil {
-			fileResult.UnenrichIssuesWriteError = err.Error()
+
+	if config.generatesReport() {
+		report := buildEventReport(config, input, result, fileResult, skipOutputs)
+		outputPath := reportOutput.path.display
+		fileResult.ReportPath = outputPath
+		if err := writeProcessedJSON(config, outputs, outputPath, "processing report", report); err != nil {
+			fileResult.ReportWriteError = err.Error()
 			return fileResult
 		}
-	}
-	if config.validate {
-		if err := writeValidationOutput(config, input, eventLayout.validationOutput, result, &fileResult, stdout); err != nil {
-			fileResult.ValidationResultWriteError = err.Error()
-			return fileResult
-		}
+		fileResult.ReportWritten = true
 	}
 	return fileResult
+}
+
+func writeProcessedJSON(
+	config processConfig,
+	outputs *destinationWriter,
+	path string,
+	description string,
+	value any,
+) error {
+	if config.eventsDir != "" {
+		return outputs.writeDerivedJSON(path, value)
+	}
+	return outputs.writeJSON(path, description, value)
+}
+
+func buildEventReport(
+	config processConfig,
+	input inputEvent,
+	result eventschema.ProcessingResult,
+	fileResult fileSummary,
+	validationOnly bool,
+) eventReport {
+	report := eventReport{EventSource: input.path}
+	if fileResult.EventWritten {
+		report.EventDestination = fileResult.EventPath
+	}
+	if config.validate {
+		validation := result.Validation
+		report.Validation = &validation
+	}
+	if !validationOnly && config.enrich {
+		enrichment := result.Enrichment
+		report.Enrichment = &enrichment
+	}
+	if !validationOnly && config.unenrich {
+		removal := result.EnrichmentRemoval
+		report.EnrichmentRemoval = &removal
+	}
+	if !validationOnly {
+		report.Issues = result.Issues
+	}
+	return report
+}
+
+func displayDestination(path string) *outputDestination {
+	return &outputDestination{path: filesystemPath{display: path}}
 }
 
 func readInputEvent(input inputEvent, stdin io.Reader) (jsonish.Map, error) {
@@ -146,76 +257,6 @@ func readInputEvent(input inputEvent, stdin io.Reader) (jsonish.Map, error) {
 	return jsonio.ReadObject(input.path)
 }
 
-func writeEventOutput(
-	config processConfig,
-	destination *outputDestination,
-	event jsonish.Map,
-	result eventschema.ProcessingResult,
-	fileResult *fileSummary,
-	stdout io.Writer,
-) error {
-	if config.skipInvalidOutput && len(result.Validation.Errors) > 0 {
-		fileResult.EventSkipped = true
-		return nil
-	}
-
-	outputPath := destination.path.display
-	fileResult.EventPath = outputPath
-	writeOptions := config.writeOptions()
-	if config.updateInPlace {
-		writeOptions.overwrite = true
-	}
-	if err := writeJSONDestination(outputPath, event, writeOptions, stdout); err != nil {
-		return err
-	}
-	fileResult.EventWritten = true
-	return nil
-}
-func writeValidationOutput(
-	config processConfig,
-	input inputEvent,
-	destination *outputDestination,
-	result eventschema.ProcessingResult,
-	fileResult *fileSummary,
-	stdout io.Writer,
-) error {
-	output := validationOutput{
-		InputPath:  input.path,
-		Validation: result.Validation,
-	}
-	outputPath := destination.path.display
-
-	fileResult.ValidationResultPath = outputPath
-	if err := writeJSONDestination(outputPath, output, config.writeOptions(), stdout); err != nil {
-		return err
-	}
-	fileResult.ValidationResultWritten = true
-	return nil
-}
-func writeUnenrichIssuesOutput(
-	config processConfig,
-	input inputEvent,
-	destination *outputDestination,
-	result eventschema.ProcessingResult,
-	fileResult *fileSummary,
-	stdout io.Writer,
-) error {
-	issues := make([]eventschema.ProcessingIssue, 0)
-	for _, issue := range result.Issues {
-		if issue.Phase == "enrichment_removal" {
-			issues = append(issues, issue)
-		}
-	}
-	output := unenrichIssuesOutput{
-		InputPath:         input.path,
-		EnrichmentRemoval: result.EnrichmentRemoval,
-		Issues:            issues,
-	}
-	outputPath := destination.path.display
-	fileResult.UnenrichIssuesPath = outputPath
-	if err := writeJSONDestination(outputPath, output, config.writeOptions(), stdout); err != nil {
-		return err
-	}
-	fileResult.UnenrichIssuesWritten = true
-	return nil
+func (file fileSummary) failed() bool {
+	return file.ParseError != "" || file.ProcessingError != "" || file.EventWriteError != "" || file.ReportWriteError != ""
 }

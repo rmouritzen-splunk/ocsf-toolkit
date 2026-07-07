@@ -216,7 +216,7 @@ func WithRemoveObservables(remove bool) EnrichmentRemovalOption {
 }
 
 // WithForceRemoveEnumSiblings removes supported enum siblings without requiring them to match the schema caption.
-// Enum ID 99 siblings and unsupported enum forms are always retained.
+// Enum ID 99 siblings are required by OCSF and always retained, as are unsupported enum forms.
 func WithForceRemoveEnumSiblings() EnrichmentRemovalOption {
 	return enrichmentRemovalOptionFunc(func(config *enrichmentRemovalConfig) {
 		config.removeEnumSiblings = true

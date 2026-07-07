@@ -153,8 +153,8 @@ func makeTestSymlink(t *testing.T, target, link string) {
 	}
 }
 
-func readValidationOutput(assert *require.Assertions, path string) validationOutput {
-	var output validationOutput
+func readEventReport(assert *require.Assertions, path string) eventReport {
+	var output eventReport
 	readJSONFile(assert, path, &output)
 	return output
 }

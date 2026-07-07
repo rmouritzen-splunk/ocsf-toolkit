@@ -16,86 +16,81 @@ func TestProcessValidationSummaryCountsEventsWithWarningsOnly(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
-	eventPath := filepath.Join(dir, "event.json")
-	validationPath := filepath.Join(dir, "event.validation.json")
+	eventsDir := filepath.Join(dir, "events")
+	eventPath := filepath.Join(eventsDir, "event.json")
+	outputDir := filepath.Join(dir, "output")
+	validationPath := filepath.Join(outputDir, "reports", "event.json")
 	summaryPath := filepath.Join(dir, "summary.json")
 	writeJSONFile(assert, eventPath, validCLIEvent())
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
-		"--event", eventPath,
+		"--events-dir", eventsDir,
 		"--validate",
 		"--warn-on-missing-recommended",
-		"--validation-output", validationPath,
-		"--summary-json-output", summaryPath,
+		"--output-dir", outputDir,
+		"--summary-json-file", summaryPath,
 	)
 
 	assert.Equal(0, exitCode, stderr)
-	assert.Empty(stdout)
-	assert.Equal(summaryText(
-		"Event file processed: "+eventPath,
-		"Validation errors: 0",
-		"Validation warnings: 1",
-		"Validation result written: "+validationPath,
-	), stderr)
+	assert.Empty(stderr)
+	assert.Equal(
+		"ocsf-toolkit "+version+" "+runtime.GOOS+"/"+runtime.GOARCH+" "+runtime.Version()+"\n\n"+
+			summaryText(
+				"Event files processed: 1",
+				"Events with validation errors: 0",
+				"Events with validation warnings (no errors): 1",
+			),
+		stdout,
+	)
 
-	validation := readValidationOutput(assert, validationPath)
+	validation := readEventReport(assert, validationPath)
 	assert.Empty(validation.Validation.Errors)
 	assert.NotEmpty(validation.Validation.Warnings)
 
 	var summary summaryReport
 	readJSONFile(assert, summaryPath, &summary)
 	assertSummaryMetadata(assert, summary)
-	assert.Equal(eventPath, summary.EventFileProcessed)
-	assert.Nil(summary.EventFilesProcessed)
+	assert.Equal(1, *summary.EventFilesProcessed)
 	assert.NotNil(summary.Validation)
-	assert.Equal(0, *summary.Validation.ErrorCount)
-	assert.Equal(1, *summary.Validation.WarningCount)
-	assert.Equal(validationPath, summary.Validation.ResultWritten)
-	assert.Nil(summary.Validation.EventsWithErrors)
-	assert.Nil(summary.Validation.EventsWithWarningsOnly)
-	assert.Nil(summary.Validation.TotalErrorCount)
-	assert.Nil(summary.Validation.TotalWarningCount)
+	assert.Equal(0, *summary.Validation.EventsWithErrors)
+	assert.Equal(1, *summary.Validation.EventsWithWarningsOnly)
+	assert.Equal(0, *summary.Validation.TotalErrorCount)
+	assert.Equal(1, *summary.Validation.TotalWarningCount)
 }
 
-func TestProcessHumanSummaryOutputIncludesMetadata(t *testing.T) {
+func TestProcessHumanSummaryFileIncludesMetadata(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
-	eventPath := filepath.Join(dir, "event.json")
-	validationPath := filepath.Join(dir, "event.validation.json")
+	eventsDir := filepath.Join(dir, "events")
+	eventPath := filepath.Join(eventsDir, "event.json")
+	outputDir := filepath.Join(dir, "output")
 	summaryPath := filepath.Join(dir, "summary.txt")
 	writeJSONFile(assert, eventPath, validCLIEvent())
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
-		"--event", eventPath,
+		"--events-dir", eventsDir,
 		"--validate",
-		"--validation-output", validationPath,
-		"--summary-output", summaryPath,
+		"--output-dir", outputDir,
+		"--summary-file", summaryPath,
 	)
 
 	assert.Equal(0, exitCode, stderr)
-	assert.Empty(stdout)
-	assert.Equal(summaryText(
-		"Event file processed: "+eventPath,
-		"Validation errors: 0",
-		"Validation warnings: 0",
-		"Validation result written: "+validationPath,
-	), stderr)
+	assert.Empty(stderr)
 
 	summaryBytes, err := os.ReadFile(summaryPath)
 	assert.NoError(err)
-	assert.Equal(
-		"ocsf-toolkit "+version+" "+runtime.GOOS+"/"+runtime.GOARCH+" "+runtime.Version()+"\n\n"+
+	expectedSummary :=
+		"ocsf-toolkit " + version + " " + runtime.GOOS + "/" + runtime.GOARCH + " " + runtime.Version() + "\n\n" +
 			summaryText(
-				"Event file processed: "+eventPath,
-				"Validation errors: 0",
-				"Validation warnings: 0",
-				"Validation result written: "+validationPath,
-			),
-		string(summaryBytes),
-	)
+				"Event files processed: 1",
+				"Events with validation errors: 0",
+				"Events with validation warnings (no errors): 0",
+			)
+	assert.Equal(expectedSummary, stdout)
+	assert.Equal(expectedSummary, string(summaryBytes))
 }
 
 func TestProcessDirectoryPreservesRelativeOutputPathsAndWritesSummary(t *testing.T) {
@@ -116,40 +111,35 @@ func TestProcessDirectoryPreservesRelativeOutputPathsAndWritesSummary(t *testing
 		"--validate",
 		"--enrich",
 		"--output-dir", outputDir,
-		"--summary-json-output", summaryPath,
+		"--summary-json-file", summaryPath,
 	)
 
 	assert.Equal(0, exitCode, stderr)
 
-	enrichedEvent, err := jsonio.ReadObject(filepath.Join(outputDir, "nested", "event.json"))
+	enrichedEvent, err := jsonio.ReadObject(filepath.Join(outputDir, "events", "nested", "event.json"))
 	assert.NoError(err)
 	assert.Equal("Alpha", enrichedEvent["class_name"])
 	assert.Equal("Do", enrichedEvent["activity_name"])
 
-	validation := readValidationOutput(assert, filepath.Join(outputDir, "nested", "event-validation.json"))
-	assert.Empty(validation.Validation.Errors)
+	report := readEventReport(assert, filepath.Join(outputDir, "reports", "nested", "event.json"))
+	assert.Empty(report.Validation.Errors)
 
 	var summary summaryReport
 	readJSONFile(assert, summaryPath, &summary)
 	assertSummaryMetadata(assert, summary)
-	assert.Equal("", summary.EventFileProcessed)
 	assert.Equal(1, *summary.EventFilesProcessed)
 	assert.NotNil(summary.Validation)
 	assert.Equal(0, *summary.Validation.EventsWithErrors)
 	assert.Equal(0, *summary.Validation.EventsWithWarningsOnly)
 	assert.Equal(0, *summary.Validation.TotalErrorCount)
 	assert.Equal(0, *summary.Validation.TotalWarningCount)
-	assert.Nil(summary.Validation.ErrorCount)
-	assert.Nil(summary.Validation.WarningCount)
 	assert.NotNil(summary.EventProcessing)
 	assert.Equal(1, *summary.EventProcessing.EventsWritten)
 	assert.Equal(0, *summary.EventProcessing.EventsSkipped)
-	assert.Empty(summary.EventProcessing.EventWritten)
-	assert.Empty(summary.EventProcessing.EventSkipped)
 	assert.Len(summary.Files, 1)
 	assert.Equal(filepath.Join("nested", "event.json"), summary.Files[0].RelativePath)
-	assert.Equal(filepath.Join(outputDir, "nested", "event.json"), summary.Files[0].EventPath)
-	assert.Equal(filepath.Join(outputDir, "nested", "event-validation.json"), summary.Files[0].ValidationResultPath)
+	assert.Equal(filepath.Join(outputDir, "events", "nested", "event.json"), summary.Files[0].EventPath)
+	assert.Equal(filepath.Join(outputDir, "reports", "nested", "event.json"), summary.Files[0].ReportPath)
 	summaryJSON, err := os.ReadFile(summaryPath)
 	assert.NoError(err)
 	assert.Contains(string(summaryJSON), `"event_files_processed":1`)
@@ -159,8 +149,8 @@ func TestProcessDirectoryPreservesRelativeOutputPathsAndWritesSummary(t *testing
 	assert.Contains(string(summaryJSON), `"total_warning_count":0`)
 	assert.Contains(string(summaryJSON), `"events_written":1`)
 	assert.Contains(string(summaryJSON), `"events_skipped":0`)
-	assert.Contains(string(summaryJSON), `"event_path":`)
-	assert.Contains(string(summaryJSON), `"validation_result_path":`)
+	assert.Contains(string(summaryJSON), `"event_destination":`)
+	assert.Contains(string(summaryJSON), `"report_path":`)
 	assert.NotContains(string(summaryJSON), `"enrichment_outputs_written"`)
 	assert.NotContains(string(summaryJSON), `"validation_outputs_written"`)
 	assert.NotContains(string(summaryJSON), `"enriched_events_written"`)
@@ -178,19 +168,48 @@ func assertSummaryMetadata(assert *require.Assertions, summary summaryReport) {
 	assert.Equal(runtime.GOARCH, summary.Metadata.Tool.Platform.Architecture)
 }
 
+func TestProcessDirectoryWritesDefaultSummaryToStdout(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "events")
+	outputDir := filepath.Join(dir, "output")
+	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--validate",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Empty(stderr)
+	assert.Equal(
+		"ocsf-toolkit "+version+" "+runtime.GOOS+"/"+runtime.GOARCH+" "+runtime.Version()+"\n\n"+
+			summaryText(
+				"Event files processed: 1",
+				"Events with validation errors: 0",
+				"Events with validation warnings (no errors): 0",
+			),
+		stdout,
+	)
+}
+
 func TestProcessQuietSuppressesDefaultSummary(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
-	eventPath := filepath.Join(dir, "event.json")
-	validationPath := filepath.Join(dir, "event-validation.json")
+	eventsDir := filepath.Join(dir, "events")
+	eventPath := filepath.Join(eventsDir, "event.json")
+	outputDir := filepath.Join(dir, "output")
 	writeJSONFile(assert, eventPath, validCLIEvent())
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
-		"--event", eventPath,
+		"--events-dir", eventsDir,
 		"--validate",
-		"--validation-output", validationPath,
+		"--output-dir", outputDir,
 		"--quiet",
 	)
 
@@ -219,7 +238,7 @@ func TestProcessDirectorySummaryCountsEventsWithRetainedRemovalValues(t *testing
 		"--events-dir", eventsDir,
 		"--unenrich",
 		"--output-dir", outputDir,
-		"--summary-json-output", summaryPath,
+		"--summary-json-file", summaryPath,
 	)
 
 	assert.Equal(0, exitCode, stderr)
@@ -228,6 +247,6 @@ func TestProcessDirectorySummaryCountsEventsWithRetainedRemovalValues(t *testing
 	assert.NotNil(summary.EnrichmentRemoval)
 	assert.Equal(1, *summary.EnrichmentRemoval.EventsWithRetainedEnumSiblings)
 	assert.Equal(1, *summary.EnrichmentRemoval.EventsWithRetainedObservables)
-	assert.FileExists(filepath.Join(outputDir, "first-unenrich-issues.json"))
-	assert.FileExists(filepath.Join(outputDir, "second-unenrich-issues.json"))
+	assert.FileExists(filepath.Join(outputDir, "reports", "first.json"))
+	assert.FileExists(filepath.Join(outputDir, "reports", "second.json"))
 }

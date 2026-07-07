@@ -54,14 +54,14 @@ The CLI can also be built locally from a source checkout. See [Development](#dev
 
 The CLI needs three inputs: a compiled OCSF schema, one or more event JSON files, and at least one operation.
 
-Validate a single event and write the validation result to stdout:
+Validate a single event and write its processing report to stdout:
 
 ```sh
 ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --event event.json \
   --validate \
-  --validation-output -
+  --report-output -
 ```
 
 The `--schema` argument must point to a compiled OCSF schema file. See [Compiled Schema](#appendix-compiled-schema).
@@ -69,8 +69,10 @@ The `--schema` argument must point to a compiled OCSF schema file. See [Compiled
 General form:
 
 ```sh
-ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --unenrich | --validate) [options]
+ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) [--enrich] [--unenrich] [--validate] [options]
 ```
+
+Select at least one processing action. Compatible actions may be combined.
 
 ### CLI Examples
 
@@ -82,8 +84,8 @@ ocsf-toolkit -s ocsf-schema-v1.8.0.json -e event.json -E -V -o out
 
 This writes:
 
-- `out/event.json`
-- `out/event-validation.json`
+- `out/events/event.json`
+- `out/reports/event.json`
 
 Enrich a single event without changing the input file:
 
@@ -92,17 +94,8 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --event event.json \
   --enrich \
-  --event-output enriched-event.json
-```
-
-Enrich an event in place:
-
-```sh
-ocsf-toolkit \
-  --schema ocsf-schema-v1.8.0.json \
-  --event event.json \
-  --enrich \
-  --update-in-place
+  --event-output enriched-event.json \
+  --report-output enrichment-report.json
 ```
 
 Validate in CI and fail the command when validation errors are found:
@@ -136,11 +129,11 @@ events/windows/windows_service_activity.json
 becomes:
 
 ```text
-out/windows/windows_service_activity.json
-out/windows/windows_service_activity-validation.json
+out/events/windows/windows_service_activity.json
+out/reports/windows/windows_service_activity.json
 ```
 
-Safely remove redundant enum siblings and observables, writing the processed event and issue report to one tree:
+Safely remove redundant enum siblings and observables, writing the processed event and processing report to one tree:
 
 ```sh
 ocsf-toolkit \
@@ -150,33 +143,42 @@ ocsf-toolkit \
   --output-dir processed
 ```
 
-This writes the processed event and `<base>-unenrich-issues.json`. Use `--force-remove-enum-siblings` or `--force-remove-observables` only when potentially non-redundant source content may be discarded. Forced observable removal deletes the entire `observables` attribute without inspecting its entries. `--retain-enum-siblings` and `--retain-observables` disable the corresponding removal.
+This writes processed events beneath `processed/events/` and per-event processing reports beneath `processed/reports/`. Use `--force-remove-enum-siblings` or `--force-remove-observables` only when potentially non-redundant source content may be discarded. Forced observable removal deletes the entire `observables` attribute without inspecting its entries. `--retain-enum-siblings` and `--retain-observables` disable the corresponding removal.
 
-Read a single event from stdin and write enriched JSON to stdout:
+Read a single event from stdin, write enriched JSON to stdout, and write its processing report to a file:
 
 ```sh
 ocsf-toolkit \
   --schema ocsf-schema-v1.8.0.json \
   --event - \
   --enrich \
-  --event-output -
+  --event-output - \
+  --report-output enrichment-report.json
 ```
 
 ### Output Behavior
 
-The CLI requires explicit destinations. Mutated events use `--event-output`, `--output-dir`, or `--update-in-place`. A single validation report may use `--validation-output`; a single enrichment-removal report may use `--unenrich-issues-output`. Directory mode writes selected event and report outputs beneath `--output-dir`.
+The CLI never modifies input event files. Single-event processing, including `--event -` for stdin, does not choose an output destination implicitly. A mutated single event uses `--event-output` or `--output-dir`, and a single processing report uses `--report-output` or `--output-dir`. Directory mode requires `--output-dir`.
 
-Output directories are created if necessary. Output files are not replaced unless `--overwrite` is supplied, except that `--update-in-place` replaces input event files without requiring `--overwrite`.
+Output directories are created if necessary. Output files are not replaced unless `--overwrite` is supplied. In directory mode, an existing output directory must be empty unless `--overwrite` is supplied; unrelated existing files are left unchanged when overwrite is enabled.
 
-Input and output directory trees must not overlap, including when symbolic links make differently written paths refer to the same location. The selected output directory itself may be a symbolic link, but generated paths may not traverse symbolic links beneath that root. Planned path collisions are checked using the case-sensitivity of the containing filesystem.
+Input and output directory trees must not overlap, including when symbolic links make differently written paths refer to the same location. The selected output directory itself may be a symbolic link, but the `events/` and `reports/` namespaces beneath it may not contain symbolic links.
 
-`--output-dir` writes processed events, validation results named `<base>-validation.json`, and enrichment-removal reports named `<base>-unenrich-issues.json` to one output tree.
+`--output-dir` writes processed events beneath `events/` and aggregate processing reports beneath `reports/`. Both namespaces preserve the input-relative path, which prevents event filenames from colliding with report filenames.
 
-Validation outputs have this shape:
+- Enrichment and unenrichment create both `events/` and `reports/`.
+- Validation-only processing creates `reports/`.
+- Enrichment or unenrichment combined with validation creates both namespaces.
+- `--skip-invalid-output` creates only the validation report for an invalid event.
+
+Processing reports include the source event, the destination event when one was written, and the applicable processor results:
+
+Enrichment reports include counts for added enum siblings and observables plus any issues explaining requested additions that could not be performed safely.
 
 ```json
 {
-  "input_path": "event.json",
+  "event_source": "event.json",
+  "event_destination": "out/events/event.json",
   "validation": {
     "errors": [
       {
@@ -192,11 +194,12 @@ Validation outputs have this shape:
 }
 ```
 
-Enrichment-removal reports contain removal counts and issues explaining why observable entries were retained:
+When unenrichment is selected, the same report can contain removal counts and issues explaining why observable entries were retained:
 
 ```json
 {
-  "input_path": "event.json",
+  "event_source": "event.json",
+  "event_destination": "out/events/event.json",
   "enrichment_removal": {
     "enum_siblings_removed": 2,
     "enum_siblings_retained": 1,
@@ -223,9 +226,23 @@ Event output is the processed event JSON. For example, if the schema defines `ac
 }
 ```
 
-`--event-output -`, `--validation-output -`, `--unenrich-issues-output -`, `--summary-output -`, and `--summary-json-output -` write to stdout. At most one selected output may write to stdout.
+In single-event mode, `--event-output -` and `--report-output -` write to stdout. When both are selected, the processed event is written first and the processing report second. Compact JSON is therefore valid JSON Lines. With `--pretty-json`, the same values are written sequentially as a whitespace-separated JSON stream that can be read by a streaming JSON decoder. A skipped invalid event omits the processed event.
 
-By default, a terse human-readable summary is written to stderr. Use `--quiet` to suppress it. `--summary-output` writes a human-readable summary with tool metadata, and `--summary-json-output` writes the same summary information as JSON.
+For example, this emits two compact JSON objects, one per line:
+
+```sh
+ocsf-toolkit \
+  --schema ocsf-schema-v1.8.0.json \
+  --event event.json \
+  --enrich \
+  --validate \
+  --event-output - \
+  --report-output -
+```
+
+Directory processing writes a human-readable summary with tool metadata to stdout by default. Use `--quiet` to suppress this default. `--summary-file` and `--summary-json-file` add explicit human-readable and JSON summary destinations; they may be used together, with or without `--quiet`, and either may use `-` for stdout. When both use stdout, the human-readable summary is written first. Summary options apply only to directory processing.
+
+stderr is reserved for errors and failure diagnostics. Output paths selected for different artifacts must identify different files, including when filesystem aliases make differently written paths refer to the same file.
 
 Path preservation differs slightly between directory and single-event processing. In directory mode,
 the toolkit walks files under `--events-dir` and computes each output path relative to that input
@@ -234,7 +251,7 @@ path or a relative path containing `..` could place output outside the selected 
 For that reason, single-event output directories preserve only safe relative paths; unsafe paths use
 the input file's basename.
 
-Use `--skip-invalid-output` with a mutating operation and `--validate` to avoid writing processed events when validation errors are found.
+Use `--skip-invalid-output` with a mutating operation and `--validate` to write only the validation report when an event has validation errors. The processed event and non-validation report sections are omitted for that event.
 
 ### Exit Codes
 

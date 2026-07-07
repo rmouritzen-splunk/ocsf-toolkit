@@ -77,17 +77,21 @@ Integral validation rejects non-integral values and applies signed 64-bit bounds
 
 ## CLI Boundary
 
-`cmd/ocsf-toolkit` owns filesystem and command-line concerns: selecting input files, mapping output trees, preventing unintended overwrites, atomic in-place event mutation, summary formatting, and exit codes. These policies do not belong in the event-processing library.
+`cmd/ocsf-toolkit` owns filesystem and command-line concerns: selecting input files, mapping output trees, preventing unintended overwrites, summary formatting, and exit codes. These policies do not belong in the event-processing library. Input event files are never modified.
 
-All directory-mode outputs share one `--output-dir` tree. Processed events retain their input-relative names; validation reports use `<base>-validation.json`; and enrichment-removal reports use `<base>-unenrich-issues.json`. Single-event mode may select explicit event and report files. This avoids multiplying directory controls as processors are added.
+All directory-mode outputs share one `--output-dir` root with fixed `events/` and `reports/` namespaces. Both preserve input-relative paths. Every processing action produces a report so enrichment issues are not discarded. Each report aggregates the selected processor results for one source event and records `event_source` plus `event_destination` when a processed event was written. Single-event mode may instead select explicit event and report files and never chooses implicit destinations, including when stdin is the event source. This prevents event/report filename collisions without multiplying directory controls as processors are added.
 
-Before processing begins, the CLI builds one immutable plan containing every input, processed-event output, processor report, and summary path. Each filesystem path retains its user-facing or calculated form, a clean absolute form that does not resolve symlinks, and a resolved form that follows symlinks through the longest existing prefix while preserving any nonexistent suffix. The same planned destinations are used for safety checks, collision detection, reporting, and writes.
+Before processing begins, the CLI resolves and validates command-wide input and output roots plus explicit single-event destinations. Directory processing then streams files directly from `filepath.WalkDir`; it does not retain a full list of event paths or calculated destinations. Output paths are derived from each safe input-relative path beneath the fixed output namespaces.
 
-Input and output directory trees must be disjoint after symlink resolution, including when the selected output directory does not exist yet. The CLI also rejects paths that escape the selected output root, existing intermediate symlinks beneath that root, and any resolved path selected for more than one input or output role. The selected output root itself may be a symlink because the user chose it explicitly. Existing destination files are still handled by the atomic writer: replacement fails unless `--overwrite` is selected, except that `--update-in-place` always replaces its corresponding input event.
+Input and output directory trees must be disjoint after symlink resolution, including when the selected output directory does not exist yet. The selected output root itself may be a symlink because the user chose it explicitly, but existing output namespaces may not contain symlinks. Without `--overwrite`, a directory-mode output root must be nonexistent or empty. Existing destinations are handled by the atomic writer, and replacement fails unless `--overwrite` is selected. Command outputs are also claimed as they are written so two path spellings that identify the same filesystem file cannot overwrite one another.
 
 The CLI may process one file or walk a directory tree, but each JSON object is still passed independently to `ProcessEvent`. Directory outputs preserve safe paths relative to the input root. A single input path that is absolute or contains `..` is reduced to its basename when written under an output directory so it cannot escape that directory.
 
-All mutations and validation complete before output decisions are made for an event. `--skip-invalid-output` can therefore suppress processed-event output for events with validation errors without changing library semantics.
+Single-event JSON outputs may share stdout. The processed event is written first when present, followed by its processing report. Compact output is JSON Lines; pretty output is a sequence of whitespace-separated JSON values suitable for a streaming decoder. `--pretty-json` applies to every JSON destination.
+
+Summaries apply only to directory processing. A human-readable summary is written to stdout by default and may be suppressed with `--quiet`. Explicit human-readable and JSON summary destinations are additive, may be selected together with or without `--quiet`, and may include stdout; the human-readable summary is written first. stderr is reserved for errors and failure diagnostics.
+
+All mutations and validation complete before output decisions are made for an event. `--skip-invalid-output` therefore writes only the validation report for an invalid event, suppressing both the processed event and non-validation report sections without changing library semantics.
 
 ## Design Invariants
 

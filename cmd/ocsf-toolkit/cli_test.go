@@ -73,9 +73,9 @@ func TestProcessRejectsInvalidProcessorOptions(t *testing.T) {
 			wantError: "enrichment-removal options require --unenrich",
 		},
 		{
-			name:      "issues output without unenrich",
-			options:   []string{"--unenrich-issues-output", filepath.Join("unused", "issues.json")},
-			wantError: "enrichment-removal options require --unenrich",
+			name:      "report output without report processor",
+			options:   []string{"--report-output", filepath.Join("unused", "issues.json")},
+			wantError: "--report-output requires --enrich, --unenrich, or --validate",
 		},
 		{
 			name: "retain and force enum siblings",
@@ -125,7 +125,9 @@ func TestHelp(t *testing.T) {
 
 	assert.Equal(0, exitCode)
 	assert.Empty(stderr)
-	assert.Contains(stdout, "ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --unenrich | --validate) [options]")
+	assert.Contains(stdout, "ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) [--enrich] [--unenrich] [--validate] [options]")
+	assert.Contains(stdout, "Select at least one processing action; compatible")
+	assert.Contains(stdout, "actions may be combined.")
 	assert.Contains(stdout, "General Options:")
 	assert.Contains(stdout, "Enrichment Options:")
 	assert.Contains(stdout, "Enrichment Removal Options:")
@@ -134,46 +136,49 @@ func TestHelp(t *testing.T) {
 	assert.Contains(stdout, "-e, --event=FILE")
 	assert.Contains(stdout, "-d, --events-dir=DIR")
 	assert.Contains(stdout, "-o, --output-dir=DIR")
+	assert.Contains(stdout, "Output root containing subdirectories")
+	assert.Contains(stdout, `named "events" and "reports"`)
 	assert.Contains(stdout, "--fail-on-validation-errors")
-	assert.Contains(stdout, "--validation-output=FILE")
+	assert.Contains(stdout, "--report-output=FILE")
 	assert.Contains(stdout, "--no-enum-siblings")
 	assert.Contains(stdout, "--no-observables")
 	assert.Contains(stdout, "-V, --validate")
 	assert.Contains(stdout, "-E, --enrich")
-	assert.Contains(stdout, "-i, --update-in-place")
+	assert.NotContains(stdout, "--update-in-place")
 	assert.Contains(stdout, "--event-output=FILE")
 	assert.Contains(stdout, "-u, --unenrich")
 	assert.Contains(stdout, "--retain-enum-siblings")
 	assert.Contains(stdout, "--retain-observables")
 	assert.Contains(stdout, "--force-remove-enum-siblings")
+	assert.Contains(stdout, "Remove enum siblings except those")
+	assert.Contains(stdout, "required for enum ID 99")
 	assert.Contains(stdout, "--force-remove-observables")
-	assert.Contains(stdout, "--unenrich-issues-output=FILE")
+	assert.Contains(stdout, "--report-output=FILE")
 	assert.Contains(stdout, "--skip-invalid-output")
 	assert.Greater(strings.Index(stdout, "--skip-invalid-output"), strings.Index(stdout, "Validation Options:"))
-	assert.Greater(strings.Index(stdout, "--validation-output=FILE"), strings.Index(stdout, "Validation Options:"))
+	assert.Greater(strings.Index(stdout, "--report-output=FILE"), strings.Index(stdout, "General Options:"))
+	assert.Less(strings.Index(stdout, "--report-output=FILE"), strings.Index(stdout, "Enrichment Options:"))
 	assert.Greater(strings.Index(stdout, "--event-output=FILE"), strings.Index(stdout, "General Options:"))
 	assert.Less(strings.Index(stdout, "--event-output=FILE"), strings.Index(stdout, "Enrichment Options:"))
-	assert.Contains(stdout, "Do not write non-validation")
-	assert.Contains(stdout, "outputs for")
+	assert.Contains(stdout, "Write only the validation report for")
 	assert.Contains(stdout, "events with validation errors")
 	assert.Contains(stdout, "Enrich events; adds enum siblings and")
 	assert.Contains(stdout, "observables by default")
 	assert.Contains(stdout, "Do not add enum siblings")
 	assert.Contains(stdout, "Do not add observables")
-	assert.Contains(stdout, "--summary-json-output")
+	assert.Contains(stdout, "--summary-json-file")
+	assert.Contains(stdout, "--summary-file")
 	assert.Contains(stdout, "--overwrite")
 	assert.Contains(stdout, "-p, --pretty-json")
+	assert.Contains(stdout, "Pretty-print JSON output, including")
 	assert.Contains(stdout, "-q, --quiet")
-	assert.Contains(stdout, "--output-dir writes processed events and selected reports to one output tree.")
-	assert.Contains(stdout, "Directory outputs preserve input-relative paths.")
+	assert.Contains(stdout, "--output-dir writes processed events beneath events/ and processing reports beneath reports/.")
+	assert.Contains(stdout, "Both output subdirectories preserve input-relative paths.")
 	assert.Contains(stdout, "    With --events-dir, paths are relative to that directory.")
 	assert.Contains(stdout, "    With --event, safe relative paths are preserved;")
 	assert.Contains(stdout, "absolute paths and paths with .. use the basename.")
-	assert.Contains(stdout, "Validation files use <base>-validation.json.")
-	assert.Contains(stdout, "Enrichment-removal issue files use <base>-unenrich-issues.json.")
-	assert.Contains(stdout, "Output directories are created if necessary.")
-	assert.Contains(stdout, "Output files are not replaced without --overwrite.")
-	assert.Contains(stdout, "--update-in-place replaces input event files without --overwrite.")
+	assert.Contains(stdout, "When an event and report share stdout, the event is written first.")
+	assert.Contains(stdout, "When human-readable and JSON summaries share stdout, the human-readable summary is written first.")
 	assert.Greater(strings.Index(stdout, "Notes:"), strings.Index(stdout, "Help Options:"))
 }
 
@@ -198,7 +203,7 @@ func TestParameterErrorPrintsTerseUsage(t *testing.T) {
 	assert.Equal(2, exitCode)
 	assert.Empty(stdout)
 	assert.Contains(stderr, "--schema is required")
-	assert.Contains(stderr, "ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --unenrich | --validate) [options]")
+	assert.Contains(stderr, "ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) [--enrich] [--unenrich] [--validate] [options]")
 	assert.Contains(stderr, `Run "ocsf-toolkit --help" for full usage.`)
 	assert.NotContains(stderr, "General Options:")
 	assert.NotContains(stderr, "--schema=COMPILED_SCHEMA_FILE")
@@ -212,7 +217,7 @@ func TestMissingInputErrorPrintsTerseUsage(t *testing.T) {
 	assert.Equal(2, exitCode)
 	assert.Empty(stdout)
 	assert.Contains(stderr, "exactly one of --event or --events-dir is required")
-	assert.Contains(stderr, "ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --unenrich | --validate) [options]")
+	assert.Contains(stderr, "ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) [--enrich] [--unenrich] [--validate] [options]")
 	assert.NotContains(stderr, "General Options:")
 	assert.NotContains(stderr, "--schema=COMPILED_SCHEMA_FILE")
 }
@@ -250,7 +255,7 @@ func TestSkipInvalidOutputRequiresEnrich(t *testing.T) {
 		"--schema", schemaPath,
 		"--event", eventPath,
 		"--validate",
-		"--validation-output", validationPath,
+		"--report-output", validationPath,
 		"--skip-invalid-output",
 	)
 

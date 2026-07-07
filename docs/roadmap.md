@@ -17,9 +17,9 @@ This file tracks unfinished or intentionally deferred work. Implemented architec
 - Benchmark observable path parsing and resolution. If repeated observable names are material, prefer allocation-reduced parsing or a bounded concurrency-safe cache owned by the processor; never use an unbounded cache for attacker-controlled names.
 - Benchmark scalar allowed-value comparisons and path construction. Consider replacing general `reflect.DeepEqual` and repeated path-string allocation only where profiles show a meaningful pipeline cost.
 
-## JSON Lines
+## Bulk JSON Lines
 
-Treat JSONL as a separate streaming mode rather than another encoding option for the current single-event and directory-file modes.
+The single-event CLI already allows JSON-valued event and report outputs to share stdout in deterministic order. Compact output is JSON Lines, while `--pretty-json` produces a whitespace-separated JSON stream. This section concerns a future bulk JSONL input and output mode rather than that existing stdout multiplexing.
 
 Input options to consider:
 
@@ -35,11 +35,11 @@ Design constraints:
 
 - File-based JSONL is a first-class use case for capturing events for testing, replay, and CI fixtures.
 - Streaming should default to stdin and stdout only when the destinations are unambiguous.
-- Processed events and processor reports require distinct streams because they have different shapes, but directory controls should follow the CLI's single-output-tree model.
-- At most one machine-readable output may use stdout. Machine-readable records must not use stderr.
-- Stderr remains for diagnostics and status and should remain suppressible with `--quiet`.
+- Bulk output must define how event and aggregate report records are identified while preserving the existing event-then-report ordering.
+- Machine-readable records must not use stderr.
+- Stderr remains reserved for errors and failure diagnostics.
 - JSONL output is compact, one record per line; `--pretty-json` does not apply.
-- Decide how validation and enrichment-removal issue records are represented when multiple processors are selected.
+- Preserve the aggregate per-event report model when validation and enrichment removal are selected together.
 - Define malformed-line behavior, line-number reporting, fail-fast versus continue behavior, and summary counts before implementation.
 
 ## Distribution

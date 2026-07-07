@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	cliUsage               = "--schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) (--enrich | --unenrich | --validate) [options]"
+	cliUsage               = "--schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) [--enrich] [--unenrich] [--validate] [options]"
 	stdioPath              = "-"
 	stdinEventRelativePath = "event.json"
 )
@@ -25,26 +25,25 @@ type cliOptions struct {
 }
 
 type generalOptions struct {
-	Schema            string `short:"s" long:"schema" value-name:"COMPILED_SCHEMA_FILE" description:"Compiled OCSF schema file"`
-	Event             string `short:"e" long:"event" value-name:"FILE" description:"Single event JSON file, or - for stdin"`
-	EventsDir         string `short:"d" long:"events-dir" value-name:"DIR" description:"Directory tree of event JSON files"`
-	OutputDir         string `short:"o" long:"output-dir" value-name:"DIR" description:"Directory for generated event and report output files"`
-	UpdateInPlace     bool   `short:"i" long:"update-in-place" description:"Replace input event files with processed output"`
-	EventOutput       string `long:"event-output" value-name:"FILE" description:"Single processed event output file, or - for stdout"`
-	SummaryOutput     string `long:"summary-output" value-name:"FILE" description:"Human-readable summary output file, or - for stdout"`
-	SummaryJSONOutput string `long:"summary-json-output" value-name:"FILE" description:"JSON summary output file, or - for stdout"`
-	Overwrite         bool   `long:"overwrite" description:"Allow replacing existing output files"`
-	PrettyJSON        bool   `short:"p" long:"pretty-json" description:"Write pretty-printed JSON output"`
-	Quiet             bool   `short:"q" long:"quiet" description:"Suppress the default human-readable summary on stderr"`
-	Version           bool   `long:"version" description:"Print version information and exit"`
+	Schema          string `short:"s" long:"schema" value-name:"COMPILED_SCHEMA_FILE" description:"Compiled OCSF schema file"`
+	Event           string `short:"e" long:"event" value-name:"FILE" description:"Single event JSON file, or - for stdin"`
+	EventsDir       string `short:"d" long:"events-dir" value-name:"DIR" description:"Directory tree of event JSON files"`
+	OutputDir       string `short:"o" long:"output-dir" value-name:"DIR" description:"Output root containing subdirectories named \"events\" and \"reports\""`
+	EventOutput     string `long:"event-output" value-name:"FILE" description:"Single processed event output file, or - for stdout"`
+	ReportOutput    string `long:"report-output" value-name:"FILE" description:"Single processing report output file, or - for stdout"`
+	SummaryFile     string `long:"summary-file" value-name:"FILE" description:"Human-readable directory summary file, or - for stdout"`
+	SummaryJSONFile string `long:"summary-json-file" value-name:"FILE" description:"JSON directory summary file, or - for stdout"`
+	Overwrite       bool   `long:"overwrite" description:"Allow replacing existing output files"`
+	PrettyJSON      bool   `short:"p" long:"pretty-json" description:"Pretty-print JSON output, including stdout"`
+	Quiet           bool   `short:"q" long:"quiet" description:"Suppress the default directory summary on stdout"`
+	Version         bool   `long:"version" description:"Print version information and exit"`
 }
 
 type validationOptions struct {
-	Validate                 bool   `short:"V" long:"validate" description:"Validate events"`
-	WarnOnMissingRecommended bool   `long:"warn-on-missing-recommended" description:"Warn when recommended attributes are missing"`
-	FailOnValidationErrors   bool   `long:"fail-on-validation-errors" description:"Exit non-zero when validation errors are found"`
-	SkipInvalidOutput        bool   `long:"skip-invalid-output" description:"Do not write non-validation outputs for events with validation errors"`
-	ValidationOutput         string `long:"validation-output" value-name:"FILE" description:"Validation result output file, or - for stdout"`
+	Validate                 bool `short:"V" long:"validate" description:"Validate events"`
+	WarnOnMissingRecommended bool `long:"warn-on-missing-recommended" description:"Warn when recommended attributes are missing"`
+	FailOnValidationErrors   bool `long:"fail-on-validation-errors" description:"Exit non-zero when validation errors are found"`
+	SkipInvalidOutput        bool `long:"skip-invalid-output" description:"Write only the validation report for events with validation errors"`
 }
 
 type enrichmentOptions struct {
@@ -54,12 +53,11 @@ type enrichmentOptions struct {
 }
 
 type enrichmentRemovalOptions struct {
-	Unenrich                bool   `short:"u" long:"unenrich" description:"Remove enum siblings and observables when they are safely redundant"`
-	RetainEnumSiblings      bool   `long:"retain-enum-siblings" description:"Do not remove enum siblings"`
-	RetainObservables       bool   `long:"retain-observables" description:"Do not remove observables"`
-	ForceRemoveEnumSiblings bool   `long:"force-remove-enum-siblings" description:"Remove supported enum siblings even when they differ from schema captions"`
-	ForceRemoveObservables  bool   `long:"force-remove-observables" description:"Remove the observables attribute regardless of its contents"`
-	IssuesOutput            string `long:"unenrich-issues-output" value-name:"FILE" description:"Single enrichment-removal issues output file, or - for stdout"`
+	Unenrich                bool `short:"u" long:"unenrich" description:"Remove enum siblings and observables when they are safely redundant"`
+	RetainEnumSiblings      bool `long:"retain-enum-siblings" description:"Do not remove enum siblings"`
+	RetainObservables       bool `long:"retain-observables" description:"Do not remove observables"`
+	ForceRemoveEnumSiblings bool `long:"force-remove-enum-siblings" description:"Remove enum siblings except those required for enum ID 99"`
+	ForceRemoveObservables  bool `long:"force-remove-observables" description:"Remove the observables attribute regardless of its contents"`
 }
 
 type processConfig struct {
@@ -82,16 +80,14 @@ type processConfig struct {
 	forceRemoveObservables  bool
 	skipInvalidOutput       bool
 
-	updateInPlace        bool
-	outputDir            string
-	eventOutput          string
-	validationOutput     string
-	unenrichIssuesOutput string
-	summaryOutput        string
-	summaryJSONOutput    string
-	overwrite            bool
-	prettyJSON           bool
-	quiet                bool
+	outputDir       string
+	eventOutput     string
+	reportOutput    string
+	summaryFile     string
+	summaryJSONFile string
+	overwrite       bool
+	prettyJSON      bool
+	quiet           bool
 }
 
 func runWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
@@ -105,7 +101,7 @@ func newParser() (*flags.Parser, *cliOptions) {
 	parser := flags.NewNamedParser("ocsf-toolkit", flags.HelpFlag|flags.PassDoubleDash)
 	parser.Usage = cliUsage
 	parser.ShortDescription = "Process OCSF event files."
-	parser.LongDescription = "Process OCSF event files by adding or removing enrichment and/or validating them with a compiled OCSF schema."
+	parser.LongDescription = "Process OCSF event files with enrichment, enrichment removal, and validation using a compiled OCSF schema. Select at least one processing action; compatible actions may be combined."
 	addParserGroup(parser, "General Options", &options.General)
 	addParserGroup(parser, "Enrichment Options", &options.Enrichment)
 	addParserGroup(parser, "Enrichment Removal Options", &options.Removal)
@@ -168,50 +164,54 @@ func writeHelp(w io.Writer, help string) {
 }
 
 func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
-	layout, err := buildProcessingLayout(config)
+	destinations, err := buildProcessingDestinations(config)
 	if err != nil {
 		writef(stderr, "error: %s\n", err)
 		return 1
 	}
+	outputs := newDestinationWriter(stdout, config.writeOptions())
 
-	summary, runtimeFailure, err := processEvents(config, layout, stdin, stdout)
+	summary, runtimeFailure, err := processEvents(config, destinations, stdin, outputs)
 	if err != nil {
 		writef(stderr, "error: %s\n", err)
+		writePartialCompletion(stderr, config, summary)
 		return 1
 	}
 
 	if runtimeFailure {
 		writeFailureDetails(stderr, summary)
-		if !config.quiet && config.eventsDir != "" {
-			writef(stderr, "Event files processed before error: %d\n", summary.Processed)
-		}
+		writePartialCompletion(stderr, config, summary)
 		return 1
 	}
 
-	report := buildSummaryReport(config, summary)
-	if layout.summaryJSONOutput != nil {
-		path := layout.summaryJSONOutput.path.display
-		if err := writeJSONDestination(path, report, config.writeOptions(), stdout); err != nil {
-			writef(stderr, "error: failed to write JSON summary %q: %s\n", path, err)
-			return 1
+	if len(destinations.summaryFiles) > 0 || destinations.summaryJSONFile != nil {
+		report := buildSummaryReport(config, summary)
+		for _, summaryFile := range destinations.summaryFiles {
+			path := summaryFile.path.display
+			if err := outputs.writeText(path, "human-readable summary", humanSummaryWithMetadata(report)); err != nil {
+				writef(stderr, "error: failed to write summary %q: %s\n", path, err)
+				return 1
+			}
 		}
-	}
-	if layout.summaryOutput != nil {
-		path := layout.summaryOutput.path.display
-		if err := writeTextDestination(path, humanSummaryWithMetadata(report), config.overwrite, stdout); err != nil {
-			writef(stderr, "error: failed to write summary %q: %s\n", path, err)
-			return 1
+		if destinations.summaryJSONFile != nil {
+			path := destinations.summaryJSONFile.path.display
+			if err := outputs.writeJSON(path, "JSON summary", report); err != nil {
+				writef(stderr, "error: failed to write JSON summary %q: %s\n", path, err)
+				return 1
+			}
 		}
-	}
-
-	if !config.quiet {
-		writef(stderr, "%s", humanSummary(report))
 	}
 
 	if config.failOnValidationErrors && summary.EventsWithValidationErrors > 0 {
 		return 1
 	}
 	return 0
+}
+
+func writePartialCompletion(w io.Writer, config processConfig, summary processSummary) {
+	if config.eventsDir != "" && summary.Processed > 0 {
+		writef(w, "Event files processed before error: %d\n", summary.Processed)
+	}
 }
 
 func (config processConfig) writeOptions() writeOptions {
@@ -238,13 +238,11 @@ func (options cliOptions) toConfig() (processConfig, error) {
 		forceRemoveEnumSiblings:  options.Removal.ForceRemoveEnumSiblings,
 		forceRemoveObservables:   options.Removal.ForceRemoveObservables,
 		skipInvalidOutput:        options.Validation.SkipInvalidOutput,
-		updateInPlace:            options.General.UpdateInPlace,
 		outputDir:                options.General.OutputDir,
 		eventOutput:              options.General.EventOutput,
-		validationOutput:         options.Validation.ValidationOutput,
-		unenrichIssuesOutput:     options.Removal.IssuesOutput,
-		summaryOutput:            options.General.SummaryOutput,
-		summaryJSONOutput:        options.General.SummaryJSONOutput,
+		reportOutput:             options.General.ReportOutput,
+		summaryFile:              options.General.SummaryFile,
+		summaryJSONFile:          options.General.SummaryJSONFile,
 		overwrite:                options.General.Overwrite,
 		prettyJSON:               options.General.PrettyJSON,
 		quiet:                    options.General.Quiet,
@@ -261,7 +259,7 @@ func (options cliOptions) toConfig() (processConfig, error) {
 		}
 	}
 	if options.Removal.RetainEnumSiblings || options.Removal.RetainObservables ||
-		options.Removal.ForceRemoveEnumSiblings || options.Removal.ForceRemoveObservables || options.Removal.IssuesOutput != "" {
+		options.Removal.ForceRemoveEnumSiblings || options.Removal.ForceRemoveObservables {
 		if !config.unenrich {
 			return processConfig{}, errors.New("enrichment-removal options require --unenrich")
 		}
@@ -278,6 +276,9 @@ func (options cliOptions) toConfig() (processConfig, error) {
 	if config.addObservables && config.removeObservables {
 		return processConfig{}, errors.New("adding and removing observables are mutually exclusive")
 	}
+	if config.reportOutput != "" && !config.generatesReport() {
+		return processConfig{}, errors.New("--report-output requires --enrich, --unenrich, or --validate")
+	}
 	if !config.validate && !config.addEnumSiblings && !config.addObservables &&
 		!config.removeEnumSiblings && !config.removeObservables {
 		return processConfig{}, errors.New("at least one event processing action is required")
@@ -291,16 +292,12 @@ func (options cliOptions) toConfig() (processConfig, error) {
 func processHelpNotes() string {
 	return strings.Join([]string{
 		"Notes:",
-		"  --output-dir writes processed events and selected reports to one output tree.",
-		"  Directory outputs preserve input-relative paths.",
+		"  --output-dir writes processed events beneath events/ and processing reports beneath reports/.",
+		"  Both output subdirectories preserve input-relative paths.",
 		"    With --events-dir, paths are relative to that directory.",
 		"    With --event, safe relative paths are preserved; absolute paths and paths with .. use the basename.",
-		"  Validation files use <base>-validation.json.",
-		"  Enrichment-removal issue files use <base>-unenrich-issues.json.",
-		"  Output directories are created if necessary.",
-		"  Input and output directory trees must not overlap, including through symbolic links.",
-		"  Output files are not replaced without --overwrite.",
-		"  --update-in-place replaces input event files without --overwrite.",
+		"  When an event and report share stdout, the event is written first.",
+		"  When human-readable and JSON summaries share stdout, the human-readable summary is written first.",
 	}, "\n")
 }
 
@@ -314,14 +311,11 @@ func validateOutputConfig(config processConfig) error {
 	if !config.validate && (config.warnOnMissingRecommended || config.failOnValidationErrors || config.skipInvalidOutput) {
 		return errors.New("validation options require --validate")
 	}
-	if !config.mutatesEvent() && (config.updateInPlace || config.eventOutput != "") {
+	if !config.mutatesEvent() && config.eventOutput != "" {
 		return errors.New("event output options require --enrich or --unenrich")
 	}
 	if config.skipInvalidOutput && !config.mutatesEvent() {
 		return errors.New("--skip-invalid-output requires --enrich or --unenrich")
-	}
-	if !config.validate && config.validationOutput != "" {
-		return errors.New("validation output options require --validate")
 	}
 	if config.eventsDir == stdioPath {
 		return errors.New("--events-dir cannot be -")
@@ -329,35 +323,25 @@ func validateOutputConfig(config processConfig) error {
 	if config.outputDir == stdioPath {
 		return errors.New("directory output options cannot be -")
 	}
-	if stdoutDestinationCount(config) > 1 {
-		return errors.New("only one output option can write to stdout")
-	}
-	if config.outputDir != "" && (config.eventOutput != "" || config.validationOutput != "" ||
-		config.unenrichIssuesOutput != "") {
+	if config.outputDir != "" && (config.eventOutput != "" || config.reportOutput != "") {
 		return errors.New("--output-dir cannot be used with operation-specific output options")
-	}
-	if config.updateInPlace && config.eventPath == stdioPath {
-		return errors.New("--update-in-place cannot be used with --event -")
 	}
 
 	singleEventMode := config.eventPath != ""
 	if singleEventMode {
+		if config.summaryFile != "" || config.summaryJSONFile != "" {
+			return errors.New("summary options require --events-dir")
+		}
+		if config.quiet {
+			return errors.New("--quiet requires --events-dir")
+		}
 		if config.mutatesEvent() {
-			if config.updateInPlace && config.eventOutput != "" {
-				return errors.New("--update-in-place and --event-output are mutually exclusive")
-			}
-			if !config.updateInPlace && countSet(config.outputDir != "", config.eventOutput != "") != 1 {
-				return errors.New("single event mutation requires exactly one of --update-in-place, --output-dir DIR, or --event-output FILE")
+			if countSet(config.outputDir != "", config.eventOutput != "") != 1 {
+				return errors.New("single event mutation requires exactly one of --output-dir DIR or --event-output FILE")
 			}
 		}
-		if config.validate && countSet(
-			config.outputDir != "",
-			config.validationOutput != "",
-		) != 1 {
-			return errors.New("single event validation requires exactly one of --output-dir DIR or --validation-output FILE")
-		}
-		if config.unenrich && countSet(config.outputDir != "", config.unenrichIssuesOutput != "") != 1 {
-			return errors.New("single event enrichment removal requires exactly one of --output-dir DIR or --unenrich-issues-output FILE")
+		if config.generatesReport() && countSet(config.outputDir != "", config.reportOutput != "") != 1 {
+			return errors.New("single event reporting requires exactly one of --output-dir DIR or --report-output FILE")
 		}
 		return nil
 	}
@@ -366,26 +350,12 @@ func validateOutputConfig(config processConfig) error {
 		if config.eventOutput != "" {
 			return errors.New("--event-output cannot be used with --events-dir")
 		}
-		if !config.updateInPlace && config.outputDir == "" {
-			return errors.New("directory event mutation requires exactly one of --update-in-place or --output-dir DIR")
-		}
 	}
-
-	if config.validate {
-		if config.validationOutput != "" {
-			return errors.New("--validation-output cannot be used with --events-dir")
-		}
-		if config.outputDir == "" {
-			return errors.New("directory validation requires --output-dir DIR")
-		}
+	if config.reportOutput != "" {
+		return errors.New("--report-output cannot be used with --events-dir")
 	}
-	if config.unenrich {
-		if config.unenrichIssuesOutput != "" {
-			return errors.New("--unenrich-issues-output cannot be used with --events-dir")
-		}
-		if config.outputDir == "" {
-			return errors.New("directory enrichment removal requires --output-dir DIR")
-		}
+	if config.outputDir == "" {
+		return errors.New("directory processing requires --output-dir DIR")
 	}
 	return nil
 }
@@ -400,15 +370,10 @@ func countSet(values ...bool) int {
 	return count
 }
 
-func stdoutDestinationCount(config processConfig) int {
-	return countSet(
-		config.eventOutput == stdioPath,
-		config.validationOutput == stdioPath,
-		config.unenrichIssuesOutput == stdioPath,
-		config.summaryOutput == stdioPath,
-		config.summaryJSONOutput == stdioPath,
-	)
-}
 func (config processConfig) mutatesEvent() bool {
 	return config.addEnumSiblings || config.addObservables || config.removeEnumSiblings || config.removeObservables
+}
+
+func (config processConfig) generatesReport() bool {
+	return config.enrich || config.unenrich || config.validate
 }
