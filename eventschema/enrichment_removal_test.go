@@ -122,6 +122,40 @@ func TestEnrichmentRemovalTreatsNullAttributesAsMissing(t *testing.T) {
 	})
 }
 
+func TestEnrichmentRemovalRemovesEmptyObservables(t *testing.T) {
+	testCases := []struct {
+		name  string
+		force bool
+	}{
+		{name: "safe"},
+		{name: "forced", force: true},
+	}
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			schema := makeValidationTestSchema(assert)
+			event := validValidationEvent()
+			event["observables"] = []any{}
+			options := []EnrichmentRemovalOption{WithRemoveEnumSiblings(false)}
+			if test.force {
+				options = append(options, WithForceRemoveObservables())
+			}
+
+			result, err := mustNewEventProcessorPipeline(
+				assert,
+				schema,
+				NewEnrichmentRemoval(options...),
+			).ProcessEvent(event)
+
+			assert.NoError(err)
+			assert.NotContains(event, "observables")
+			assert.Zero(result.EnrichmentRemoval.ObservablesRemoved)
+			assert.Zero(result.EnrichmentRemoval.ObservablesRetained)
+			assert.Empty(result.Issues)
+		})
+	}
+}
+
 func TestEnrichmentRemovalSafelyRemovesScalarAndObjectObservables(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)

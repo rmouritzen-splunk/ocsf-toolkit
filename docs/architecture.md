@@ -59,7 +59,7 @@ Observable reference analysis is shared by enrichment removal and validation and
 
 An attribute used directly with `object_type: "object"` is the OCSF convention for an open-ended JSON-like object, so unknown nested keys are allowed. All event classes and concrete object types remain closed against their active compiled attributes, including when profile filtering leaves no active attributes. A concrete object may still gain inherited attributes when their profiles are active because the compiler flattens those profile annotations onto the derived object.
 
-Mutating processors use a shared internal diagnostic representation when malformed event content prevents requested work. Each processor maps that diagnostic into a phase-specific `ProcessingIssue`; validation separately maps retained invalid content into validation errors or warnings. Enrichment diagnostics are intentionally narrow: they cover enum siblings or observables that could not be added, while unrelated event validity remains the validator's responsibility. Generated observables never replace a non-empty existing `observables` attribute.
+Mutating processors use a shared internal diagnostic representation when malformed event content prevents requested work. Each processor maps that diagnostic into a phase-specific `ProcessingIssue`; validation separately maps retained invalid content into validation errors or warnings. Enrichment diagnostics are intentionally narrow: they cover enum siblings or observables that could not be added and generated observable duplicates that were skipped, while unrelated event validity remains the validator's responsibility. Generated observables preserve existing entries and append in traversal order after semantic duplicate suppression. Duplicate identity uses the exact observable name, an integral-equivalent type ID, and the distinction among an omitted, null, or exact string value; derived type captions and unrelated fields are ignored. Observable enrichment and removal delete the `observables` attribute when their work leaves it as an empty array.
 
 If `class_uid` is missing, has the wrong type, or does not identify a compiled class, validation records the corresponding issue and the processing context stops before class-scoped traversal. Recoverable validation failures are accumulated rather than stopping processing.
 
@@ -77,7 +77,7 @@ The event map and its nested maps and slices must not be accessed concurrently d
 
 Validation accepts normal Go numeric values from non-JSON sources. For JSON, `json.Number` is preferred because decoding directly to `float64` can lose integer precision. The `jsonio` package enables `json.Decoder.UseNumber()` for this reason.
 
-Array attributes accept JSON-native `[]any` values as well as typed or named Go slices and fixed-length arrays from programmatic and non-JSON event sources. JSON-native forms retain their fast paths; other array containers are adapted only when encountered, and each element still undergoes ordinary schema validation.
+Array attributes accept JSON-native `[]any` values as well as typed Go slices from programmatic and non-JSON event sources. JSON-native forms retain their fast paths; other accepted array containers are adapted only when encountered, and each element still undergoes ordinary schema validation.
 
 Integral validation rejects non-integral values and applies signed 64-bit bounds where required. Numeric range constraints are inclusive.
 

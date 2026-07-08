@@ -127,6 +127,9 @@ func (p *enrichmentRemovalProcessor) removeObservables(context *processingContex
 		delete(event, "observables")
 		return
 	}
+	if len(remove) == 0 {
+		return
+	}
 	event["observables"] = filterObservableSlice(value, remove)
 }
 

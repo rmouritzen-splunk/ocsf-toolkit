@@ -2,6 +2,7 @@ package eventschema
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/ocsf/ocsf-toolkit/internal/coerce"
@@ -105,25 +106,187 @@ func (p *enrichmentProcessor) addEnumSibling(context *processingContext, visit a
 }
 
 func (p *enrichmentProcessor) onEventDone(context *processingContext, event jsonish.Map) {
-	if !p.config.addObservables || len(context.observables) == 0 {
+	if !p.config.addObservables {
 		return
 	}
-	if existing, present := event["observables"]; present && existing != nil {
-		if values, ok := asSlice(existing); !ok || len(values) > 0 {
+
+	existing, present := event["observables"]
+	if present && existing == nil {
+		delete(event, "observables")
+		present = false
+	}
+	if !present {
+		p.addGeneratedObservables(context, event, nil, nil)
+		return
+	}
+
+	existingObservables, ok := asSlice(existing)
+	if !ok {
+		if len(context.observables) > 0 {
 			context.addProcessorIssue(issuePhaseEnrichment, newProcessingDiagnostic(
-				"enrichment_observables_not_added_existing",
-				"Generated observables were not added because the event already contains observables.",
+				"enrichment_observables_not_added_wrong_type",
+				"Generated observables were not added because the event observables attribute is not an array.",
 				jsonish.Map{
 					"attribute_path":        "observables",
 					"attribute":             "observables",
+					"value":                 existing,
 					"generated_observables": len(context.observables),
 				},
 			))
-			return
+		}
+		return
+	}
+	if len(existingObservables) == 0 {
+		delete(event, "observables")
+		existing = nil
+	}
+	p.addGeneratedObservables(context, event, existing, existingObservables)
+}
+
+type observableIdentity struct {
+	name      string
+	typeID    int64
+	valueKind uint8
+	value     string
+}
+
+const (
+	objectObservableValue uint8 = iota
+	nullObservableValue
+	stringObservableValue
+)
+
+func (p *enrichmentProcessor) addGeneratedObservables(
+	context *processingContext,
+	event jsonish.Map,
+	existing any,
+	existingObservables []any,
+) {
+	seen := make(map[observableIdentity]string, len(existingObservables)+len(context.observables))
+	for _, observable := range existingObservables {
+		if identity, ok := getObservableIdentity(observable); ok {
+			seen[identity] = "existing"
 		}
 	}
-	event["observables"] = context.observables
-	context.result.Enrichment.ObservablesAdded += len(context.observables)
+
+	generated := make([]jsonish.Map, 0, len(context.observables))
+	for _, observable := range context.observables {
+		identity, ok := getObservableIdentity(observable)
+		if ok {
+			if duplicateOf, duplicate := seen[identity]; duplicate {
+				duplicateDescription := duplicateOf
+				if duplicateOf == "generated" {
+					duplicateDescription = "earlier generated"
+				}
+				context.addProcessorIssue(issuePhaseEnrichment, newProcessingDiagnostic(
+					"enrichment_observable_duplicate_skipped",
+					fmt.Sprintf("Generated observable %q was skipped because it duplicates an %s observable.",
+						identity.name, duplicateDescription),
+					jsonish.Map{
+						"attribute_path": identity.name,
+						"attribute":      "observables",
+						"observable":     observable,
+						"duplicate_of":   duplicateOf,
+					},
+				))
+				continue
+			}
+			seen[identity] = "generated"
+		}
+		generated = append(generated, observable)
+	}
+
+	if len(generated) == 0 {
+		return
+	}
+	if existing == nil {
+		event["observables"] = generated
+	} else {
+		event["observables"] = appendObservableMaps(existing, existingObservables, generated)
+	}
+	context.result.Enrichment.ObservablesAdded += len(generated)
+}
+
+func getObservableIdentity(value any) (observableIdentity, bool) {
+	observable, ok := value.(jsonish.Map)
+	if !ok {
+		return observableIdentity{}, false
+	}
+	name, ok := observable["name"].(string)
+	if !ok {
+		return observableIdentity{}, false
+	}
+	typeID, ok := getInt64Value(observable["type_id"])
+	if !ok {
+		return observableIdentity{}, false
+	}
+	identity := observableIdentity{name: name, typeID: typeID, valueKind: objectObservableValue}
+	value, present := observable["value"]
+	if !present {
+		return identity, true
+	}
+	if value == nil {
+		identity.valueKind = nullObservableValue
+		return identity, true
+	}
+	valueString, ok := value.(string)
+	if !ok {
+		return observableIdentity{}, false
+	}
+	identity.valueKind = stringObservableValue
+	identity.value = valueString
+	return identity, true
+}
+
+func appendObservableMaps(existing any, existingObservables []any, generated []jsonish.Map) any {
+	switch values := existing.(type) {
+	case []jsonish.Map:
+		result := make([]jsonish.Map, 0, len(values)+len(generated))
+		result = append(result, values...)
+		return append(result, generated...)
+	case []any:
+		result := make([]any, 0, len(values)+len(generated))
+		result = append(result, values...)
+		for _, observable := range generated {
+			result = append(result, observable)
+		}
+		return result
+	}
+
+	reflected := reflect.ValueOf(existing)
+	if reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Array {
+		resultType := reflected.Type()
+		if reflected.Kind() == reflect.Array {
+			resultType = reflect.SliceOf(reflected.Type().Elem())
+		}
+		result := reflect.MakeSlice(resultType, 0, reflected.Len()+len(generated))
+		for index := range reflected.Len() {
+			result = reflect.Append(result, reflected.Index(index))
+		}
+		for _, observable := range generated {
+			value := reflect.ValueOf(observable)
+			if value.Type().AssignableTo(resultType.Elem()) {
+				result = reflect.Append(result, value)
+				continue
+			}
+			if value.Type().ConvertibleTo(resultType.Elem()) {
+				result = reflect.Append(result, value.Convert(resultType.Elem()))
+				continue
+			}
+			return appendObservableMapsAsAny(existingObservables, generated)
+		}
+		return result.Interface()
+	}
+	return appendObservableMapsAsAny(existingObservables, generated)
+}
+
+func appendObservableMapsAsAny(existing []any, generated []jsonish.Map) []any {
+	result := make([]any, 0, len(existing)+len(generated))
+	result = append(result, existing...)
+	for _, observable := range generated {
+		result = append(result, observable)
+	}
+	return result
 }
 
 func (c *processingContext) addEnumSiblings() bool {

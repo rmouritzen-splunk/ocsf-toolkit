@@ -319,7 +319,7 @@ Validation failures are reported in `ProcessingResult`; they do not normally ret
 
 For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` file and object helpers do this automatically. Use `jsonio.NewDecoder` when decoding another JSON shape, such as a typed structure, with the same number-preserving behavior. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
 
-Array attributes may use `[]any`, typed or named Go slices, or fixed-length Go arrays. Elements are validated using the same scalar and object rules as JSON-decoded array elements. If enrichment removal filters a fixed-length observable array, it replaces the array with a slice of the same element type because the result has a different length.
+Array attributes may use JSON-native `[]any` values or typed Go slices such as `[]int64`, `[]float64`, and `[]jsonish.Map`. Elements are validated using the same scalar and object rules as JSON-decoded array elements.
 
 ### Processors
 
@@ -381,7 +381,7 @@ pipeline, err := schema.NewEventProcessorPipeline(
 
 Across event processing, an object attribute whose value is null is treated as missing. Null array elements remain invalid because no OCSF array element type permits null.
 
-Enrichment preserves a non-empty existing `observables` attribute instead of replacing it. When malformed structure or existing data prevents requested enrichment, `ProcessingResult.Issues` contains a nonfatal issue with phase `enrichment`; enrichment does not attempt to duplicate general validation.
+Enrichment preserves existing observable entries and appends generated entries that are not duplicates. Duplicate identity uses the exact `name`, the integral `type_id`, and whether `value` is omitted, null, or an exact string; the derived `type` caption and unrelated fields do not affect identity. Each skipped generated duplicate is reported as a nonfatal enrichment issue and is not included in `ObservablesAdded`. When observable enrichment or removal leaves `observables` as an empty array, the attribute is removed. Other malformed structure that prevents requested enrichment is also reported in `ProcessingResult.Issues`; enrichment does not attempt to duplicate general validation.
 
 `NewEnrichmentRemoval` safely removes supported scalar integral enum siblings and redundant observables by default. Use `WithRemoveEnumSiblings(false)` or `WithRemoveObservables(false)` to retain either category. Legacy enum arrays remain untouched. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using OCSF-compatible string conversion, and an explicit null value matches either null or missing event content. Object observables without values are removed only when their path resolves to a JSON object.
 
