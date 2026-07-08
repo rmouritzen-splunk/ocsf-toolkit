@@ -2,6 +2,7 @@ package jsonio
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +95,7 @@ func TestReadObjectRejectsNullWithPath(t *testing.T) {
 	object, err := ReadObject(path)
 
 	assert.Nil(object)
-	assert.ErrorContains(err, `failed to decode JSON object file "`+path+`"`)
+	assert.ErrorContains(err, fmt.Sprintf("failed to decode JSON object file %q", path))
 	assert.ErrorContains(err, "unexpected JSON null")
 }
 

@@ -167,7 +167,7 @@ func TestEventOutputRelativePathDoesNotPreserveTraversal(t *testing.T) {
 		{name: "relative traversal", input: inputEvent{path: filepath.Join("..", "outside", "event.json")}, want: "event.json"},
 		{name: "directory traversal", input: inputEvent{path: "event.json", rel: filepath.Join("..", "event.json")}, want: "event.json"},
 		{name: "safe relative path", input: inputEvent{path: filepath.Join("nested", "event.json")}, want: filepath.Join("nested", "event.json")},
-		{name: "absolute path", input: inputEvent{path: filepath.Join(string(filepath.Separator), "tmp", "event.json")}, want: "event.json"},
+		{name: "absolute path", input: inputEvent{path: filepath.Join(t.TempDir(), "event.json")}, want: "event.json"},
 	}
 
 	for _, test := range tests {
@@ -175,6 +175,12 @@ func TestEventOutputRelativePathDoesNotPreserveTraversal(t *testing.T) {
 			require.Equal(t, test.want, eventOutputRelativePath(test.input))
 		})
 	}
+}
+
+func TestSafeOutputRelativePathRejectsNonLocalPath(t *testing.T) {
+	absolute := filepath.Join(t.TempDir(), "nested", "event.json")
+
+	require.Equal(t, "event.json", safeOutputRelativePath(absolute))
 }
 
 func TestProcessDirectoryRequiresEmptyOutputWithoutOverwrite(t *testing.T) {

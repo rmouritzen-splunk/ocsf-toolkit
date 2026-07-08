@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -38,6 +39,59 @@ func TestProcessRejectsExistingOutputWithoutOverwrite(t *testing.T) {
 	data, err := os.ReadFile(outputPath)
 	assert.NoError(err)
 	assert.Equal("existing\n", string(data))
+}
+
+func TestProcessWritesWithoutHardLinkSupport(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	outputPath := filepath.Join(dir, "enriched.json")
+	reportPath := filepath.Join(dir, "report.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+	originalCreateOutputHardLink := createOutputHardLink
+	createOutputHardLink = func(_, _ string) error { return errors.New("hard links unsupported") }
+	t.Cleanup(func() { createOutputHardLink = originalCreateOutputHardLink })
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--event-output", outputPath,
+		"--report-output", reportPath,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.FileExists(outputPath)
+	assert.FileExists(reportPath)
+}
+
+func TestProcessDoesNotOverwriteWithoutHardLinkSupport(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	outputPath := filepath.Join(dir, "enriched.json")
+	reportPath := filepath.Join(dir, "report.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+	assert.NoError(os.WriteFile(outputPath, []byte("existing\n"), 0o600))
+	originalCreateOutputHardLink := createOutputHardLink
+	createOutputHardLink = func(_, _ string) error { return errors.New("hard links unsupported") }
+	t.Cleanup(func() { createOutputHardLink = originalCreateOutputHardLink })
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--event-output", outputPath,
+		"--report-output", reportPath,
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "already exists")
+	actual, err := os.ReadFile(outputPath)
+	assert.NoError(err)
+	assert.Equal("existing\n", string(actual))
 }
 
 func TestProcessStopsAfterFirstOutputWriteError(t *testing.T) {

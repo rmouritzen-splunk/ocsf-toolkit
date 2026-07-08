@@ -14,6 +14,8 @@ type writeOptions struct {
 	prettyJSON bool
 }
 
+var createOutputHardLink = os.Link
+
 type claimedOutput struct {
 	path         string
 	description  string
@@ -150,8 +152,9 @@ func writeJSON(w io.Writer, value any, pretty bool) error {
 	}
 	return nil
 }
-func writeJSONAtomic(path string, value any, options writeOptions) error {
-	return writeFileAtomic(path, options.overwrite, func(w io.Writer) error {
+
+func writeJSONOutputFile(path string, value any, options writeOptions) error {
+	return writeOutputFile(path, options.overwrite, func(w io.Writer) error {
 		return writeJSON(w, value, options.prettyJSON)
 	})
 }
@@ -160,11 +163,11 @@ func writeJSONDestination(path string, value any, options writeOptions, stdout i
 	if path == stdioPath {
 		return writeJSON(stdout, value, options.prettyJSON)
 	}
-	return writeJSONAtomic(path, value, options)
+	return writeJSONOutputFile(path, value, options)
 }
 
-func writeTextAtomic(path string, text string, overwrite bool) error {
-	return writeFileAtomic(path, overwrite, func(w io.Writer) error {
+func writeTextOutputFile(path string, text string, overwrite bool) error {
+	return writeOutputFile(path, overwrite, func(w io.Writer) error {
 		if _, err := io.WriteString(w, text); err != nil {
 			return fmt.Errorf("failed to write text: %w", err)
 		}
@@ -179,10 +182,10 @@ func writeTextDestination(path string, text string, overwrite bool, stdout io.Wr
 		}
 		return nil
 	}
-	return writeTextAtomic(path, text, overwrite)
+	return writeTextOutputFile(path, text, overwrite)
 }
 
-func writeFileAtomic(path string, overwrite bool, write func(io.Writer) error) error {
+func writeOutputFile(path string, overwrite bool, write func(io.Writer) error) error {
 	if path == "" {
 		return errors.New("output path is empty")
 	}
@@ -217,14 +220,59 @@ func writeFileAtomic(path string, overwrite bool, write func(io.Writer) error) e
 		if err := os.Rename(tempPath, path); err != nil {
 			return fmt.Errorf("failed to replace %q with temporary output file %q: %w", path, tempPath, err)
 		}
-	} else if err := os.Link(tempPath, path); err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("output file %q already exists (use --overwrite to replace it)", path)
-		}
-		return fmt.Errorf("failed to create %q from temporary output file %q: %w", path, tempPath, err)
 	} else {
-		return nil
+		return installTemporaryFileWithoutOverwrite(tempPath, path)
 	}
 	removeTemp = false
 	return nil
+}
+
+// installTemporaryFileWithoutOverwrite uses a hard link when the filesystem supports it, which
+// makes the completed temporary file visible at its destination in one operation. The exclusive-
+// create fallback preserves the no-overwrite guarantee on filesystems without hard-link support.
+func installTemporaryFileWithoutOverwrite(tempPath, path string) error {
+	linkErr := createOutputHardLink(tempPath, path)
+	if linkErr == nil {
+		return nil
+	}
+	if os.IsExist(linkErr) {
+		return outputAlreadyExistsError(path)
+	}
+
+	source, err := os.Open(tempPath)
+	if err != nil {
+		return fmt.Errorf("failed to reopen temporary output file %q: %w", tempPath, err)
+	}
+	defer func() { _ = source.Close() }()
+
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return outputAlreadyExistsError(path)
+		}
+		return fmt.Errorf("failed to create output file %q using exclusive fallback: %w", path, err)
+	}
+	installed := false
+	defer func() {
+		_ = destination.Close()
+		if !installed {
+			_ = os.Remove(path)
+		}
+	}()
+
+	if _, err := io.Copy(destination, source); err != nil {
+		return fmt.Errorf("failed to copy temporary output file %q to %q: %w", tempPath, path, err)
+	}
+	if err := destination.Sync(); err != nil {
+		return fmt.Errorf("failed to sync output file %q: %w", path, err)
+	}
+	if err := destination.Close(); err != nil {
+		return fmt.Errorf("failed to close output file %q: %w", path, err)
+	}
+	installed = true
+	return nil
+}
+
+func outputAlreadyExistsError(path string) error {
+	return fmt.Errorf("output file %q already exists (use --overwrite to replace it)", path)
 }

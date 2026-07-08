@@ -336,6 +336,13 @@ func validateOutputNamespaces(config processConfig, outputRoot filesystemPath) e
 			if entry.Type()&os.ModeSymlink != 0 {
 				return fmt.Errorf("output namespace %q contains symbolic link %q", name, path)
 			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() && !info.Mode().IsRegular() {
+				return fmt.Errorf("output namespace %q contains unsupported filesystem entry %q", name, path)
+			}
 			return nil
 		})
 		if err != nil {
@@ -408,16 +415,20 @@ func eventOutputRelativePath(input inputEvent) string {
 	if input.rel != "" {
 		return safeOutputRelativePath(input.rel)
 	}
-	if input.path != stdioPath && !filepath.IsAbs(input.path) {
-		return safeOutputRelativePath(input.path)
+	if input.path == stdioPath {
+		return stdinEventRelativePath
 	}
-	return filepath.Base(input.path)
+	return safeOutputRelativePath(input.path)
 }
 
 func safeOutputRelativePath(path string) string {
 	cleanPath := filepath.Clean(path)
-	if slices.Contains(strings.Split(cleanPath, string(filepath.Separator)), "..") {
-		return filepath.Base(cleanPath)
+	if filepath.IsLocal(cleanPath) {
+		return cleanPath
 	}
-	return cleanPath
+	base := filepath.Base(cleanPath)
+	if filepath.IsLocal(base) {
+		return base
+	}
+	return stdinEventRelativePath
 }

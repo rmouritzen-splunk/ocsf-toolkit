@@ -162,7 +162,7 @@ The CLI never modifies input event files. Single-event processing, including `--
 
 Output directories are created if necessary. Output files are not replaced unless `--overwrite` is supplied. In directory mode, an existing output directory must be empty unless `--overwrite` is supplied; unrelated existing files are left unchanged when overwrite is enabled.
 
-Input and output directory trees must not overlap, including when symbolic links make differently written paths refer to the same location. The selected output directory itself may be a symbolic link, but the `events/` and `reports/` namespaces beneath it may not contain symbolic links.
+Input and output directory trees must not overlap, including when symbolic links make differently written paths refer to the same location. The selected output directory itself may be a symbolic link, but the `events/` and `reports/` namespaces beneath it may contain only regular files and actual directories. Symbolic links, Windows junctions, and other special filesystem entries are rejected.
 
 `--output-dir` writes processed events beneath `events/` and per-event processing reports beneath `reports/`. Both namespaces preserve the input-relative path, which prevents event filenames from colliding with report filenames.
 

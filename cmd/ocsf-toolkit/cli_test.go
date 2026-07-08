@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -132,46 +133,49 @@ func TestHelp(t *testing.T) {
 	assert.Contains(stdout, "Enrichment Options:")
 	assert.Contains(stdout, "Enrichment Removal Options:")
 	assert.Contains(stdout, "Validation Options:")
-	assert.Contains(stdout, "-s, --schema=COMPILED_SCHEMA_FILE")
-	assert.Contains(stdout, "-e, --event=FILE")
-	assert.Contains(stdout, "-d, --events-dir=DIR")
-	assert.Contains(stdout, "-o, --output-dir=DIR")
+	assert.Contains(stdout, helpShortAndLongOption("s", "schema", "COMPILED_SCHEMA_FILE"))
+	assert.Contains(stdout, helpShortAndLongOption("e", "event", "FILE"))
+	assert.Contains(stdout, helpShortAndLongOption("d", "events-dir", "DIR"))
+	assert.Contains(stdout, helpShortAndLongOption("o", "output-dir", "DIR"))
 	assert.Contains(stdout, "Output root containing subdirectories")
 	assert.Contains(stdout, `named "events" and "reports"`)
-	assert.Contains(stdout, "--fail-on-validation-errors")
-	assert.Contains(stdout, "--report-output=FILE")
-	assert.Contains(stdout, "--no-enum-siblings")
-	assert.Contains(stdout, "--no-observables")
-	assert.Contains(stdout, "-V, --validate")
-	assert.Contains(stdout, "-E, --enrich")
-	assert.NotContains(stdout, "--update-in-place")
-	assert.Contains(stdout, "--event-output=FILE")
-	assert.Contains(stdout, "-u, --unenrich")
-	assert.Contains(stdout, "--retain-enum-siblings")
-	assert.Contains(stdout, "--retain-observables")
-	assert.Contains(stdout, "--force-remove-enum-siblings")
+	assert.Contains(stdout, helpLongOption("fail-on-validation-errors", ""))
+	assert.Contains(stdout, helpLongOption("report-output", "FILE"))
+	assert.Contains(stdout, helpLongOption("no-enum-siblings", ""))
+	assert.Contains(stdout, helpLongOption("no-observables", ""))
+	assert.Contains(stdout, helpShortAndLongOption("V", "validate", ""))
+	assert.Contains(stdout, helpShortAndLongOption("E", "enrich", ""))
+	assert.NotContains(stdout, "update-in-place")
+	assert.Contains(stdout, helpLongOption("event-output", "FILE"))
+	assert.Contains(stdout, helpShortAndLongOption("u", "unenrich", ""))
+	assert.Contains(stdout, helpLongOption("retain-enum-siblings", ""))
+	assert.Contains(stdout, helpLongOption("retain-observables", ""))
+	assert.Contains(stdout, helpLongOption("force-remove-enum-siblings", ""))
 	assert.Contains(stdout, "Remove enum siblings except those")
 	assert.Contains(stdout, "required for enum ID 99")
-	assert.Contains(stdout, "--force-remove-observables")
-	assert.Contains(stdout, "--report-output=FILE")
-	assert.Contains(stdout, "--skip-invalid-output")
-	assert.Greater(strings.Index(stdout, "--skip-invalid-output"), strings.Index(stdout, "Validation Options:"))
-	assert.Greater(strings.Index(stdout, "--report-output=FILE"), strings.Index(stdout, "General Options:"))
-	assert.Less(strings.Index(stdout, "--report-output=FILE"), strings.Index(stdout, "Enrichment Options:"))
-	assert.Greater(strings.Index(stdout, "--event-output=FILE"), strings.Index(stdout, "General Options:"))
-	assert.Less(strings.Index(stdout, "--event-output=FILE"), strings.Index(stdout, "Enrichment Options:"))
+	assert.Contains(stdout, helpLongOption("force-remove-observables", ""))
+	reportOutputOption := helpLongOption("report-output", "FILE")
+	eventOutputOption := helpLongOption("event-output", "FILE")
+	skipInvalidOutputOption := helpLongOption("skip-invalid-output", "")
+	assert.Contains(stdout, reportOutputOption)
+	assert.Contains(stdout, skipInvalidOutputOption)
+	assert.Greater(strings.Index(stdout, skipInvalidOutputOption), strings.Index(stdout, "Validation Options:"))
+	assert.Greater(strings.Index(stdout, reportOutputOption), strings.Index(stdout, "General Options:"))
+	assert.Less(strings.Index(stdout, reportOutputOption), strings.Index(stdout, "Enrichment Options:"))
+	assert.Greater(strings.Index(stdout, eventOutputOption), strings.Index(stdout, "General Options:"))
+	assert.Less(strings.Index(stdout, eventOutputOption), strings.Index(stdout, "Enrichment Options:"))
 	assert.Contains(stdout, "Write only the validation report for")
 	assert.Contains(stdout, "events with validation errors")
 	assert.Contains(stdout, "Enrich events; adds enum siblings and")
 	assert.Contains(stdout, "observables by default")
 	assert.Contains(stdout, "Do not add enum siblings")
 	assert.Contains(stdout, "Do not add observables")
-	assert.Contains(stdout, "--summary-json-file")
-	assert.Contains(stdout, "--summary-file")
-	assert.Contains(stdout, "--overwrite")
-	assert.Contains(stdout, "-p, --pretty-json")
+	assert.Contains(stdout, helpLongOption("summary-json-file", "FILE"))
+	assert.Contains(stdout, helpLongOption("summary-file", "FILE"))
+	assert.Contains(stdout, helpLongOption("overwrite", ""))
+	assert.Contains(stdout, helpShortAndLongOption("p", "pretty-json", ""))
 	assert.Contains(stdout, "Pretty-print JSON output, including")
-	assert.Contains(stdout, "-q, --quiet")
+	assert.Contains(stdout, helpShortAndLongOption("q", "quiet", ""))
 	assert.Contains(stdout, "--output-dir writes processed events beneath events/ and processing reports beneath reports/.")
 	assert.Contains(stdout, "Both output subdirectories preserve input-relative paths.")
 	assert.Contains(stdout, "    With --events-dir, paths are relative to that directory.")
@@ -180,6 +184,26 @@ func TestHelp(t *testing.T) {
 	assert.Contains(stdout, "When an event and report share stdout, the event is written first.")
 	assert.Contains(stdout, "When human-readable and JSON summaries share stdout, the human-readable summary is written first.")
 	assert.Greater(strings.Index(stdout, "Notes:"), strings.Index(stdout, "Help Options:"))
+}
+
+func helpShortAndLongOption(shortName, longName, valueName string) string {
+	if runtime.GOOS == "windows" {
+		return "/" + shortName + ", " + helpLongOption(longName, valueName)
+	}
+	return "-" + shortName + ", " + helpLongOption(longName, valueName)
+}
+
+func helpLongOption(name, valueName string) string {
+	if runtime.GOOS == "windows" {
+		if valueName != "" {
+			return "/" + name + ":" + valueName
+		}
+		return "/" + name
+	}
+	if valueName != "" {
+		return "--" + name + "=" + valueName
+	}
+	return "--" + name
 }
 
 func TestShortHelpMatchesLongHelp(t *testing.T) {
