@@ -1419,12 +1419,48 @@ func TestProcessEventValidationTypeConstraintChecks(t *testing.T) {
 	assert.Contains(issueCodes(result.Validation.Errors), "attribute_value_not_in_type_values")
 }
 
+func TestProcessEventValidationMaxLenCountsUnicodeCodePoints(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	event := validValidationEvent()
+	// The combining acute accent is a distinct Unicode code point, so this
+	// value contains four code points even though it has three graphemes.
+	event["short_text"] = "e\u0301ab"
+
+	result, err := mustNewEventProcessorPipeline(assert, si, NewValidation()).ProcessEvent(event)
+
+	assert.NoError(err)
+	issues := issuesWithCode(result.Validation.Errors, "attribute_value_exceeds_max_len")
+	assert.Len(issues, 1)
+	assert.Equal(4, issues[0].Details["length"])
+}
+
 func TestProcessEventValidationTypeValuesDoNotRequireJSONNumbers(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
 	si.dictionary.Types.Attributes["level_t"].Values = []any{int64(9007199254740993)}
 	event := validValidationEvent()
 	event["level"] = json.Number("9007199254740993")
+
+	result, err := mustNewEventProcessorPipeline(assert, si, NewValidation()).ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.NotContains(issueCodes(result.Validation.Errors), "attribute_value_not_in_type_values")
+}
+
+func TestProcessEventValidationTypeValuesCompareEquivalentJSONNumbersNumerically(t *testing.T) {
+	assert := require.New(t)
+	si := makeValidationTestSchema(assert)
+	si.dictionary.Types.Attributes["float_t"] = &typeDefinition{}
+	si.dictionary.Types.Attributes["decimal_level_t"] = &typeDefinition{
+		commonAttributeDefinition: commonAttributeDefinition{Type: "float_t"},
+		Values:                    []any{json.Number("1.0")},
+	}
+	si.classes[int64(1)].Attributes["decimal_level"] = &itemAttributeDefinition{
+		commonAttributeDefinition: commonAttributeDefinition{Type: "decimal_level_t"},
+	}
+	event := validValidationEvent()
+	event["decimal_level"] = json.Number("1.00")
 
 	result, err := mustNewEventProcessorPipeline(assert, si, NewValidation()).ProcessEvent(event)
 
