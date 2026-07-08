@@ -57,6 +57,8 @@ A visitor can inspect more deeply when its behavior requires it, but traversal r
 
 Observable reference analysis is shared by enrichment removal and validation and cached in the per-event processing context. The analyzer parses bare, `[]`, `[*]`, numeric index, and `$`-rooted paths; checks the reference against the active compiled class; resolves it against actual event content; compares scalar values after JSON-compatible string conversion; and distinguishes value-bearing scalar observables from valueless object observables. An explicit null observable value matches either an explicit null or a missing branch at its schema-valid event path, reflecting OCSF's equivalence of null and missing values. Enrichment removal uses the analysis to decide which entries are redundant, while validation reports invalid references and values. When both processors are enabled, analysis occurs before mutation and validation reuses the cached result.
 
+An attribute used directly with `object_type: "object"` is the OCSF convention for an open-ended JSON-like object, so unknown nested keys are allowed. All event classes and concrete object types remain closed against their active compiled attributes, including when profile filtering leaves no active attributes. A concrete object may still gain inherited attributes when their profiles are active because the compiler flattens those profile annotations onto the derived object.
+
 Mutating processors use a shared internal diagnostic representation when malformed event content prevents requested work. Each processor maps that diagnostic into a phase-specific `ProcessingIssue`; validation separately maps retained invalid content into validation errors or warnings. Enrichment diagnostics are intentionally narrow: they cover enum siblings or observables that could not be added, while unrelated event validity remains the validator's responsibility. Generated observables never replace a non-empty existing `observables` attribute.
 
 If `class_uid` is missing, has the wrong type, or does not identify a compiled class, validation records the corresponding issue and the processing context stops before class-scoped traversal. Recoverable validation failures are accumulated rather than stopping processing.
@@ -75,6 +77,8 @@ The event map and its nested maps and slices must not be accessed concurrently d
 
 Validation accepts normal Go numeric values from non-JSON sources. For JSON, `json.Number` is preferred because decoding directly to `float64` can lose integer precision. The `jsonio` package enables `json.Decoder.UseNumber()` for this reason.
 
+Array attributes accept JSON-native `[]any` values as well as typed or named Go slices and fixed-length arrays from programmatic and non-JSON event sources. JSON-native forms retain their fast paths; other array containers are adapted only when encountered, and each element still undergoes ordinary schema validation.
+
 Integral validation rejects non-integral values and applies signed 64-bit bounds where required. Numeric range constraints are inclusive.
 
 ## CLI Boundary
@@ -85,7 +89,7 @@ All directory-mode outputs share one `--output-dir` root with fixed `events/` an
 
 Before processing begins, the CLI resolves and validates command-wide input and output roots plus explicit single-event destinations. Directory processing then streams files directly from `filepath.WalkDir`; it does not retain a full list of event paths or calculated destinations. Output paths are derived from each safe input-relative path beneath the fixed output namespaces.
 
-Input and output directory trees must be disjoint after symlink resolution, including when the selected output directory does not exist yet. The selected output root itself may be a symlink because the user chose it explicitly, but existing output namespaces may not contain symlinks. Without `--overwrite`, a directory-mode output root must be nonexistent or empty. Existing destinations are handled by the atomic writer, and replacement fails unless `--overwrite` is selected. Command outputs are also claimed as they are written so two path spellings that identify the same filesystem file cannot overwrite one another.
+Input and output directory trees must be disjoint after symlink resolution, including when the selected output directory does not exist yet. Existing paths and ancestors are also compared by filesystem identity, allowing aliases to be rejected without detecting or assuming filesystem case-sensitivity rules. The selected output root itself may be a symlink because the user chose it explicitly, but existing output namespaces may not contain symlinks. Without `--overwrite`, a directory-mode output root must be nonexistent or empty. Existing destinations are handled by the atomic writer, and replacement fails unless `--overwrite` is selected. Command outputs are also claimed as they are written so two path spellings that identify the same filesystem file cannot overwrite one another.
 
 The CLI may process one file or walk a directory tree, but each JSON object is still passed independently to `ProcessEvent`. Directory outputs preserve safe paths relative to the input root. A single input path that is absolute or contains `..` is reduced to its basename when written under an output directory so it cannot escape that directory.
 

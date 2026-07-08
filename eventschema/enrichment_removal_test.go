@@ -150,6 +150,58 @@ func TestEnrichmentRemovalSafelyRemovesScalarAndObjectObservables(t *testing.T) 
 	assert.Equal("observable_value_not_found", result.Issues[0].Code)
 }
 
+func TestEnrichmentRemovalFiltersNamedObservableSlice(t *testing.T) {
+	type observableList []jsonish.Map
+
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	event["observables"] = observableList{
+		{"name": "ball.green", "type_id": json.Number("1000"), "value": "go"},
+		{"name": "ball.green", "type_id": json.Number("1000"), "value": "other"},
+	}
+
+	result, err := mustNewEventProcessorPipeline(
+		assert,
+		schema,
+		NewEnrichmentRemoval(WithRemoveEnumSiblings(false)),
+	).ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Equal(1, result.EnrichmentRemoval.ObservablesRemoved)
+	assert.Equal(1, result.EnrichmentRemoval.ObservablesRetained)
+	remaining, ok := event["observables"].(observableList)
+	assert.True(ok)
+	assert.Len(remaining, 1)
+	assert.Equal("other", remaining[0]["value"])
+}
+
+func TestEnrichmentRemovalFiltersFixedObservableArray(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	event["observables"] = [2]jsonish.Map{
+		{"name": "ball.green", "type_id": json.Number("1000"), "value": "go"},
+		{"name": "ball.green", "type_id": json.Number("1000"), "value": "other"},
+	}
+
+	result, err := mustNewEventProcessorPipeline(
+		assert,
+		schema,
+		NewEnrichmentRemoval(WithRemoveEnumSiblings(false)),
+	).ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Equal(1, result.EnrichmentRemoval.ObservablesRemoved)
+	assert.Equal(1, result.EnrichmentRemoval.ObservablesRetained)
+	remaining, ok := event["observables"].([]jsonish.Map)
+	assert.True(ok)
+	assert.Len(remaining, 1)
+	assert.Equal("other", remaining[0]["value"])
+}
+
 func TestEnrichmentRemovalMatchesObservableValuesAfterScalarStringConversion(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)

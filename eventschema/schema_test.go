@@ -1042,6 +1042,100 @@ func TestProcessEventValidationInactiveProfileAttributeIsUnknown(t *testing.T) {
 	assert.Contains(issueAttributePaths(result.Validation.Errors), "profile_attr")
 }
 
+func TestProcessEventValidationGenericAndProfileFilteredObjects(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	genericObjectType := "object"
+	emptyObjectType := "empty_object"
+	derivedObjectType := "derived_object"
+	schema.objects[genericObjectType] = &objectDefinition{
+		commonItemDefinition: commonItemDefinition{Name: genericObjectType, Attributes: map[string]*itemAttributeDefinition{}},
+	}
+	schema.objects[emptyObjectType] = &objectDefinition{
+		commonItemDefinition: commonItemDefinition{Name: emptyObjectType, Attributes: map[string]*itemAttributeDefinition{}},
+	}
+	schema.objects[derivedObjectType] = &objectDefinition{
+		commonItemDefinition: commonItemDefinition{
+			Name: derivedObjectType,
+			Attributes: map[string]*itemAttributeDefinition{
+				// Compiled schemas flatten inherited profile attributes onto the derived object.
+				"parent_profile_attr": {
+					commonAttributeDefinition: commonAttributeDefinition{Type: "string_t"},
+					Profiles:                  []string{"p1"},
+				},
+			},
+		},
+	}
+	schema.classes[int64(1)].Attributes["unmapped"] = &itemAttributeDefinition{
+		commonAttributeDefinition: commonAttributeDefinition{Type: "object_t", ObjectType: &genericObjectType},
+	}
+	schema.classes[int64(1)].Attributes["empty"] = &itemAttributeDefinition{
+		commonAttributeDefinition: commonAttributeDefinition{Type: "object_t", ObjectType: &emptyObjectType},
+	}
+	schema.classes[int64(1)].Attributes["derived"] = &itemAttributeDefinition{
+		commonAttributeDefinition: commonAttributeDefinition{Type: "object_t", ObjectType: &derivedObjectType},
+	}
+	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+
+	t.Run("direct generic object is open", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["unmapped"] = jsonish.Map{"anything": jsonish.Map{"nested": true}}
+
+		result, err := pipeline.ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.NotContains(issueAttributePaths(result.Validation.Errors), "unmapped.anything")
+	})
+
+	t.Run("other empty object is closed", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["empty"] = jsonish.Map{"anything": true}
+
+		result, err := pipeline.ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.Contains(issueAttributePaths(result.Validation.Errors), "empty.anything")
+	})
+
+	t.Run("inherited profile attribute is inactive", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["derived"] = jsonish.Map{"parent_profile_attr": "inactive", "typo": true}
+
+		result, err := pipeline.ProcessEvent(event)
+
+		assert.NoError(err)
+		paths := issueAttributePaths(result.Validation.Errors)
+		assert.Contains(paths, "derived.parent_profile_attr")
+		assert.Contains(paths, "derived.typo")
+	})
+
+	t.Run("inherited profile attribute is active", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["metadata"] = jsonish.Map{"version": "1.0.0", "profiles": []any{"p1"}}
+		event["derived"] = jsonish.Map{"parent_profile_attr": "active"}
+
+		result, err := pipeline.ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.NotContains(issueAttributePaths(result.Validation.Errors), "derived.parent_profile_attr")
+	})
+
+	t.Run("inactive null profile attribute is missing", func(t *testing.T) {
+		assert := require.New(t)
+		event := validValidationEvent()
+		event["derived"] = jsonish.Map{"parent_profile_attr": nil}
+
+		result, err := pipeline.ProcessEvent(event)
+
+		assert.NoError(err)
+		assert.NotContains(issueAttributePaths(result.Validation.Errors), "derived.parent_profile_attr")
+	})
+}
+
 func TestProcessEventValidationEnumSiblingWarnings(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
@@ -1200,6 +1294,34 @@ func TestProcessEventTreatsNullAttributesAsMissing(t *testing.T) {
 		assert.NoError(err)
 		assert.Contains(issueAttributePaths(issuesWithCode(result.Validation.Errors, "attribute_wrong_type")), "statuses[0]")
 	})
+}
+
+func TestProcessEventSupportsTypedSlicesAndArrays(t *testing.T) {
+	type integerList []int64
+	type scoreList []float64
+	type profileList []string
+	type ballList []jsonish.Map
+
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	addObservableArrayTestAttributes(schema)
+	trueValue := true
+	schema.dictionary.Types.Attributes["float_t"] = &typeDefinition{}
+	schema.classes[int64(1)].Attributes["scores"] = &itemAttributeDefinition{
+		commonAttributeDefinition: commonAttributeDefinition{Type: "float_t", IsArray: &trueValue},
+	}
+	event := validValidationEvent()
+	event["status_ids"] = integerList{1, 2}
+	event["statuses"] = [2]string{"Open", "Closed"}
+	event["scores"] = scoreList{1.5, 2.5}
+	event["metadata"] = jsonish.Map{"version": "1.0.0", "profiles": profileList{"p1"}}
+	event["profile_attr"] = "active"
+	event["balls"] = ballList{{"green": "first"}, {"green": "second"}}
+
+	result, err := mustNewEventProcessorPipeline(assert, schema, NewValidation()).ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Empty(result.Validation.Errors)
 }
 
 func TestProcessEventValidationTypeConstraintChecks(t *testing.T) {

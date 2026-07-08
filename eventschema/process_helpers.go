@@ -79,7 +79,15 @@ func asSlice(value any) ([]any, bool) {
 		}
 		return result, true
 	default:
-		return nil, false
+		reflected := reflect.ValueOf(value)
+		if reflected.Kind() != reflect.Slice && reflected.Kind() != reflect.Array {
+			return nil, false
+		}
+		result := make([]any, reflected.Len())
+		for i := range reflected.Len() {
+			result[i] = reflected.Index(i).Interface()
+		}
+		return result, true
 	}
 }
 
@@ -148,6 +156,10 @@ func typeOf(value any) (string, string) {
 	case nil:
 		return "null", ""
 	default:
+		kind := reflect.TypeOf(value).Kind()
+		if kind == reflect.Slice || kind == reflect.Array {
+			return "array", ""
+		}
 		return "unknown type", ""
 	}
 }

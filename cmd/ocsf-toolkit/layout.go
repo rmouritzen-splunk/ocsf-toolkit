@@ -21,12 +21,19 @@ type inputEvent struct {
 	rel  string
 }
 
-// filesystemPath retains both the absolute spelling of a path and the form obtained by
-// resolving symbolic links in its longest existing prefix.
+// filesystemPath retains the absolute spelling of a path, its longest existing prefix, and the
+// form obtained by resolving symbolic links in that prefix. The existing prefix lets containment
+// checks use filesystem identity without detecting or assuming case-sensitivity rules.
 type filesystemPath struct {
 	display  string
 	absolute string
 	resolved string
+	existing string
+}
+
+type reservedPath struct {
+	path        filesystemPath
+	description string
 }
 
 type outputDestination struct {
@@ -49,11 +56,11 @@ func newFilesystemPath(display string) (filesystemPath, error) {
 		return filesystemPath{}, fmt.Errorf("resolve absolute path for %q: %w", display, err)
 	}
 	absolute = filepath.Clean(absolute)
-	resolved, _, err := resolveExistingPathPrefix(absolute)
+	resolved, existing, err := resolveExistingPathPrefix(absolute)
 	if err != nil {
 		return filesystemPath{}, fmt.Errorf("resolve symlinks for %q: %w", display, err)
 	}
-	return filesystemPath{display: display, absolute: absolute, resolved: resolved}, nil
+	return filesystemPath{display: display, absolute: absolute, resolved: resolved, existing: existing}, nil
 }
 
 func resolveExistingPathPrefix(absolute string) (string, string, error) {
@@ -70,7 +77,7 @@ func resolveExistingPathPrefix(absolute string) (string, string, error) {
 			for _, component := range slices.Backward(missing) {
 				resolved = filepath.Join(resolved, component)
 			}
-			return filepath.Clean(resolved), filepath.Clean(resolvedPrefix), nil
+			return filepath.Clean(resolved), filepath.Clean(current), nil
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
 			return "", "", err
@@ -97,12 +104,43 @@ func newOutputDestination(display string) (*outputDestination, error) {
 }
 
 func pathContains(root, path filesystemPath) bool {
+	if existingPathContains(root, path) {
+		return true
+	}
 	relative, err := filepath.Rel(root.resolved, path.resolved)
 	if err != nil {
 		return false
 	}
 	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) &&
 		!filepath.IsAbs(relative)
+}
+
+func existingPathContains(root, path filesystemPath) bool {
+	rootInfo, err := os.Stat(root.absolute)
+	if err != nil || path.existing == "" {
+		return false
+	}
+	current := path.existing
+	for {
+		info, err := os.Stat(current)
+		if err == nil && os.SameFile(rootInfo, info) {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
+}
+
+func sameFilesystemPath(left, right filesystemPath) bool {
+	if left.resolved == right.resolved {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(left.absolute)
+	rightInfo, rightErr := os.Stat(right.absolute)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
 }
 
 func pathsOverlap(left, right filesystemPath) bool {
@@ -115,8 +153,8 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 	if err != nil {
 		return processingDestinations{}, fmt.Errorf("resolve schema %q: %w", config.schemaPath, err)
 	}
-	reserved := map[string]string{
-		schemaPath.resolved: fmt.Sprintf("schema %q", config.schemaPath),
+	reserved := []reservedPath{
+		{path: schemaPath, description: fmt.Sprintf("schema %q", config.schemaPath)},
 	}
 	var inputRoot *filesystemPath
 	if config.outputDir != "" {
@@ -158,7 +196,9 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 		if err != nil {
 			return processingDestinations{}, fmt.Errorf("resolve input event %q: %w", config.eventPath, err)
 		}
-		reserved[inputPath.resolved] = fmt.Sprintf("input event %q", config.eventPath)
+		reserved = append(reserved, reservedPath{
+			path: inputPath, description: fmt.Sprintf("input event %q", config.eventPath),
+		})
 	}
 
 	if config.eventPath != "" {
@@ -168,7 +208,7 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 		}
 		if config.mutatesEvent() {
 			destinations.eventOutput, err = resolveDistinctDestination(
-				eventOutputPath(config, input), "processed event", reserved,
+				eventOutputPath(config, input), "processed event", &reserved,
 			)
 			if err != nil {
 				return processingDestinations{}, err
@@ -176,7 +216,7 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 		}
 		if config.generatesReport() {
 			destinations.reportOutput, err = resolveDistinctDestination(
-				reportOutputPath(config, input), "processing report", reserved,
+				reportOutputPath(config, input), "processing report", &reserved,
 			)
 			if err != nil {
 				return processingDestinations{}, err
@@ -185,7 +225,7 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 	}
 	if config.summaryFile != "" {
 		summaryFile, resolveErr := resolveDistinctDestination(
-			config.summaryFile, "human-readable summary", reserved,
+			config.summaryFile, "human-readable summary", &reserved,
 		)
 		if resolveErr != nil {
 			return processingDestinations{}, resolveErr
@@ -194,7 +234,7 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 	}
 	if config.summaryJSONFile != "" {
 		destinations.summaryJSONFile, err = resolveDistinctDestination(
-			config.summaryJSONFile, "JSON summary", reserved,
+			config.summaryJSONFile, "JSON summary", &reserved,
 		)
 		if err != nil {
 			return processingDestinations{}, err
@@ -210,7 +250,7 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 			if summary == nil || summary.path.display == stdioPath {
 				continue
 			}
-			if summary.path.resolved == destinations.outputRoot.resolved ||
+			if sameFilesystemPath(summary.path, *destinations.outputRoot) ||
 				pathContains(outputNamespace(*destinations.outputRoot, eventsOutputDirectory), summary.path) ||
 				pathContains(outputNamespace(*destinations.outputRoot, reportsOutputDirectory), summary.path) {
 				return processingDestinations{}, fmt.Errorf(
@@ -319,7 +359,7 @@ func activeOutputNamespaces(config processConfig) []string {
 func resolveDistinctDestination(
 	display string,
 	description string,
-	reserved map[string]string,
+	reserved *[]reservedPath,
 ) (*outputDestination, error) {
 	destination, err := newOutputDestination(display)
 	if err != nil {
@@ -328,10 +368,17 @@ func resolveDistinctDestination(
 	if destination.path.display == stdioPath {
 		return destination, nil
 	}
-	if previous, collision := reserved[destination.path.resolved]; collision {
-		return nil, fmt.Errorf("path %q is selected for both %s and %s", display, previous, description)
+	for _, previous := range *reserved {
+		if sameFilesystemPath(destination.path, previous.path) {
+			return nil, fmt.Errorf(
+				"path %q is selected for both %s and %s",
+				display,
+				previous.description,
+				description,
+			)
+		}
 	}
-	reserved[destination.path.resolved] = description
+	*reserved = append(*reserved, reservedPath{path: destination.path, description: description})
 	return destination, nil
 }
 

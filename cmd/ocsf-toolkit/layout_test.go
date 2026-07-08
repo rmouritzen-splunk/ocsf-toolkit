@@ -89,6 +89,26 @@ func TestProcessDirectoryRejectsSymlinkResolvedOverlap(t *testing.T) {
 	assert.Contains(stderr, "input and output directory trees must not overlap")
 }
 
+func TestProcessDirectoryRejectsCaseAliasedOverlap(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "Events")
+	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
+	eventsAlias := caseAliasPath(t, eventsDir)
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--output-dir", filepath.Join(eventsAlias, "out"),
+		"--validate",
+		"--overwrite",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "input and output directory trees must not overlap")
+}
+
 func TestProcessDirectoryAllowsSymlinkAsSelectedOutputRoot(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
@@ -253,6 +273,31 @@ func TestProcessRejectsExplicitOutputAliasingInput(t *testing.T) {
 	assert.Contains(stderr, "is selected for both")
 }
 
+func TestProcessRejectsCaseAliasedOutputOverwritingInput(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "Event.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+	originalEvent, err := os.ReadFile(eventPath)
+	assert.NoError(err)
+	eventAlias := caseAliasPath(t, eventPath)
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", eventAlias,
+		"--overwrite",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "is selected for both")
+	actualEvent, err := os.ReadFile(eventPath)
+	assert.NoError(err)
+	assert.Equal(originalEvent, actualEvent)
+}
+
 func TestProcessRejectsExplicitOutputAliasingSchema(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
@@ -267,6 +312,31 @@ func TestProcessRejectsExplicitOutputAliasingSchema(t *testing.T) {
 		"--event", eventPath,
 		"--validate",
 		"--report-output", schemaPath,
+		"--overwrite",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "is selected for both")
+	actualSchema, err := os.ReadFile(schemaPath)
+	assert.NoError(err)
+	assert.Equal(originalSchema, actualSchema)
+}
+
+func TestProcessRejectsCaseAliasedOutputOverwritingSchema(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	originalSchema, err := os.ReadFile(schemaPath)
+	assert.NoError(err)
+	schemaAlias := caseAliasPath(t, schemaPath)
+	eventPath := filepath.Join(dir, "event.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", schemaAlias,
 		"--overwrite",
 	)
 

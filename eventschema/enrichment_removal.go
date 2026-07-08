@@ -1,6 +1,7 @@
 package eventschema
 
 import (
+	"reflect"
 	"strconv"
 
 	"github.com/ocsf/ocsf-toolkit/jsonish"
@@ -195,6 +196,25 @@ func filterObservableSlice(value any, remove map[int]struct{}) any {
 		}
 		return filtered
 	default:
+		reflected := reflect.ValueOf(value)
+		if reflected.Kind() == reflect.Slice {
+			filtered := reflect.MakeSlice(reflected.Type(), 0, reflected.Len()-len(remove))
+			for index := range reflected.Len() {
+				if _, removed := remove[index]; !removed {
+					filtered = reflect.Append(filtered, reflected.Index(index))
+				}
+			}
+			return filtered.Interface()
+		}
+		if reflected.Kind() == reflect.Array {
+			filtered := reflect.MakeSlice(reflect.SliceOf(reflected.Type().Elem()), 0, reflected.Len()-len(remove))
+			for index := range reflected.Len() {
+				if _, removed := remove[index]; !removed {
+					filtered = reflect.Append(filtered, reflected.Index(index))
+				}
+			}
+			return filtered.Interface()
+		}
 		return value
 	}
 }

@@ -99,11 +99,23 @@ func (p *validationProcessor) onClass(context *processingContext, visit classVis
 }
 
 func (p *validationProcessor) onClassDone(context *processingContext, visit itemVisit) {
-	context.validateUnknownKeys(visit.item, visit.validationParentPath, visit.itemDefinition, visit.filteredAttributes)
+	context.validateUnknownKeys(
+		visit.item,
+		visit.validationParentPath,
+		visit.itemDefinition,
+		visit.filteredAttributes,
+		visit.allowUnknownAttributes,
+	)
 }
 
 func (p *validationProcessor) onObjectDone(context *processingContext, visit itemVisit) {
-	context.validateUnknownKeys(visit.item, visit.validationParentPath, visit.itemDefinition, visit.filteredAttributes)
+	context.validateUnknownKeys(
+		visit.item,
+		visit.validationParentPath,
+		visit.itemDefinition,
+		visit.filteredAttributes,
+		visit.allowUnknownAttributes,
+	)
 	context.validateConstraints(visit.item, visit.itemDefinition, visit.validationParentPath)
 }
 
@@ -817,8 +829,9 @@ func (c *processingContext) validateUnknownKeys(
 	parentAttributePath string,
 	itemDefinition *commonItemDefinition,
 	filteredAttributes map[string]*itemAttributeDefinition,
+	allowUnknownAttributes bool,
 ) {
-	if len(filteredAttributes) == 0 {
+	if allowUnknownAttributes {
 		return
 	}
 

@@ -319,6 +319,8 @@ Validation failures are reported in `ProcessingResult`; they do not normally ret
 
 For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` file and object helpers do this automatically. Use `jsonio.NewDecoder` when decoding another JSON shape, such as a typed structure, with the same number-preserving behavior. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
 
+Array attributes may use `[]any`, typed or named Go slices, or fixed-length Go arrays. Elements are validated using the same scalar and object rules as JSON-decoded array elements. If enrichment removal filters a fixed-length observable array, it replaces the array with a slice of the same element type because the result has a different length.
+
 ### Processors
 
 Create an enrichment processor:

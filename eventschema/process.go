@@ -76,6 +76,7 @@ type itemVisit struct {
 	itemDefinition          *commonItemDefinition
 	filteredAttributes      map[string]*itemAttributeDefinition
 	validateItemConstraints bool
+	allowUnknownAttributes  bool
 }
 
 type attributeVisit struct {
@@ -212,7 +213,7 @@ func (c *processingContext) processClass(
 	item jsonish.Map,
 	itemDefinition *commonItemDefinition,
 ) {
-	c.processItem(validationParentPath, enrichmentParentPath, item, itemDefinition, false, c.visitClassDone)
+	c.processItem(validationParentPath, enrichmentParentPath, item, itemDefinition, false, false, c.visitClassDone)
 }
 
 func (c *processingContext) processItem(
@@ -221,6 +222,7 @@ func (c *processingContext) processItem(
 	item jsonish.Map,
 	itemDefinition *commonItemDefinition,
 	validateItemConstraints bool,
+	allowUnknownAttributes bool,
 	done func(itemVisit),
 ) {
 	if itemDefinition == nil {
@@ -264,6 +266,7 @@ func (c *processingContext) processItem(
 		itemDefinition:          itemDefinition,
 		filteredAttributes:      filteredAttributes,
 		validateItemConstraints: validateItemConstraints,
+		allowUnknownAttributes:  allowUnknownAttributes,
 	})
 }
 
@@ -451,5 +454,13 @@ func (c *processingContext) processObjectValue(
 		status:         objectVisitValid,
 	})
 
-	c.processItem(validationPath, enrichmentPath, objectValue, &objectDef.commonItemDefinition, true, c.visitObjectDone)
+	c.processItem(
+		validationPath,
+		enrichmentPath,
+		objectValue,
+		&objectDef.commonItemDefinition,
+		true,
+		*attrDef.ObjectType == "object",
+		c.visitObjectDone,
+	)
 }

@@ -10,6 +10,15 @@ The local OCSF Server work has used the `fix-validator2` branch. The `long_t` ra
 - Missing recommended attributes warn only when the warning option is enabled.
 - Validation reports `type_uid` mismatches when `class_uid`, `activity_id`, and `type_uid` are integral.
 
+## Objects And Profiles
+
+- A direct `object_type: "object"` reference is open-ended and accepts arbitrary nested keys.
+- Other object types and event classes remain closed when profile filtering leaves no active attributes.
+- Flattened inherited profile attributes are accepted on a derived object only when their profile is active.
+- Null inactive-profile attributes are treated as missing.
+
+`validator2.ex` currently treats every empty filtered attribute set as open-ended. It should instead carry the containing attribute's `object_type` into nested validation and allow unknown keys only for a direct `object_type: "object"` reference. The generic `object` convention must not be inferred from an empty filtered or unfiltered attribute collection.
+
 ## Enums
 
 - A scalar enum sibling mismatch produces the sibling-incorrect warning.

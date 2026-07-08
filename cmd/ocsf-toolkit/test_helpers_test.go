@@ -153,6 +153,23 @@ func makeTestSymlink(t *testing.T, target, link string) {
 	}
 }
 
+func caseAliasPath(t *testing.T, path string) string {
+	t.Helper()
+	base := filepath.Base(path)
+	aliasBase := strings.ToUpper(base[:1]) + base[1:]
+	if aliasBase == base {
+		aliasBase = strings.ToLower(base[:1]) + base[1:]
+	}
+	alias := filepath.Join(filepath.Dir(path), aliasBase)
+	originalInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	aliasInfo, err := os.Stat(alias)
+	if err != nil || !os.SameFile(originalInfo, aliasInfo) {
+		t.Skip("filesystem is case-sensitive")
+	}
+	return alias
+}
+
 func readEventReport(assert *require.Assertions, path string) eventReport {
 	var output eventReport
 	readJSONFile(assert, path, &output)
