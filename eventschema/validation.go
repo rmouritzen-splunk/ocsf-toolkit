@@ -895,17 +895,17 @@ func (c *processingContext) validateVersion(event jsonish.Map) {
 		return
 	}
 	if !eventVersionOK {
-		c.addWarning(
-			"version_earlier",
+		c.addError(
+			"version_invalid_format",
 			fmt.Sprintf(
-				"Event version %q at \"metadata.version\" is earlier than schema version %q.",
+				"Event version %q at \"metadata.version\" has invalid format; expected semantic versioning format.",
 				version,
-				c.version,
 			),
 			jsonish.Map{
 				"attribute_path": "metadata.version",
 				"attribute":      "version",
 				"value":          version,
+				"expected_regex": versionPattern.String(),
 			},
 		)
 		return

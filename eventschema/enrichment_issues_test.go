@@ -24,6 +24,44 @@ func TestEnrichmentReportsEnumSiblingItCannotAdd(t *testing.T) {
 	assert.Equal(issuePhaseEnrichment, issues[0].Phase)
 }
 
+func TestEnrichmentReportsOtherCaptionAddedForEnumID99(t *testing.T) {
+	tests := []struct {
+		name          string
+		withNullValue bool
+	}{
+		{name: "missing sibling"},
+		{name: "null sibling", withNullValue: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			schema := makeValidationTestSchema(assert)
+			event := validValidationEvent()
+			event["activity_id"] = json.Number("99")
+			event["type_uid"] = json.Number("199")
+			if test.withNullValue {
+				event["activity_name"] = nil
+			}
+
+			result, err := mustNewEventProcessorPipeline(
+				assert,
+				schema,
+				NewEnrichment(WithAddObservables(false)),
+				NewValidation(),
+			).ProcessEvent(event)
+
+			assert.NoError(err)
+			assert.Equal("Other", event["activity_name"])
+			issues := issuesWithCode(result.Issues, "enrichment_enum_sibling_other_added")
+			assert.Len(issues, 1)
+			assert.Equal(issuePhaseEnrichment, issues[0].Phase)
+			assert.Equal("activity_name", issues[0].AttributePath)
+			assert.Equal("Other", issues[0].Value)
+			assert.Contains(issueCodes(result.Validation.Warnings), "attribute_enum_sibling_suspicious_other")
+		})
+	}
+}
+
 func TestEnrichmentReportsObservableObjectWithWrongType(t *testing.T) {
 	assert := require.New(t)
 	schema := makeTestSchema(assert)
@@ -269,4 +307,35 @@ func TestEnrichmentLeavesEmptyObservablesWhenObservableEnrichmentIsDisabled(t *t
 	assert.NoError(err)
 	assert.Equal(empty, event["observables"])
 	assert.Empty(result.Issues)
+}
+
+func TestEnrichmentStopsWithoutResolvedClass(t *testing.T) {
+	tests := []struct {
+		name     string
+		classUID any
+		present  bool
+	}{
+		{name: "missing"},
+		{name: "wrong type", classUID: "wrong", present: true},
+		{name: "unknown", classUID: json.Number("999"), present: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			schema := makeTestSchema(assert)
+			empty := []any{}
+			event := jsonish.Map{"observables": empty}
+			if test.present {
+				event["class_uid"] = test.classUID
+			}
+
+			result, err := mustNewEventProcessorPipeline(assert, schema, NewEnrichment()).ProcessEvent(event)
+
+			assert.NoError(err)
+			assert.Equal(empty, event["observables"])
+			assert.Zero(result.Enrichment.EnumSiblingsAdded)
+			assert.Zero(result.Enrichment.ObservablesAdded)
+			assert.Empty(result.Issues)
+		})
+	}
 }

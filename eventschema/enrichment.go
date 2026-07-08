@@ -86,23 +86,45 @@ func (p *enrichmentProcessor) addEnumSibling(context *processingContext, visit a
 	}
 	valueString := coerce.StringLenient(visit.value)
 	enumDetail := visit.attrDef.Enum[valueString]
+	reportOtherAddition := false
+	siblingName := ""
 	if visit.attrDef.Sibling != nil {
-		if _, siblingPresent := attributeValue(visit.item, *visit.attrDef.Sibling); !siblingPresent &&
+		siblingName = *visit.attrDef.Sibling
+		_, siblingPresent := attributeValue(visit.item, siblingName)
+		reportOtherAddition = !siblingPresent && isOtherEnumValue(visit.value) &&
+			enumDetail != nil && enumDetail.Caption != ""
+		if !siblingPresent &&
 			(valueString == "" || enumDetail == nil || enumDetail.Caption == "") {
 			context.addProcessorIssue(issuePhaseEnrichment, newProcessingDiagnostic(
 				"enrichment_enum_sibling_not_added",
 				fmt.Sprintf("Enum sibling %q was not added because enum value %v has no usable schema caption.",
-					*visit.attrDef.Sibling, visit.value),
+					siblingName, visit.value),
 				jsonish.Map{
 					"attribute_path": visit.validationPath,
 					"attribute":      visit.attributeName,
 					"value":          visit.value,
-					"sibling":        *visit.attrDef.Sibling,
+					"sibling":        siblingName,
 				},
 			))
 		}
 	}
 	context.addEnumSibling(visit.item, valueString, enumDetail, visit.attrDef)
+	if reportOtherAddition {
+		siblingPath := makeAttributePath(parentPath(visit.validationPath), siblingName)
+		context.addProcessorIssue(issuePhaseEnrichment, newProcessingDiagnostic(
+			"enrichment_enum_sibling_other_added",
+			fmt.Sprintf("Enum sibling %q was added with caption %q for enum ID 99 because no source-specific sibling value was present.",
+				siblingName, enumDetail.Caption),
+			jsonish.Map{
+				"attribute_path":      siblingPath,
+				"attribute":           siblingName,
+				"value":               enumDetail.Caption,
+				"enum_attribute_path": visit.validationPath,
+				"enum_attribute":      visit.attributeName,
+				"enum_value":          visit.value,
+			},
+		))
+	}
 }
 
 func (p *enrichmentProcessor) onEventDone(context *processingContext, event jsonish.Map) {

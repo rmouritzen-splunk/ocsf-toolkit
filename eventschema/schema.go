@@ -344,6 +344,9 @@ func newSchemaImpl(sd *schemaDefinition) (*schemaImpl, error) {
 	if len(sd.Classes) == 0 {
 		return nil, errors.New("compiled schema is missing classes")
 	}
+	if _, ok := parseVersion(sd.Version); !ok {
+		return nil, fmt.Errorf("compiled schema version %q has invalid format", sd.Version)
+	}
 
 	// transform classes map of class names (like "base_event") to class definitions, to class uid to class definition
 	classes := make(map[int64]*classDefinition, len(sd.Classes))

@@ -2,6 +2,7 @@ package eventschema
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -42,6 +43,7 @@ func TestLoadSchemaFromFilePreservesTypeValueNumbers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schema.json")
 	assert.NoError(os.WriteFile(path, []byte(`{
 		"compile_version": 1,
+		"version": "1.0.0",
 		"classes": {
 			"base_event": {"name": "base_event", "uid": 0}
 		},
@@ -598,6 +600,7 @@ func TestNewSchemaImplRejectsNilObservableTypeEnumDefinition(t *testing.T) {
 	var sd schemaDefinition
 	err := json.Unmarshal([]byte(`{
 		"compile_version": 1,
+		"version": "1.0.0",
 		"classes": {
 			"alpha": {"name": "alpha", "uid": 1}
 		},
@@ -628,6 +631,33 @@ func TestNewSchemaImplWithUnsupportedCompiledSchemaVersion(t *testing.T) {
 	si, err := newSchemaImpl(&sd)
 	assert.Nil(si)
 	assert.EqualError(err, "unsupported compile_version: 2")
+}
+
+func TestNewSchemaImplRejectsInvalidSchemaVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+	}{
+		{name: "missing"},
+		{name: "malformed", version: "not-a-version"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			sd := schemaDefinition{
+				CompileVersion: 1,
+				Version:        test.version,
+				Classes: map[string]*classDefinition{
+					"alpha": {commonItemDefinition: commonItemDefinition{Name: "alpha"}, Uid: 1},
+				},
+			}
+
+			si, err := newSchemaImpl(&sd)
+
+			assert.Nil(si)
+			assert.EqualError(err, fmt.Sprintf("compiled schema version %q has invalid format", test.version))
+		})
+	}
 }
 
 func TestNewSchemaImplRejectsDuplicateClassUIDs(t *testing.T) {
@@ -830,6 +860,23 @@ func TestProcessEventValidationReportsExpectedIssues(t *testing.T) {
 	assert.Contains(errorCodes, "profile_unknown")
 	assert.Contains(errorCodes, "version_incompatible_later")
 	assert.Contains(warningCodes, "attribute_recommended_missing")
+}
+
+func TestProcessEventValidationReportsInvalidVersionFormat(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	event := validValidationEvent()
+	event["metadata"].(jsonish.Map)["version"] = "not-a-version"
+
+	result, err := mustNewEventProcessorPipeline(assert, schema, NewValidation()).ProcessEvent(event)
+
+	assert.NoError(err)
+	issues := issuesWithCode(result.Validation.Errors, "version_invalid_format")
+	assert.Len(issues, 1)
+	assert.Equal("metadata.version", issues[0].AttributePath)
+	assert.Equal("not-a-version", issues[0].Value)
+	assert.Contains(issues[0].Details, "expected_regex")
+	assert.NotContains(issueCodes(result.Validation.Warnings), "version_earlier")
 }
 
 func TestProcessEventValidationLongTIsInt64(t *testing.T) {

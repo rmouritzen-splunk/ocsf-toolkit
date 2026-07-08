@@ -164,7 +164,7 @@ Output directories are created if necessary. Output files are not replaced unles
 
 Input and output directory trees must not overlap, including when symbolic links make differently written paths refer to the same location. The selected output directory itself may be a symbolic link, but the `events/` and `reports/` namespaces beneath it may not contain symbolic links.
 
-`--output-dir` writes processed events beneath `events/` and aggregate processing reports beneath `reports/`. Both namespaces preserve the input-relative path, which prevents event filenames from colliding with report filenames.
+`--output-dir` writes processed events beneath `events/` and per-event processing reports beneath `reports/`. Both namespaces preserve the input-relative path, which prevents event filenames from colliding with report filenames.
 
 - Enrichment and unenrichment create both `events/` and `reports/`.
 - Validation-only processing creates `reports/`.
@@ -375,13 +375,13 @@ pipeline, err := schema.NewEventProcessorPipeline(
 )
 ```
 
-`NewEnrichment` adds enum siblings and observables by default. Use `WithAddEnumSiblings(false)` or `WithAddObservables(false)` to disable either enrichment.
+`NewEnrichment` adds enum siblings and observables by default. Use `WithAddEnumSiblings(false)` or `WithAddObservables(false)` to disable either enrichment. When enum ID 99 has no sibling value, enrichment adds the schema caption, typically `Other`, and reports that synthesized value as an enrichment issue so a corresponding validation warning has clear provenance.
 
 `NewEventProcessorPipeline` validates the complete processing configuration. It returns an aggregate error containing all detected problems with an empty or no-op configuration, duplicate processors, retain/force conflicts, or a configuration that adds and removes the same category. CLI flag validation reports equivalent conflicts using the relevant flag names.
 
 Across event processing, an object attribute whose value is null is treated as missing. Null array elements remain invalid because no OCSF array element type permits null.
 
-Enrichment preserves existing observable entries and appends generated entries that are not duplicates. Duplicate identity uses the exact `name`, the integral `type_id`, and whether `value` is omitted, null, or an exact string; the derived `type` caption and unrelated fields do not affect identity. Each skipped generated duplicate is reported as a nonfatal enrichment issue and is not included in `ObservablesAdded`. When observable enrichment or removal leaves `observables` as an empty array, the attribute is removed. Other malformed structure that prevents requested enrichment is also reported in `ProcessingResult.Issues`; enrichment does not attempt to duplicate general validation.
+Enrichment preserves existing observable entries and appends generated entries that are not duplicates. Duplicate identity uses the exact `name`, the integral `type_id`, and whether `value` is omitted, null, or an exact string; the derived `type` caption and unrelated fields do not affect identity. Each skipped generated duplicate is reported as a nonfatal enrichment issue and is not included in `ObservablesAdded`. After the event class resolves and observable enrichment or removal runs, an empty `observables` array is removed. Other malformed structure that prevents requested enrichment is also reported in `ProcessingResult.Issues`; enrichment does not attempt to duplicate general validation.
 
 `NewEnrichmentRemoval` safely removes supported scalar integral enum siblings and redundant observables by default. Use `WithRemoveEnumSiblings(false)` or `WithRemoveObservables(false)` to retain either category. Legacy enum arrays remain untouched. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using OCSF-compatible string conversion, and an explicit null value matches either null or missing event content. Object observables without values are removed only when their path resolves to a JSON object.
 

@@ -272,6 +272,64 @@ func TestEnrichmentRemovalTreatsMissingObservablePathAsNull(t *testing.T) {
 	assert.Empty(result.Issues)
 }
 
+func TestEnrichmentRemovalPreservesExplicitNullInObservableIssueDetails(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	event["observables"] = []any{
+		jsonish.Map{"name": "ball.green", "type_id": 1000, "value": nil},
+	}
+
+	result, err := mustNewEventProcessorPipeline(
+		assert,
+		schema,
+		NewEnrichmentRemoval(WithRemoveEnumSiblings(false)),
+	).ProcessEvent(event)
+
+	assert.NoError(err)
+	assert.Contains(event, "observables")
+	assert.Equal(1, result.EnrichmentRemoval.ObservablesRetained)
+	issues := issuesWithCode(result.Issues, "observable_value_not_found")
+	assert.Len(issues, 1)
+	assert.Contains(issues[0].Details, "value")
+	assert.Nil(issues[0].Details["value"])
+}
+
+func TestSafeEnrichmentRemovalStopsWithoutResolvedClass(t *testing.T) {
+	tests := []struct {
+		name     string
+		classUID any
+		present  bool
+	}{
+		{name: "missing"},
+		{name: "wrong type", classUID: "wrong", present: true},
+		{name: "unknown", classUID: json.Number("999"), present: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			schema := makeValidationTestSchema(assert)
+			empty := []any{}
+			event := jsonish.Map{"observables": empty}
+			if test.present {
+				event["class_uid"] = test.classUID
+			}
+
+			result, err := mustNewEventProcessorPipeline(
+				assert,
+				schema,
+				NewEnrichmentRemoval(WithRemoveEnumSiblings(false)),
+			).ProcessEvent(event)
+
+			assert.NoError(err)
+			assert.Equal(empty, event["observables"])
+			assert.Zero(result.EnrichmentRemoval.ObservablesRemoved)
+			assert.Zero(result.EnrichmentRemoval.ObservablesRetained)
+		})
+	}
+}
+
 func TestValidationTreatsMissingObservablePathAsNull(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)

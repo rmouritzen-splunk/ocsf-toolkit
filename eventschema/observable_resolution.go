@@ -115,7 +115,7 @@ func (c *processingContext) resolveObservableEntry(
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_name_invalid_syntax",
 			fmt.Sprintf("Observable index %d name %q has invalid path syntax: %s.", index, name, err),
-			observableDetails(attributePath, name, observable["value"]),
+			observableDetails(attributePath, name, observable),
 		)
 		return result
 	}
@@ -123,7 +123,7 @@ func (c *processingContext) resolveObservableEntry(
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_name_invalid_reference",
 			fmt.Sprintf("Observable index %d name %q does not refer to an attribute defined for the event class.", index, name),
-			observableDetails(attributePath, name, observable["value"]),
+			observableDetails(attributePath, name, observable),
 		)
 		return result
 	}
@@ -135,7 +135,7 @@ func (c *processingContext) resolveObservableEntry(
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_path_not_found",
 			fmt.Sprintf("Observable index %d name %q does not resolve to a value in the event.", index, name),
-			observableDetails(attributePath, name, observable["value"]),
+			observableDetails(attributePath, name, observable),
 		)
 		return result
 	}
@@ -148,7 +148,7 @@ func (c *processingContext) resolveObservableEntry(
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_path_not_object",
 			fmt.Sprintf("Observable index %d without a value does not refer to an object at name %q.", index, name),
-			observableDetails(attributePath, name, nil),
+			observableDetails(attributePath, name, observable),
 		)
 		return result
 	}
@@ -160,7 +160,7 @@ func (c *processingContext) resolveObservableEntry(
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_value_not_found",
 			fmt.Sprintf("Observable index %d null value is not present at name %q.", index, name),
-			observableDetails(attributePath, name, nil),
+			observableDetails(attributePath, name, observable),
 		)
 		return result
 	}
@@ -169,7 +169,7 @@ func (c *processingContext) resolveObservableEntry(
 		result.diagnostic = newProcessingDiagnostic(
 			"observable_value_wrong_type",
 			fmt.Sprintf("Observable index %d value is not a string or null.", index),
-			observableDetails(attributePath, name, observableValue),
+			observableDetails(attributePath, name, observable),
 		)
 		return result
 	}
@@ -180,18 +180,18 @@ func (c *processingContext) resolveObservableEntry(
 	result.diagnostic = newProcessingDiagnostic(
 		"observable_value_not_found",
 		fmt.Sprintf("Observable index %d value %q is not present at name %q.", index, valueString, name),
-		observableDetails(attributePath, name, valueString),
+		observableDetails(attributePath, name, observable),
 	)
 	return result
 }
 
-func observableDetails(attributePath, name string, value any) jsonish.Map {
+func observableDetails(attributePath, name string, observable jsonish.Map) jsonish.Map {
 	details := jsonish.Map{
 		"attribute_path": attributePath,
 		"attribute":      "observables",
 		"name":           name,
 	}
-	if value != nil {
+	if value, present := observable["value"]; present {
 		details["value"] = value
 	}
 	return details

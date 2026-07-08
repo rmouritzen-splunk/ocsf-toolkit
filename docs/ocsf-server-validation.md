@@ -9,6 +9,9 @@ The local OCSF Server work has used the `fix-validator2` branch. The `long_t` ra
 - Validation-only processing does not enrich or mutate events.
 - Missing recommended attributes warn only when the warning option is enabled.
 - Validation reports `type_uid` mismatches when `class_uid`, `activity_id`, and `type_uid` are integral.
+- An event `metadata.version` that cannot be parsed reports the `version_invalid_format` error.
+
+OCSF Server commit `27532f3` introduced `version_invalid_format`, but the explicit parse-error branch was lost during the precompiled-schema refactor in commit `64d6ab3`. Restore that branch in `validator2.ex`; `Schema.Utils.parse_version/1` still returns `{:error, "malformed", value}` for this case.
 
 ## Objects And Profiles
 
