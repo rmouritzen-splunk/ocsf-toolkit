@@ -43,13 +43,12 @@ func (c *processingContext) resolveObservables(event jsonish.Map) *observableRes
 	if c.observableResolution != nil {
 		return c.observableResolution
 	}
-	resolution := &observableResolution{}
-	c.observableResolution = resolution
-
 	value, present := attributeValue(event, "observables")
 	if !present {
-		return resolution
+		return nil
 	}
+	resolution := &observableResolution{}
+	c.observableResolution = resolution
 	observables, ok := asSlice(value)
 	if !ok {
 		resolution.entries = append(resolution.entries, observableEntryResolution{
@@ -270,9 +269,9 @@ func parseObservablePathSegment(part string) (observablePathSegment, error) {
 func (c *processingContext) observablePathDefined(path observablePath) bool {
 	itemDefinition := &c.class.commonItemDefinition
 	for index, segment := range path.segments {
-		attributes := c.filterAttributes(itemDefinition.Attributes)
+		attributes := itemDefinition.Attributes
 		attrDef, present := attributes[segment.attribute]
-		if !present || attrDef == nil {
+		if !present || !c.attributeActive(attrDef) {
 			return false
 		}
 		if len(segment.selectors) > 0 && (attrDef.IsArray == nil || !*attrDef.IsArray) {

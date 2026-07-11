@@ -38,11 +38,11 @@ func (p *enrichmentProcessor) onObject(
 	}
 	if visit.status == objectVisitValid {
 		if visit.objectDef.Observable != nil {
-			context.addObjectObservable(visit.enrichmentPath, *visit.objectDef.Observable)
+			context.addObjectObservable(visit.enrichmentPath, *visit.objectDef.Observable, p.config.addEnumSiblings)
 		} else if typeID, present := context.getObservableTypeID(
 			visit.enrichmentPath, visit.attributeName, visit.attrDef,
 		); present {
-			context.addObjectObservable(visit.enrichmentPath, typeID)
+			context.addObjectObservable(visit.enrichmentPath, typeID, p.config.addEnumSiblings)
 		}
 	}
 }
@@ -76,7 +76,7 @@ func (p *enrichmentProcessor) onAttribute(
 		return
 	}
 	if typeID, present := context.getObservableTypeID(visit.enrichmentPath, visit.attributeName, visit.attrDef); present {
-		context.addValueObservable(visit.enrichmentPath, typeID, visit.value)
+		context.addValueObservable(visit.enrichmentPath, typeID, visit.value, p.config.addEnumSiblings)
 	}
 }
 
@@ -311,10 +311,6 @@ func appendObservableMapsAsAny(existing []any, generated []jsonish.Map) []any {
 	return result
 }
 
-func (c *processingContext) addEnumSiblings() bool {
-	return c.enrichment != nil && c.enrichment.config.addEnumSiblings
-}
-
 func (c *processingContext) addEnumSibling(
 	item jsonish.Map,
 	valueString string,
@@ -428,12 +424,16 @@ func (c *processingContext) objectDefinitionMayGenerateObservable(
 	return false
 }
 
-func (c *processingContext) addObjectObservable(attributePath string, observableTypeID int64) {
+func (c *processingContext) addObjectObservable(
+	attributePath string,
+	observableTypeID int64,
+	addTypeSibling bool,
+) {
 	observable := jsonish.Map{
 		"name":    attributePath,
 		"type_id": observableTypeID,
 	}
-	if c.addEnumSiblings() {
+	if addTypeSibling {
 		if typeStr, present := c.observableTypes[observableTypeID]; present {
 			observable["type"] = typeStr
 		}
@@ -441,7 +441,12 @@ func (c *processingContext) addObjectObservable(attributePath string, observable
 	c.observables = append(c.observables, observable)
 }
 
-func (c *processingContext) addValueObservable(attributePath string, observableTypeID int64, value any) {
+func (c *processingContext) addValueObservable(
+	attributePath string,
+	observableTypeID int64,
+	value any,
+	addTypeSibling bool,
+) {
 	valueStr := coerce.StringLenient(value)
 	if valueStr == "" {
 		return
@@ -451,7 +456,7 @@ func (c *processingContext) addValueObservable(attributePath string, observableT
 		"type_id": observableTypeID,
 		"value":   valueStr,
 	}
-	if c.addEnumSiblings() {
+	if addTypeSibling {
 		if typeStr, present := c.observableTypes[observableTypeID]; present {
 			observable["type"] = typeStr
 		}

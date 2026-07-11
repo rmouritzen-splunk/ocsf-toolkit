@@ -41,8 +41,12 @@ func (p *enrichmentRemovalProcessor) removeEnumSiblingsFromItem(
 	if !p.config.removeEnumSiblings || itemDefinition == nil {
 		return
 	}
-	attributes := context.filterAttributes(itemDefinition.Attributes)
-	for attributeName, attrDef := range attributes {
+	attributes := itemDefinition.Attributes
+	for _, attributeName := range itemDefinition.processing.attributeNames {
+		attrDef := attributes[attributeName]
+		if !context.attributeActive(attrDef) {
+			continue
+		}
 		if attrDef == nil || attrDef.Enum == nil || attrDef.Sibling == nil {
 			continue
 		}

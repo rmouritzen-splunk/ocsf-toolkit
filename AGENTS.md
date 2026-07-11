@@ -48,6 +48,8 @@ Use `jsonish.Map` for JSON objects in event-processing APIs. For JSON input, pre
 
 Event enrichment intentionally mutates event maps in place and is not transactional. Preserve and document this behavior unless a change is explicitly requested. Validation must run after enrichment and any future event-mutating processors.
 
+Treat `EventProcessorPipeline.ProcessEvent` and the schema-guided visitor callbacks as a hot loop that may process tens of thousands of events per second. Construct pipelines once and keep schema data, processor configuration, compiled constraints, and other reusable metadata immutable and pipeline-owned. Per-event contexts should contain only event-specific mutable state and references to shared immutable data; do not copy processor collections or rebuild reusable metadata for each event. Avoid unnecessary heap allocations, temporary maps, slices, strings, reflection, and repeated parsing in the traversal path. Use representative benchmarks, allocation counts, and profiles to guide non-obvious optimizations, and preserve correctness, deterministic results, concurrency safety, and useful diagnostics.
+
 Follow OCSF terminology, including "enum siblings" and "observables." JSON field names exposed by the toolkit should use `snake_case`.
 
 ## Security And Robustness

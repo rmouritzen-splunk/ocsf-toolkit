@@ -11,10 +11,8 @@ var errNilEvent = errors.New("event is nil")
 
 type processingContext struct {
 	*schemaImpl
-	result     ProcessingResult
-	processors []eventProcessVisitor
-	validation *validationProcessor
-	enrichment *enrichmentProcessor
+	pipeline *eventProcessorPipelineImpl
+	result   ProcessingResult
 
 	class                *classDefinition
 	activeProfiles       map[string]struct{}
@@ -74,7 +72,6 @@ type itemVisit struct {
 	item                    jsonish.Map
 	validationParentPath    string
 	itemDefinition          *commonItemDefinition
-	filteredAttributes      map[string]*itemAttributeDefinition
 	validateItemConstraints bool
 	allowUnknownAttributes  bool
 }
@@ -138,22 +135,14 @@ func (eventProcessVisitorBase) onObjectDone(*processingContext, itemVisit)     {
 func (eventProcessVisitorBase) onAttribute(*processingContext, attributeVisit) {}
 func (eventProcessVisitorBase) onEventDone(*processingContext, jsonish.Map)    {}
 
-func (si *schemaImpl) processEvent(event jsonish.Map, processors []eventProcessVisitor) (ProcessingResult, error) {
+func (p *eventProcessorPipelineImpl) ProcessEvent(event jsonish.Map) (ProcessingResult, error) {
 	if event == nil {
 		return ProcessingResult{}, errNilEvent
 	}
 
-	context := &processingContext{
-		schemaImpl: si,
-		processors: processors,
-	}
-	for _, processor := range processors {
-		switch processor := processor.(type) {
-		case *validationProcessor:
-			context.validation = processor
-		case *enrichmentProcessor:
-			context.enrichment = processor
-		}
+	context := processingContext{
+		schemaImpl: p.schema,
+		pipeline:   p,
 	}
 
 	context.resolveClass(event)
@@ -172,38 +161,104 @@ func (si *schemaImpl) processEvent(event jsonish.Map, processors []eventProcessV
 }
 
 func (c *processingContext) visitClass(visit classVisit) {
-	for _, processor := range c.processors {
+	for _, processor := range c.pipeline.transforms {
 		processor.onClass(c, visit)
+	}
+	if c.pipeline.validation != nil {
+		c.pipeline.validation.onClass(c, visit)
 	}
 }
 
 func (c *processingContext) visitClassDone(visit itemVisit) {
-	for _, processor := range c.processors {
+	for _, processor := range c.pipeline.transforms {
 		processor.onClassDone(c, visit)
+	}
+	if c.pipeline.validation != nil {
+		c.pipeline.validation.onClassDone(c, visit)
 	}
 }
 
 func (c *processingContext) visitObject(visit objectVisit) {
-	for _, processor := range c.processors {
+	for _, processor := range c.pipeline.transforms {
 		processor.onObject(c, visit)
+	}
+	if c.pipeline.validation != nil {
+		c.pipeline.validation.onObject(c, visit)
 	}
 }
 
 func (c *processingContext) visitObjectDone(visit itemVisit) {
-	for _, processor := range c.processors {
+	for _, processor := range c.pipeline.transforms {
 		processor.onObjectDone(c, visit)
+	}
+	if c.pipeline.validation != nil {
+		c.pipeline.validation.onObjectDone(c, visit)
 	}
 }
 
 func (c *processingContext) visitAttribute(visit attributeVisit) {
-	for _, processor := range c.processors {
+	for _, processor := range c.pipeline.transforms {
 		processor.onAttribute(c, visit)
+	}
+	if c.pipeline.validation != nil {
+		c.pipeline.validation.onAttribute(c, visit)
 	}
 }
 
 func (c *processingContext) visitEventDone(event jsonish.Map) {
-	for _, processor := range c.processors {
+	for _, processor := range c.pipeline.transforms {
 		processor.onEventDone(c, event)
+	}
+	if c.pipeline.validation != nil {
+		c.pipeline.validation.onEventDone(c, event)
+	}
+}
+
+func (p transformEventProcessor) onClass(context *processingContext, visit classVisit) {
+	if p.enrichment != nil {
+		p.enrichment.onClass(context, visit)
+	} else {
+		p.removal.onClass(context, visit)
+	}
+}
+
+func (p transformEventProcessor) onClassDone(context *processingContext, visit itemVisit) {
+	if p.enrichment != nil {
+		p.enrichment.onClassDone(context, visit)
+	} else {
+		p.removal.onClassDone(context, visit)
+	}
+}
+
+func (p transformEventProcessor) onObject(context *processingContext, visit objectVisit) {
+	if p.enrichment != nil {
+		p.enrichment.onObject(context, visit)
+	} else {
+		p.removal.onObject(context, visit)
+	}
+}
+
+func (p transformEventProcessor) onObjectDone(context *processingContext, visit itemVisit) {
+	if p.enrichment != nil {
+		p.enrichment.onObjectDone(context, visit)
+	} else {
+		p.removal.onObjectDone(context, visit)
+	}
+}
+
+func (p transformEventProcessor) onAttribute(context *processingContext, visit attributeVisit) {
+	if p.enrichment != nil {
+		p.enrichment.onAttribute(context, visit)
+	} else {
+		p.removal.onAttribute(context, visit)
+	}
+}
+
+func (p transformEventProcessor) onEventDone(context *processingContext, event jsonish.Map) {
+	if p.enrichment != nil {
+		p.enrichment.onEventDone(context, event)
+	} else {
+		p.removal.onEventDone(context, event)
 	}
 }
 
@@ -228,14 +283,18 @@ func (c *processingContext) processItem(
 	if itemDefinition == nil {
 		return
 	}
-	filteredAttributes := c.filterAttributes(itemDefinition.Attributes)
-
-	attributeNames := sortedAttributeNames(filteredAttributes)
-	for _, attributeName := range attributeNames {
-		attrDef := filteredAttributes[attributeName]
+	metadata := itemDefinition.processing
+	for _, attributeName := range metadata.attributeNames {
+		attrDef := itemDefinition.Attributes[attributeName]
+		if !c.attributeActive(attrDef) {
+			continue
+		}
 		value, present := attributeValue(item, attributeName)
-		validationPath := makeAttributePath(validationParentPath, attributeName)
-		enrichmentPath := makeAttributePath(enrichmentParentPath, attributeName)
+		validationPath, enrichmentPath := c.makeProcessingPaths(
+			validationParentPath,
+			enrichmentParentPath,
+			attributeName,
+		)
 
 		if !present {
 			c.visitAttribute(attributeVisit{
@@ -264,38 +323,50 @@ func (c *processingContext) processItem(
 		item:                    item,
 		validationParentPath:    validationParentPath,
 		itemDefinition:          itemDefinition,
-		filteredAttributes:      filteredAttributes,
 		validateItemConstraints: validateItemConstraints,
 		allowUnknownAttributes:  allowUnknownAttributes,
 	})
 }
 
-func (c *processingContext) filterAttributes(
-	attributes map[string]*itemAttributeDefinition,
-) map[string]*itemAttributeDefinition {
-	if len(attributes) == 0 {
-		return attributes
+func (c *processingContext) makeProcessingPaths(
+	validationParentPath string,
+	enrichmentParentPath string,
+	attributeName string,
+) (string, string) {
+	if c.pipeline.needsValidationPath && c.pipeline.needsEnrichmentPath &&
+		validationParentPath == enrichmentParentPath {
+		path := makeAttributePath(validationParentPath, attributeName)
+		return path, path
 	}
-	filtered := make(map[string]*itemAttributeDefinition, len(attributes))
-	for attributeName, attributeDefinition := range attributes {
-		if attributeDefinition == nil {
-			continue
-		}
-		if len(attributeDefinition.Profiles) == 0 {
-			filtered[attributeName] = attributeDefinition
-			continue
-		}
-		for _, profile := range attributeDefinition.Profiles {
-			if _, present := c.activeProfiles[profile]; present {
-				filtered[attributeName] = attributeDefinition
-				break
-			}
+	var validationPath, enrichmentPath string
+	if c.pipeline.needsValidationPath {
+		validationPath = makeAttributePath(validationParentPath, attributeName)
+	}
+	if c.pipeline.needsEnrichmentPath {
+		enrichmentPath = makeAttributePath(enrichmentParentPath, attributeName)
+	}
+	return validationPath, enrichmentPath
+}
+
+func (c *processingContext) attributeActive(attributeDefinition *itemAttributeDefinition) bool {
+	if attributeDefinition == nil {
+		return false
+	}
+	if len(attributeDefinition.Profiles) == 0 {
+		return true
+	}
+	for _, profile := range attributeDefinition.Profiles {
+		if _, present := c.activeProfiles[profile]; present {
+			return true
 		}
 	}
-	return filtered
+	return false
 }
 
 func makeProfileSet(profiles []string) map[string]struct{} {
+	if len(profiles) == 0 {
+		return nil
+	}
 	profileSet := make(map[string]struct{}, len(profiles))
 	for _, profile := range profiles {
 		profileSet[profile] = struct{}{}
@@ -310,6 +381,36 @@ func sortedAttributeNames(attributes map[string]*itemAttributeDefinition) []stri
 	}
 	sort.Strings(names)
 	return names
+}
+
+func (si *schemaImpl) ensureProcessingMetadata() {
+	si.processingMetadataOnce.Do(func() {
+		for _, class := range si.classes {
+			if class != nil {
+				class.processing = makeItemProcessingMetadata(&class.commonItemDefinition)
+			}
+		}
+		for _, object := range si.objects {
+			if object != nil {
+				object.processing = makeItemProcessingMetadata(&object.commonItemDefinition)
+			}
+		}
+	})
+}
+
+func makeItemProcessingMetadata(item *commonItemDefinition) itemProcessingMetadata {
+	if item == nil {
+		return itemProcessingMetadata{}
+	}
+	constraintKeys := make([]string, 0, len(item.Constraints))
+	for key := range item.Constraints {
+		constraintKeys = append(constraintKeys, key)
+	}
+	sort.Strings(constraintKeys)
+	return itemProcessingMetadata{
+		attributeNames: sortedAttributeNames(item.Attributes),
+		constraintKeys: constraintKeys,
+	}
 }
 
 func (c *processingContext) processAttribute(
@@ -367,7 +468,10 @@ func (c *processingContext) processArray(
 	}
 
 	for index, element := range values {
-		elementValidationPath := makeArrayElementPath(validationPath, index)
+		elementValidationPath := validationPath
+		if c.pipeline.needsValidationPath {
+			elementValidationPath = makeArrayElementPath(validationPath, index)
+		}
 		c.processValue(item, element, elementValidationPath, enrichmentPath, attributeName, attrDef, index)
 	}
 }

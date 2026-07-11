@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/ocsf/ocsf-toolkit/jsonio"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
@@ -473,6 +474,8 @@ type commonItemDefinition struct {
 	Profiles    []string                            `json:"profiles,omitempty"`
 	Constraints map[string][]string                 `json:"constraints,omitempty"`
 	Attributes  map[string]*itemAttributeDefinition `json:"attributes,omitempty"`
+	// processing is immutable traversal metadata initialized before the first pipeline is returned.
+	processing itemProcessingMetadata
 }
 
 type classDefinition struct {
@@ -530,4 +533,13 @@ type schemaImpl struct {
 	profiles        map[string]*profileDefinition
 	version         string
 	observableTypes map[int64]string
+
+	processingMetadataOnce sync.Once // Pipeline construction only; never entered by ProcessEvent.
+	validationMetadataOnce sync.Once // Pipeline construction only; never entered by ProcessEvent.
+	validationMetadata     schemaValidationMetadata
+}
+
+type itemProcessingMetadata struct {
+	attributeNames []string
+	constraintKeys []string
 }

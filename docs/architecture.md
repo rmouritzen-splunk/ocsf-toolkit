@@ -39,15 +39,25 @@ Enrichment removal safely removes scalar integral enum siblings and observables 
 
 `NewEventProcessorPipeline` is the authoritative validator for processing semantics. Each processor retains an ordered, typed pipeline registration so validation can report processor-specific and cross-processor problems without losing attribution. Construction returns an aggregate error containing every detected empty or no-op configuration, duplicate processor, retain/force conflict, and attempt to add and remove the same enrichment category. The CLI additionally validates flag relationships so it can identify invalid flags directly; path, output, overwrite, and traversal rules remain CLI concerns.
 
-Validation factories are always placed after mutating processor factories, regardless of the order passed to `NewEventProcessorPipeline`. This guarantees that validation observes enrichment and any future event mutation. New mutating processors must preserve validation as the final phase.
+Mutating processors retain their configured order and are dispatched through concrete internal processor slots. Validation is always dispatched after them, regardless of the order passed to `NewEventProcessorPipeline`. This guarantees that validation observes enrichment and any future event mutation while allowing the per-event context to remain stack allocated. New mutating processors must preserve validation as the final phase.
 
 Constructed `EventProcessorPipeline` values contain immutable processor configuration and are safe for concurrent use when each call receives a distinct event map.
 
+## Hot-Loop Performance
+
+`EventProcessorPipeline` is designed to be constructed once and reused while processing thousands or tens of thousands of events per second. `ProcessEvent`, its schema-guided traversal, and processor visitor callbacks are therefore hot-loop code.
+
+Loaded schema data, ordered processors, processor configuration, compiled constraints, and other reusable metadata belong to the immutable schema or pipeline rather than the per-event processing context. Ordered attribute and constraint names are initialized once beside their class or object definitions. Validation-enabled pipelines additionally initialize the parsed schema version and compiled type regular expressions once; enrichment-only pipelines do not pay that cost. A processing context contains only mutable state for one event plus references to shared immutable data. Processing must not copy processor collections, rebuild reusable traversal metadata, or perform other avoidable per-event work merely to recover information already owned by the pipeline.
+
+First-use metadata synchronization occurs only while constructing a pipeline. `ProcessEvent` reads immutable shared metadata and does not acquire cache locks. Event-local analysis stays in the processing context. New shared caches for event-controlled values must be bounded, concurrency-safe, and benchmarked against uncached processing; a cache should not be added when lookup, synchronization, or miss churn costs more than allocation-free computation.
+
+Implementations should avoid unnecessary heap allocations and temporary maps, slices, strings, reflection, parsing, sorting, and conversion in the traversal path. This is a design constraint, not permission for speculative complexity: use representative benchmarks, allocation counts, escape analysis, and profiles to identify meaningful costs. Performance changes must preserve correctness, deterministic diagnostics, concurrency safety, malformed-input handling, and the public processing contract.
+
 ## Single-Pass Visitor
 
-Each `ProcessEvent` call creates a fresh `processingContext` and performs one recursive schema-guided walk. Internal visitors receive hooks at the class, object, attribute, completed-item, and completed-event levels.
+Each `ProcessEvent` call creates a fresh stack-resident `processingContext` and performs one recursive schema-guided walk. Concrete internal processors receive hooks at the class, object, attribute, completed-item, and completed-event levels; interface-based dispatch is limited to pipeline construction so the event context does not escape merely through processor callbacks.
 
-The shared walker owns traversal, profile filtering, object lookup, array handling, and path construction. Individual visitors perform processor-specific work:
+The shared walker owns traversal, profile filtering, object lookup, array handling, and path construction. It iterates immutable ordered attribute names and skips inactive profile-scoped definitions without constructing a filtered map. It builds validation and enrichment paths only when configured processors consume them and shares identical paths until array indexing makes their forms diverge. Individual processors perform processor-specific work:
 
 - Enrichment adds missing enum siblings, gathers schema-defined observables, and writes generated observables at the end of the event.
 - Enrichment removal analyzes and filters observables before class attribute traversal, then removes supported enum siblings before each class or object item is traversed. This ensures validation observes only the final retained content.
@@ -106,5 +116,6 @@ All mutations and validation complete before output decisions are made for an ev
 - OCSF integer types use signed 64-bit semantics.
 - `jsonish.Map` remains the public JSON-object type.
 - Validation issues remain data; only processing failures become Go errors.
+- Event processing remains suitable for hot-loop use: reusable data is immutable and pipeline-owned, while per-event state and allocations are kept proportionate to the requested work and returned results.
 - Filesystem overwrite and output-path policy remain in the CLI layer.
 - The library and CLI do not impose a general input-size limit. Callers and deployment environments may impose their own limits.

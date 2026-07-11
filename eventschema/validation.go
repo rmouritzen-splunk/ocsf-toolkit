@@ -23,6 +23,19 @@ type validationProcessor struct {
 	config validationConfig
 }
 
+type schemaValidationMetadata struct {
+	versionOK        bool
+	version          parsedVersion
+	regexConstraints map[string]compiledRegexConstraint
+}
+
+type compiledRegexConstraint struct {
+	typeName string
+	regex    string
+	compiled *regexp.Regexp
+	err      error
+}
+
 func (p *validationProcessor) onClass(context *processingContext, visit classVisit) {
 	switch visit.status {
 	case classVisitUIDMissing:
@@ -103,7 +116,6 @@ func (p *validationProcessor) onClassDone(context *processingContext, visit item
 		visit.item,
 		visit.validationParentPath,
 		visit.itemDefinition,
-		visit.filteredAttributes,
 		visit.allowUnknownAttributes,
 	)
 }
@@ -113,7 +125,6 @@ func (p *validationProcessor) onObjectDone(context *processingContext, visit ite
 		visit.item,
 		visit.validationParentPath,
 		visit.itemDefinition,
-		visit.filteredAttributes,
 		visit.allowUnknownAttributes,
 	)
 	context.validateConstraints(visit.item, visit.itemDefinition, visit.validationParentPath)
@@ -125,7 +136,12 @@ func (p *validationProcessor) onAttribute(
 ) {
 	switch visit.status {
 	case attributeVisitMissing:
-		context.validateRequirement(visit.validationPath, visit.attributeName, visit.attrDef)
+		context.validateRequirement(
+			visit.validationPath,
+			visit.attributeName,
+			visit.attrDef,
+			p.config.warnOnMissingRecommended,
+		)
 		return
 	case attributeVisitArrayWrongType:
 		context.addWrongType(visit.validationPath, visit.attributeName, visit.value, "array of "+visit.attrDef.Type, "")
@@ -246,10 +262,6 @@ func (p *validationProcessor) onEventDone(context *processingContext, event json
 	context.validateObservables(event)
 }
 
-func (c *processingContext) warnOnMissingRecommended() bool {
-	return c.validation != nil && c.validation.config.warnOnMissingRecommended
-}
-
 func (c *processingContext) resolveClass(event jsonish.Map) {
 	classUID, present, ok := getInt64(event["class_uid"])
 	if !present {
@@ -300,6 +312,7 @@ func (c *processingContext) validateRequirement(
 	attributePath string,
 	attributeName string,
 	attrDef *itemAttributeDefinition,
+	warnOnMissingRecommended bool,
 ) {
 	if attrDef == nil {
 		return
@@ -308,7 +321,7 @@ func (c *processingContext) validateRequirement(
 	case "required":
 		c.addRequiredAttributeMissing(attributePath, attributeName)
 	case "recommended":
-		if c.warnOnMissingRecommended() {
+		if warnOnMissingRecommended {
 			c.addWarning(
 				"attribute_recommended_missing",
 				fmt.Sprintf("Recommended attribute %q is missing.", attributePath),
@@ -731,29 +744,27 @@ func (c *processingContext) validateStringRegex(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.resolveRegexConstraint(attributeTypeName)
-	if typeDef == nil || typeDef.RegEx == nil {
+	constraint, present := c.validationMetadata.regexConstraints[attributeTypeName]
+	if !present {
 		return
 	}
 
-	regex := *typeDef.RegEx
-	compiledRegex, err := regexp.Compile(regex)
-	if err != nil {
+	if constraint.err != nil {
 		c.addError(
 			"schema_bug_type_regex_invalid",
-			fmt.Sprintf("SCHEMA BUG: Type %q specifies an invalid regex: %s.", typeName, err),
+			fmt.Sprintf("SCHEMA BUG: Type %q specifies an invalid regex: %s.", constraint.typeName, constraint.err),
 			jsonish.Map{
 				"attribute_path":       attributePath,
 				"attribute":            attributeName,
-				"type":                 typeName,
-				"regex":                regex,
-				"regex_error_message":  err.Error(),
+				"type":                 constraint.typeName,
+				"regex":                constraint.regex,
+				"regex_error_message":  constraint.err.Error(),
 				"regex_error_position": nil,
 			},
 		)
 		return
 	}
-	if compiledRegex.MatchString(value) {
+	if constraint.compiled.MatchString(value) {
 		return
 	}
 
@@ -762,18 +773,18 @@ func (c *processingContext) validateStringRegex(
 		"attribute_path": attributePath,
 		"attribute":      attributeName,
 		"type":           attributeTypeName,
-		"regex":          regex,
+		"regex":          constraint.regex,
 		"value":          value,
 	}
 	message := fmt.Sprintf("Attribute %q value does not match regex of type %q.", attributePath, attributeTypeName)
-	if typeName != attributeTypeName {
+	if constraint.typeName != attributeTypeName {
 		code = "attribute_value_super_type_regex_not_matched"
-		details["super_type"] = typeName
+		details["super_type"] = constraint.typeName
 		message = fmt.Sprintf(
 			"Attribute %q, type %q, value does not match regex of super type %q.",
 			attributePath,
 			attributeTypeName,
-			typeName,
+			constraint.typeName,
 		)
 	}
 	c.addWarning(code, message, details)
@@ -797,17 +808,50 @@ func (c *processingContext) resolveMaxLenConstraint(typeName string) (string, *t
 	})
 }
 
-func (c *processingContext) resolveRegexConstraint(typeName string) (string, *typeDefinition) {
-	return c.resolveTypeConstraint(typeName, func(typeDef *typeDefinition) bool {
-		return typeDef.RegEx != nil
-	})
-}
-
 func (c *processingContext) resolveTypeConstraint(
 	typeName string,
 	predicate func(*typeDefinition) bool,
 ) (string, *typeDefinition) {
-	typeDef, present := c.dictionary.Types.Attributes[typeName]
+	return resolveTypeConstraint(c.dictionary, typeName, predicate)
+}
+
+func (si *schemaImpl) ensureValidationMetadata() {
+	si.validationMetadataOnce.Do(func() {
+		version, versionOK := parseVersion(si.version)
+		metadata := schemaValidationMetadata{
+			version:          version,
+			versionOK:        versionOK,
+			regexConstraints: make(map[string]compiledRegexConstraint),
+		}
+		for typeName := range si.dictionary.Types.Attributes {
+			resolvedName, typeDef := resolveTypeConstraint(si.dictionary, typeName, func(typeDef *typeDefinition) bool {
+				return typeDef.RegEx != nil
+			})
+			if typeDef == nil || typeDef.RegEx == nil {
+				continue
+			}
+			regex := *typeDef.RegEx
+			compiled, err := regexp.Compile(regex)
+			metadata.regexConstraints[typeName] = compiledRegexConstraint{
+				typeName: resolvedName,
+				regex:    regex,
+				compiled: compiled,
+				err:      err,
+			}
+		}
+		si.validationMetadata = metadata
+	})
+}
+
+func resolveTypeConstraint(
+	dictionary *dictionaryDefinition,
+	typeName string,
+	predicate func(*typeDefinition) bool,
+) (string, *typeDefinition) {
+	if dictionary == nil || dictionary.Types == nil {
+		return "", nil
+	}
+	typeDef, present := dictionary.Types.Attributes[typeName]
 	if !present || typeDef == nil {
 		return "", nil
 	}
@@ -817,7 +861,7 @@ func (c *processingContext) resolveTypeConstraint(
 	if typeDef.Type == "" {
 		return "", nil
 	}
-	superType, present := c.dictionary.Types.Attributes[typeDef.Type]
+	superType, present := dictionary.Types.Attributes[typeDef.Type]
 	if !present || superType == nil || !predicate(superType) {
 		return "", nil
 	}
@@ -828,26 +872,26 @@ func (c *processingContext) validateUnknownKeys(
 	item jsonish.Map,
 	parentAttributePath string,
 	itemDefinition *commonItemDefinition,
-	filteredAttributes map[string]*itemAttributeDefinition,
 	allowUnknownAttributes bool,
 ) {
 	if allowUnknownAttributes {
 		return
 	}
 
-	eventKeys := make([]string, 0, len(item))
+	var unknownKeys []string
 	for key := range item {
-		eventKeys = append(eventKeys, key)
-	}
-	sort.Strings(eventKeys)
-
-	for _, key := range eventKeys {
 		if item[key] == nil {
 			continue
 		}
-		if _, present := filteredAttributes[key]; present {
+		attribute, present := itemDefinition.Attributes[key]
+		if present && c.attributeActive(attribute) {
 			continue
 		}
+		unknownKeys = append(unknownKeys, key)
+	}
+	sort.Strings(unknownKeys)
+
+	for _, key := range unknownKeys {
 		attributePath := makeAttributePath(parentAttributePath, key)
 		details := jsonish.Map{
 			"attribute_path": attributePath,
@@ -889,10 +933,13 @@ func (c *processingContext) validateVersion(event jsonish.Map) {
 		return
 	}
 
-	eventVersion, eventVersionOK := parseVersion(version)
-	schemaVersion, schemaVersionOK := parseVersion(c.version)
-	if !schemaVersionOK {
+	if !c.validationMetadata.versionOK {
 		return
+	}
+	schemaVersion := c.validationMetadata.version
+	eventVersion, eventVersionOK := schemaVersion, true
+	if version != c.version {
+		eventVersion, eventVersionOK = parseVersion(version)
 	}
 	if !eventVersionOK {
 		c.addError(
@@ -1048,13 +1095,7 @@ func (c *processingContext) validateConstraints(
 		return
 	}
 
-	constraintKeys := make([]string, 0, len(itemDefinition.Constraints))
-	for constraintKey := range itemDefinition.Constraints {
-		constraintKeys = append(constraintKeys, constraintKey)
-	}
-	sort.Strings(constraintKeys)
-
-	for _, constraintKey := range constraintKeys {
+	for _, constraintKey := range itemDefinition.processing.constraintKeys {
 		constraintDetails := itemDefinition.Constraints[constraintKey]
 		switch constraintKey {
 		case "at_least_one":
@@ -1141,14 +1182,14 @@ func hasPathOrKey(eventItem jsonish.Map, path string) bool {
 	if _, present := attributeValue(eventItem, path); present {
 		return true
 	}
-	parts := strings.Split(path, ".")
 	current := eventItem
-	for index, part := range parts {
+	for {
+		part, remainder, nested := strings.Cut(path, ".")
 		value, present := attributeValue(current, part)
 		if !present {
 			return false
 		}
-		if index == len(parts)-1 {
+		if !nested {
 			return true
 		}
 		next, ok := value.(jsonish.Map)
@@ -1156,12 +1197,15 @@ func hasPathOrKey(eventItem jsonish.Map, path string) bool {
 			return false
 		}
 		current = next
+		path = remainder
 	}
-	return false
 }
 
 func (c *processingContext) validateObservables(event jsonish.Map) {
 	resolution := c.resolveObservables(event)
+	if resolution == nil {
+		return
+	}
 	for _, entry := range resolution.entries {
 		if !entry.removed && entry.diagnostic != nil && !diagnosticCoveredByStructuralValidation(entry.diagnostic) {
 			c.addError(entry.diagnostic.code, entry.diagnostic.message, entry.diagnostic.details)
@@ -1267,28 +1311,54 @@ type parsedVersion struct {
 var versionPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(.+))?$`)
 
 func parseVersion(value string) (parsedVersion, bool) {
-	matches := versionPattern.FindStringSubmatch(value)
-	if matches == nil {
+	core := value
+	prerelease := ""
+	if before, after, found := strings.Cut(value, "-"); found {
+		if after == "" || strings.ContainsRune(after, '\n') {
+			return parsedVersion{}, false
+		}
+		core = before
+		prerelease = after
+	}
+	majorText, remainder, found := strings.Cut(core, ".")
+	if !found {
 		return parsedVersion{}, false
 	}
-	major, err := strconv.Atoi(matches[1])
-	if err != nil {
+	minorText, patchText, found := strings.Cut(remainder, ".")
+	if !found || strings.Contains(patchText, ".") {
 		return parsedVersion{}, false
 	}
-	minor, err := strconv.Atoi(matches[2])
-	if err != nil {
+	major, ok := parseVersionNumber(majorText)
+	if !ok {
 		return parsedVersion{}, false
 	}
-	patch, err := strconv.Atoi(matches[3])
-	if err != nil {
+	minor, ok := parseVersionNumber(minorText)
+	if !ok {
+		return parsedVersion{}, false
+	}
+	patch, ok := parseVersionNumber(patchText)
+	if !ok {
 		return parsedVersion{}, false
 	}
 	return parsedVersion{
 		major:      major,
 		minor:      minor,
 		patch:      patch,
-		prerelease: matches[4],
+		prerelease: prerelease,
 	}, true
+}
+
+func parseVersionNumber(value string) (int, bool) {
+	if value == "" || len(value) > 1 && value[0] == '0' {
+		return 0, false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return 0, false
+		}
+	}
+	number, err := strconv.Atoi(value)
+	return number, err == nil
 }
 
 func (v parsedVersion) equal(other parsedVersion) bool {

@@ -3,8 +3,6 @@ package eventschema
 import (
 	"errors"
 	"fmt"
-
-	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
 type processorKind string
@@ -29,8 +27,16 @@ type configuredProcessor struct {
 type processorFactory func() eventProcessVisitor
 
 type eventProcessorPipelineImpl struct {
-	schema     *schemaImpl
-	processors []eventProcessVisitor
+	schema              *schemaImpl
+	transforms          []transformEventProcessor
+	validation          *validationProcessor
+	needsValidationPath bool
+	needsEnrichmentPath bool
+}
+
+type transformEventProcessor struct {
+	enrichment *enrichmentProcessor
+	removal    *enrichmentRemovalProcessor
 }
 
 func (si *schemaImpl) NewEventProcessorPipeline(processors ...EventProcessor) (EventProcessorPipeline, error) {
@@ -43,21 +49,51 @@ func (si *schemaImpl) NewEventProcessorPipeline(processors ...EventProcessor) (E
 	if err := validatePipelineConfig(config); err != nil {
 		return nil, err
 	}
-	visitors := make([]eventProcessVisitor, 0, len(config.processors))
-	for _, processor := range config.processors {
-		if processor.kind != processorKindValidation {
-			visitors = append(visitors, processor.factory())
-		}
-	}
+	si.ensureProcessingMetadata()
+	validationEnabled := false
 	for _, processor := range config.processors {
 		if processor.kind == processorKindValidation {
-			visitors = append(visitors, processor.factory())
+			validationEnabled = true
+			break
 		}
 	}
-	return &eventProcessorPipelineImpl{
+	if validationEnabled {
+		si.ensureValidationMetadata()
+	}
+	transformCount := len(config.processors)
+	if validationEnabled {
+		transformCount--
+	}
+	pipeline := &eventProcessorPipelineImpl{
 		schema:     si,
-		processors: visitors,
-	}, nil
+		transforms: make([]transformEventProcessor, 0, transformCount),
+	}
+	for _, processor := range config.processors {
+		switch processor.kind {
+		case processorKindEnrichment:
+			visitor, ok := processor.factory().(*enrichmentProcessor)
+			if !ok {
+				return nil, errors.New("enrichment processor factory returned an unexpected implementation")
+			}
+			pipeline.transforms = append(pipeline.transforms, transformEventProcessor{enrichment: visitor})
+			pipeline.needsValidationPath = true
+			pipeline.needsEnrichmentPath = processor.enrichment.addObservables
+		case processorKindEnrichmentRemoval:
+			visitor, ok := processor.factory().(*enrichmentRemovalProcessor)
+			if !ok {
+				return nil, errors.New("enrichment-removal processor factory returned an unexpected implementation")
+			}
+			pipeline.transforms = append(pipeline.transforms, transformEventProcessor{removal: visitor})
+		case processorKindValidation:
+			visitor, ok := processor.factory().(*validationProcessor)
+			if !ok {
+				return nil, errors.New("validation processor factory returned an unexpected implementation")
+			}
+			pipeline.validation = visitor
+			pipeline.needsValidationPath = true
+		}
+	}
+	return pipeline, nil
 }
 
 func validatePipelineConfig(config pipelineConfig) error {
@@ -127,8 +163,4 @@ func processorLabel(kind processorKind, index int, count int) string {
 		return fmt.Sprintf("%s processor at position %d", kind, index+1)
 	}
 	return string(kind) + " processor"
-}
-
-func (p *eventProcessorPipelineImpl) ProcessEvent(event jsonish.Map) (ProcessingResult, error) {
-	return p.schema.processEvent(event, p.processors)
 }

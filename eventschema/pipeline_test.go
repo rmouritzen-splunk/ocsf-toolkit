@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 
@@ -162,6 +163,58 @@ func TestEventProcessorPipelineProcessesDistinctEventsConcurrently(t *testing.T)
 					errorsFound <- errors.New("event observables were not enriched")
 					return
 				}
+			}
+		}()
+	}
+
+	close(start)
+	workers.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		assert.NoError(err)
+	}
+}
+
+func TestEventProcessorPipelineInitializesSharedMetadataLazily(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	assert.Nil(schema.classes[1].processing.attributeNames)
+	assert.Nil(schema.validationMetadata.regexConstraints)
+
+	_, err := schema.NewEventProcessorPipeline(NewEnrichment())
+	assert.NoError(err)
+	assert.Nil(schema.validationMetadata.regexConstraints)
+	for _, class := range schema.classes {
+		assert.True(sort.StringsAreSorted(class.processing.attributeNames))
+		assert.True(sort.StringsAreSorted(class.processing.constraintKeys))
+	}
+	for _, object := range schema.objects {
+		assert.True(sort.StringsAreSorted(object.processing.attributeNames))
+		assert.True(sort.StringsAreSorted(object.processing.constraintKeys))
+	}
+
+	_, err = schema.NewEventProcessorPipeline(NewValidation())
+	assert.NoError(err)
+	assert.True(schema.validationMetadata.versionOK)
+	assert.NotNil(schema.validationMetadata.regexConstraints)
+}
+
+func TestEventProcessorPipelineConstructionIsConcurrent(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+
+	const workerCount = 16
+	start := make(chan struct{})
+	errorsFound := make(chan error, workerCount)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			<-start
+			_, err := schema.NewEventProcessorPipeline(NewEnrichment(), NewValidation())
+			if err != nil {
+				errorsFound <- err
 			}
 		}()
 	}
