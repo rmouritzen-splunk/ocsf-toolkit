@@ -10,6 +10,18 @@ OCSF Toolkit provides a Go library and CLI for processing events with the lean c
 
 Implementation details that library consumers do not need belong under `internal/`.
 
+## Relationship To The Language-Neutral Model
+
+The [event processing model](event-processing.md), [enrichment](enrichment.md), [enrichment removal](enrichment-removal.md), and [validation](validation.md) guides describe logical behavior that can be implemented with different encodings, data structures, and processing architectures. This repository is one concrete implementation of that behavior.
+
+The public Go API accepts events as `jsonish.Map`, an alias for `map[string]any`. Nested maps, arrays or slices, and scalar values form the logical OCSF event tree. This generic representation makes one pipeline reusable across every OCSF class without generating Go types. The internal array view reads ordinary Go slices and fixed arrays without first copying them to `[]any`, so callers can retain useful typed slices. The `jsonio` helpers decode JSON into the supported generic representation while preserving numbers as `json.Number`; JSON decoding is an input adapter rather than part of the processing algorithm.
+
+The current public API does not directly traverse caller-defined structs, Java or Python classes, Parquet rows, or other concrete representations. A system using those forms can adapt them to `jsonish.Map`, construct an equivalent output map, or implement the language-neutral rules directly against its own field-access mechanisms. Equivalent implementations do not need to reproduce this repository's Go types or visitor design.
+
+Internally, one schema-guided walk supplies class, object, attribute, and completion callbacks to configured processors. This satisfies the general model by centralizing class resolution, profile filtering, null handling, array traversal, and object recursion while leaving mutation and validation rules in their respective processors. Immutable schema and pipeline metadata hold reusable work outside the event loop; a per-event context holds only event-specific state and results. Mutating processors run in configured order, and validation runs last. Observable analysis is retained in the per-event context so safe removal and validation can share the pre-removal interpretation without introducing global mutable state.
+
+This is an implementation choice, not an interoperability requirement. Another implementation could use generated validators, separate passes, columnar expressions, immutable record projections, or concrete class methods and still satisfy the documented behavior.
+
 ## Compiled Schema
 
 `eventschema.New` accepts compiler format version 1. It expects the default lean output from `ocsf-schema-compiler`, not browser-mode output or the uncompiled schema repository format.

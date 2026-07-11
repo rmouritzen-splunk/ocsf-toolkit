@@ -29,12 +29,15 @@ Never create or amend a Git commit unless explicitly asked. Preserve unrelated u
 Keep durable project context in the committed documentation:
 
 - `docs/architecture.md` describes the implemented architecture and design invariants.
+- `docs/event-processing.md`, `docs/enrichment.md`, `docs/enrichment-removal.md`, and `docs/validation.md` describe language-neutral processing behavior for users and independent implementers.
 - `docs/roadmap.md` tracks active and future work.
 - `docs/ocsf-server-validation.md` tracks validation parity work with OCSF Server.
 - `docs/homebrew.md` records the planned Homebrew distribution approach.
 - `docs/release_process.md` documents the current release procedure.
 
 Update these files after substantial design decisions, roadmap changes, or release-process changes. `.agents/` is an optional uncommitted scratchpad for temporary, machine-local handoff notes; it is not authoritative and may not exist in another checkout.
+
+Keep the language-neutral processing guides synchronized with behavioral changes to traversal, profiles, null handling, enrichment, enrichment removal, validation, observables, result semantics, or processor ordering. Describe logical OCSF behavior independently of JSON, Go maps, the internal visitor implementation, or another particular encoding or in-memory representation unless a limitation is intentionally specific to this toolkit.
 
 ## Engineering Standards
 

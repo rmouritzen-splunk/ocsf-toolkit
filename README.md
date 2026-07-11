@@ -10,6 +10,17 @@ The current processors support:
 
 Event mutations run before validation, so validation checks the final processed event.
 
+## Processing Behavior
+
+The processing algorithms are documented independently of this project's Go implementation. The same logical behavior can be implemented for generic maps, concrete structs or classes, columnar rows, or other in-memory forms, and for encodings such as JSON, Parquet, or Avro when the logical OCSF values are preserved:
+
+- [Event processing model](docs/event-processing.md): shared schema traversal, profiles, null semantics, encoding independence, and operation ordering.
+- [Enrichment](docs/enrichment.md): adding enum siblings and observables.
+- [Enrichment removal](docs/enrichment-removal.md): safe and forced removal of redundant enrichment.
+- [Validation](docs/validation.md): structural, type, constraint, metadata, and observable validation.
+
+These guides are intended both for toolkit users and for developers implementing compatible processing in another language or software ecosystem.
+
 ## CLI Usage
 
 ### Install
