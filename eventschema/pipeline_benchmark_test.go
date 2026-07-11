@@ -3,6 +3,7 @@ package eventschema
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -244,4 +245,55 @@ func BenchmarkProcessEventConstraintPath(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func BenchmarkLoadSchema(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		schema, err := New(testSchemaFilePath)
+		if err != nil {
+			b.Fatal(err)
+		}
+		runtime.KeepAlive(schema)
+	}
+}
+
+func BenchmarkLoadSchemaWithValidationPipeline(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		schema, err := New(testSchemaFilePath)
+		if err != nil {
+			b.Fatal(err)
+		}
+		pipeline, err := schema.NewEventProcessorPipeline(NewValidation())
+		if err != nil {
+			b.Fatal(err)
+		}
+		runtime.KeepAlive(pipeline)
+	}
+}
+
+func BenchmarkValidationMetadataRetained(b *testing.B) {
+	var retainedBytes int64
+	b.ReportAllocs()
+	for b.Loop() {
+		schema, err := New(testSchemaFilePath)
+		if err != nil {
+			b.Fatal(err)
+		}
+		runtime.GC()
+		var before runtime.MemStats
+		runtime.ReadMemStats(&before)
+
+		pipeline, err := schema.NewEventProcessorPipeline(NewValidation())
+		if err != nil {
+			b.Fatal(err)
+		}
+		runtime.GC()
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+		retainedBytes += int64(after.HeapAlloc) - int64(before.HeapAlloc)
+		runtime.KeepAlive(pipeline)
+	}
+	b.ReportMetric(float64(retainedBytes)/float64(b.N), "retained-B/op")
 }

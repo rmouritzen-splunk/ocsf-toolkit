@@ -53,6 +53,8 @@ First-use metadata synchronization occurs only while constructing a pipeline. `P
 
 Implementations should avoid unnecessary heap allocations and temporary maps, slices, strings, reflection, parsing, sorting, and conversion in the traversal path. This is a design constraint, not permission for speculative complexity: use representative benchmarks, allocation counts, escape analysis, and profiles to identify meaningful costs. Performance changes must preserve correctness, deterministic diagnostics, concurrency safety, malformed-input handling, and the public processing contract.
 
+Ordinary tests enforce conservative allocation ceilings for representative processor combinations. Runtime, bytes-per-operation, and schema/pipeline construction costs are evaluated by running the benchmark suite against the newest reachable release tag on the same machine and comparing statistically with `benchstat`. Prerelease tags currently participate in the single newest-release baseline. If prereleases later become part of the final release strategy, baseline selection should separately report the newest prerelease and newest stable release.
+
 ## Single-Pass Visitor
 
 Each `ProcessEvent` call creates a fresh stack-resident `processingContext` and performs one recursive schema-guided walk. Concrete internal processors receive hooks at the class, object, attribute, completed-item, and completed-event levels; interface-based dispatch is limited to pipeline construction so the event context does not escape merely through processor callbacks.

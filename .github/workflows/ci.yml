@@ -54,6 +54,45 @@ jobs:
       - name: Verify all target platforms
         run: make verify-all-platforms
 
+  benchmarks:
+    name: Compare benchmarks with latest release
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository with release tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Compare with latest eligible release
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p build
+          make benchmark-compare 2>&1 | tee build/benchmark-comparison.txt
+
+      - name: Add benchmark comparison to job summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -s build/benchmark-comparison.txt ]]; then
+            {
+              echo '## Benchmark comparison'
+              echo '```text'
+              cat build/benchmark-comparison.txt
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
   native-tests:
     name: Native tests on ${{ matrix.os }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

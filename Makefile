@@ -6,6 +6,10 @@ coverage_percentages_out := coverage-percentages.out
 go_vet_out := go-vet.out
 target_platforms := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 VERSION ?= dev
+BENCHMARK_BASE ?=
+BENCHMARK_COUNT ?= 10
+BENCHMARK_TIME ?= 500ms
+BENCHMARK_PATTERN ?= .
 
 .PHONY: build
 build: build-ocsf-toolkit
@@ -64,6 +68,24 @@ test-release-scripts:
 	@echo "Testing release script path safety"
 	@scripts/test-release-scripts.sh
 
+.PHONY: test-benchmark-scripts
+test-benchmark-scripts:
+	@echo "Testing benchmark scripts"
+	@scripts/test-benchmark-scripts.sh
+
+.PHONY: benchmark
+benchmark:
+	@echo "Running event processing benchmarks"
+	go test ./eventschema -run '^$$' -bench '${BENCHMARK_PATTERN}' -benchmem \
+		-benchtime '${BENCHMARK_TIME}' -count '${BENCHMARK_COUNT}'
+
+.PHONY: benchmark-compare
+benchmark-compare:
+	@echo "Comparing event processing benchmarks with the latest eligible release"
+	@BENCHMARK_BASE='${BENCHMARK_BASE}' BENCHMARK_COUNT='${BENCHMARK_COUNT}' \
+		BENCHMARK_TIME='${BENCHMARK_TIME}' BENCHMARK_PATTERN='${BENCHMARK_PATTERN}' \
+		scripts/benchmark-compare.sh
+
 .PHONY: coverage
 coverage: test
 	@echo "Generating coverage report"
@@ -77,12 +99,15 @@ coverage: test
 gotidy-check:
 	@echo "Checking go.mod and go.sum"
 	go mod tidy -diff
+	go mod tidy -C tools -diff
 
 .PHONY: gotidy
 gotidy:
 	@echo "Tidying Go module files"
 	rm -rf go.sum
 	go mod tidy
+	rm -f tools/go.sum
+	go mod tidy -C tools
 
 .PHONY: gofmt
 gofmt:
@@ -90,10 +115,10 @@ gofmt:
 	gofmt -w .
 
 .PHONY: verify
-verify: gotidy-check gofmt-check lint test test-race test-release-scripts govet build
+verify: gotidy-check gofmt-check lint test test-race test-release-scripts test-benchmark-scripts govet build
 
 .PHONY: verify-all-platforms
-verify-all-platforms: gotidy-check gofmt-check lint coverage test-race test-release-scripts govet build-all-platforms
+verify-all-platforms: gotidy-check gofmt-check lint coverage test-race test-release-scripts test-benchmark-scripts govet build-all-platforms
 
 .PHONY: package-dist
 package-dist: build-all-platforms

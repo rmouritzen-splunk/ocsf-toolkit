@@ -68,6 +68,8 @@ For bug fixes and regressions, prefer a fail-first workflow: add a focused test 
 
 Treat existing tests as behavioral contracts and regression checks. Do not weaken, remove, or rewrite an existing test merely to make an immediate change pass. Change an existing test only when behavior is materially changing, the implementation is being refactored and the test must adapt while retaining its original intent, or the test is demonstrably incorrect. Explain the reason for removing a test and preserve equivalent regression coverage where applicable.
 
+Treat performance and allocation ceilings as regression budgets, not targets to adjust around current work. Do not loosen, remove, or bypass a ceiling merely to make a change pass. Investigate the regression and optimize or justify the design first. Changing a ceiling requires explicit agreement from a human maintainer and should include benchmark evidence explaining the new budget.
+
 Keep tests deterministic and local. Prefer clear interfaces, small fakes, and dependency injection over mocking frameworks. Avoid tests that merely restate a thin adapter's implementation.
 
 Validation changes should include boundary cases and, where applicable, parity checks against OCSF Server's `validator2.ex` behavior. Enrichment tests should verify both event mutations and processing results.

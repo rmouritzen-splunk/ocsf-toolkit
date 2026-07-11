@@ -445,6 +445,29 @@ build/ocsf-toolkit
 
 See the `Makefile` for individual targets when you need to run one step directly.
 
+Run the event-processing benchmark suite with:
+
+```sh
+make benchmark
+```
+
+Compare the current checkout with the newest reachable release tag using the same `v` followed by
+a digit and no `+` sanity checks as the release workflow:
+
+```sh
+make benchmark-compare
+```
+
+Prerelease tags participate in this baseline. Override the selected tag when necessary:
+
+```sh
+make benchmark-compare BENCHMARK_BASE=v0.1.0
+```
+
+The comparison runs both revisions on the same machine and reports statistically evaluated runtime,
+bytes, and allocation differences through `benchstat`. A benchmark introduced after the selected
+release appears only in the current column until a later release contains the same benchmark.
+
 Project design and maintenance documentation:
 
 - [Architecture](docs/architecture.md)
