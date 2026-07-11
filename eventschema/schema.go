@@ -38,6 +38,13 @@ type EventProcessorPipeline interface {
 	//
 	// The event map and any nested maps or slices it contains must not be accessed or mutated
 	// concurrently while ProcessEvent is running.
+	// Events are nested structures of map[string]any objects, slices, fixed arrays, and supported
+	// primitives: nil, bool, string, json.Number, signed Go integer types, float32, and float64.
+	// jsonish.Map is a helper alias for map[string]any, not a required distinct type. OCSF int_t
+	// and long_t values use signed 64-bit semantics. Unsigned integers, structs, and other Go map
+	// types are not supported. When source data is JSON, prefer the jsonio decoding helpers so
+	// numbers remain json.Number. Callers that need struct-backed event processing should file a
+	// project issue describing the required use case.
 	//
 	// Processing is not transactional. When enrichment removal, enrichment, or future mutating
 	// processors are enabled, the event may be partially modified if ProcessEvent returns an error.
@@ -537,6 +544,7 @@ type schemaImpl struct {
 	processingMetadataOnce sync.Once // Pipeline construction only; never entered by ProcessEvent.
 	validationMetadataOnce sync.Once // Pipeline construction only; never entered by ProcessEvent.
 	validationMetadata     schemaValidationMetadata
+	validationMetadataErr  error
 }
 
 type itemProcessingMetadata struct {

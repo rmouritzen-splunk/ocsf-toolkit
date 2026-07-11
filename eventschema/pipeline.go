@@ -58,7 +58,9 @@ func (si *schemaImpl) NewEventProcessorPipeline(processors ...EventProcessor) (E
 		}
 	}
 	if validationEnabled {
-		si.ensureValidationMetadata()
+		if err := si.ensureValidationMetadata(); err != nil {
+			return nil, err
+		}
 	}
 	transformCount := len(config.processors)
 	if validationEnabled {

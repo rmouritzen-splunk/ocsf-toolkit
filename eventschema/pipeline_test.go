@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"testing"
@@ -224,5 +225,54 @@ func TestEventProcessorPipelineConstructionIsConcurrent(t *testing.T) {
 	close(errorsFound)
 	for err := range errorsFound {
 		assert.NoError(err)
+	}
+}
+
+func TestNewEventProcessorPipelineRejectsInvalidAllowedValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		typeName  string
+		typeDef   *typeDefinition
+		wantError string
+	}{
+		{
+			name:     "integer outside int64",
+			typeName: "bad_integer_t",
+			typeDef: &typeDefinition{
+				commonAttributeDefinition: commonAttributeDefinition{Type: "integer_t"},
+				Values:                    []any{json.Number("9223372036854775808")},
+			},
+			wantError: "type \"bad_integer_t\" allowed value at index 0 is not a signed 64-bit integer",
+		},
+		{
+			name:     "non-finite float",
+			typeName: "bad_float_t",
+			typeDef: &typeDefinition{
+				commonAttributeDefinition: commonAttributeDefinition{Type: "float_t"},
+				Values:                    []any{math.Inf(1)},
+			},
+			wantError: "type \"bad_float_t\" allowed value at index 0 is not a finite float64",
+		},
+		{
+			name:     "wrong string value type",
+			typeName: "bad_string_t",
+			typeDef: &typeDefinition{
+				commonAttributeDefinition: commonAttributeDefinition{Type: "string_t"},
+				Values:                    []any{true},
+			},
+			wantError: "type \"bad_string_t\" allowed value at index 0 is not a string",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			schema := makeValidationTestSchema(assert)
+			schema.dictionary.Types.Attributes[test.typeName] = test.typeDef
+
+			pipeline, err := schema.NewEventProcessorPipeline(NewValidation())
+
+			assert.Nil(pipeline)
+			assert.EqualError(err, test.wantError)
+		})
 	}
 }

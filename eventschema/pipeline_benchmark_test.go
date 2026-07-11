@@ -147,6 +147,42 @@ func BenchmarkProcessEventMalformed(b *testing.B) {
 	}
 }
 
+func BenchmarkProcessEventAllowedIntegerValue(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	schema.dictionary.Types.Attributes["level_t"].Values = []any{int64(9007199254740993)}
+	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	event := validValidationEvent()
+	event["level"] = json.Number("9007199254740993")
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventScalarConstraints(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	event := validValidationEvent()
+	event["bounded_count"] = json.Number("5")
+	event["short_text"] = "abc"
+	event["code"] = "ABC"
+	event["level"] = json.Number("1")
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkParseVersionRepeated(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
@@ -166,6 +202,46 @@ func BenchmarkParseVersionRotating(b *testing.B) {
 	for index := 0; b.Loop(); index++ {
 		if _, ok := parseVersion(versions[index%len(versions)]); !ok {
 			b.Fatal("version was not parsed")
+		}
+	}
+}
+
+func BenchmarkParseObservablePathRepeated(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := parseObservablePath("actor.user.groups[].name"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseObservablePathRotating(b *testing.B) {
+	paths := make([]string, 128)
+	for index := range paths {
+		paths[index] = fmt.Sprintf("objects[%d].items[].value", index)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; b.Loop(); index++ {
+		if _, err := parseObservablePath(paths[index%len(paths)]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventConstraintPath(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	schema.classes[1].Constraints = map[string][]string{"just_one": {"ball.green"}}
+	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

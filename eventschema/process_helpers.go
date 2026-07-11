@@ -3,13 +3,9 @@ package eventschema
 import (
 	"encoding/json"
 	"fmt"
-	"math"
-	"math/big"
 	"reflect"
-	"strconv"
 	"strings"
 
-	"github.com/ocsf/ocsf-toolkit/internal/coerce"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
@@ -152,61 +148,6 @@ func parentPath(attributePath string) string {
 func isOtherEnumValue(value any) bool {
 	i, ok := getInt64Value(value)
 	return ok && i == 99
-}
-
-func valuesEqual(left any, right any) bool {
-	if reflect.DeepEqual(left, right) {
-		return true
-	}
-	leftNumber, leftOK := exactNumber(left)
-	rightNumber, rightOK := exactNumber(right)
-	if leftOK && rightOK {
-		return leftNumber.Cmp(rightNumber) == 0
-	}
-	return coerce.StringLenient(left) == coerce.StringLenient(right)
-}
-
-func exactNumber(value any) (*big.Rat, bool) {
-	var text string
-	switch value := value.(type) {
-	case json.Number:
-		text = value.String()
-	case int:
-		return new(big.Rat).SetInt64(int64(value)), true
-	case int8:
-		return new(big.Rat).SetInt64(int64(value)), true
-	case int16:
-		return new(big.Rat).SetInt64(int64(value)), true
-	case int32:
-		return new(big.Rat).SetInt64(int64(value)), true
-	case int64:
-		return new(big.Rat).SetInt64(value), true
-	case uint:
-		return new(big.Rat).SetUint64(uint64(value)), true
-	case uint8:
-		return new(big.Rat).SetUint64(uint64(value)), true
-	case uint16:
-		return new(big.Rat).SetUint64(uint64(value)), true
-	case uint32:
-		return new(big.Rat).SetUint64(uint64(value)), true
-	case uint64:
-		return new(big.Rat).SetUint64(value), true
-	case float32:
-		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-			return nil, false
-		}
-		text = strconv.FormatFloat(float64(value), 'g', -1, 32)
-	case float64:
-		if math.IsNaN(value) || math.IsInf(value, 0) {
-			return nil, false
-		}
-		text = strconv.FormatFloat(value, 'g', -1, 64)
-	default:
-		return nil, false
-	}
-
-	number, ok := new(big.Rat).SetString(text)
-	return number, ok
 }
 
 func typeOf(value any) (string, string) {

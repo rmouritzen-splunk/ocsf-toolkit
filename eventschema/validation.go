@@ -1,9 +1,11 @@
 package eventschema
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,9 +26,31 @@ type validationProcessor struct {
 }
 
 type schemaValidationMetadata struct {
-	versionOK        bool
-	version          parsedVersion
-	regexConstraints map[string]compiledRegexConstraint
+	versionOK         bool
+	version           parsedVersion
+	regexConstraints  map[string]compiledRegexConstraint
+	valueConstraints  map[string]compiledValueConstraint
+	rangeConstraints  map[string]compiledRangeConstraint
+	maxLenConstraints map[string]compiledMaxLenConstraint
+}
+
+type compiledRangeConstraint struct {
+	typeName string
+	low      int64
+	high     int64
+}
+
+type compiledMaxLenConstraint struct {
+	typeName string
+	maxLen   int64
+}
+
+type compiledValueConstraint struct {
+	typeName     string
+	intValues    []int64
+	floatValues  []float64
+	stringValues []string
+	boolValues   []bool
 }
 
 type compiledRegexConstraint struct {
@@ -598,15 +622,14 @@ func (c *processingContext) validateTypeValues(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.resolveValuesConstraint(attributeTypeName)
-	if typeDef == nil {
+	constraint, present := c.validationMetadata.valueConstraints[attributeTypeName]
+	if !present {
 		return
 	}
-	for _, allowedValue := range typeDef.Values {
-		if valuesEqual(value, allowedValue) {
-			return
-		}
+	if constraint.contains(value) {
+		return
 	}
+	_, typeDef := c.resolveValuesConstraint(attributeTypeName)
 
 	code := "attribute_value_not_in_type_values"
 	details := jsonish.Map{
@@ -621,14 +644,14 @@ func (c *processingContext) validateTypeValues(
 		attributePath,
 		attributeTypeName,
 	)
-	if typeName != attributeTypeName {
+	if constraint.typeName != attributeTypeName {
 		code = "attribute_value_not_in_super_type_values"
-		details["super_type"] = typeName
+		details["super_type"] = constraint.typeName
 		message = fmt.Sprintf(
 			"Attribute %q, type %q, value is not in super type %q list of allowed values.",
 			attributePath,
 			attributeTypeName,
-			typeName,
+			constraint.typeName,
 		)
 	}
 	c.addError(code, message, details)
@@ -641,13 +664,13 @@ func (c *processingContext) validateNumberRange(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.resolveRangeConstraint(attributeTypeName)
-	if typeDef == nil || len(typeDef.Range) != 2 {
+	constraint, present := c.validationMetadata.rangeConstraints[attributeTypeName]
+	if !present {
 		return
 	}
 
-	low := typeDef.Range[0]
-	high := typeDef.Range[1]
+	low := constraint.low
+	high := constraint.high
 	outside := false
 	switch value := numericValue.(type) {
 	case int64:
@@ -676,15 +699,15 @@ func (c *processingContext) validateNumberRange(
 		low,
 		high,
 	)
-	if typeName != attributeTypeName {
+	if constraint.typeName != attributeTypeName {
 		code = "attribute_value_exceeds_super_type_range"
-		details["super_type"] = typeName
+		details["super_type"] = constraint.typeName
 		details["super_type_range"] = []int64{low, high}
 		message = fmt.Sprintf(
 			"Attribute %q, type %q, value is outside super type %q range of %d to %d.",
 			attributePath,
 			attributeTypeName,
-			typeName,
+			constraint.typeName,
 			low,
 			high,
 		)
@@ -698,13 +721,13 @@ func (c *processingContext) validateStringMaxLen(
 	attributeName string,
 	attributeTypeName string,
 ) {
-	typeName, typeDef := c.resolveMaxLenConstraint(attributeTypeName)
-	if typeDef == nil || typeDef.MaxLen == nil {
+	constraint, present := c.validationMetadata.maxLenConstraints[attributeTypeName]
+	if !present {
 		return
 	}
 
 	length := utf8.RuneCountInString(value)
-	maxLen := *typeDef.MaxLen
+	maxLen := constraint.maxLen
 	if int64(length) <= maxLen {
 		return
 	}
@@ -725,15 +748,15 @@ func (c *processingContext) validateStringMaxLen(
 		attributeTypeName,
 		maxLen,
 	)
-	if typeName != attributeTypeName {
+	if constraint.typeName != attributeTypeName {
 		code = "attribute_value_exceeds_super_type_max_len"
-		details["super_type"] = typeName
+		details["super_type"] = constraint.typeName
 		message = fmt.Sprintf(
 			"Attribute %q, type %q, value length %d exceeds super type %q max length %d.",
 			attributePath,
 			attributeTypeName,
 			length,
-			typeName,
+			constraint.typeName,
 			maxLen,
 		)
 	}
@@ -798,18 +821,6 @@ func (c *processingContext) resolveValuesConstraint(typeName string) (string, *t
 	})
 }
 
-func (c *processingContext) resolveRangeConstraint(typeName string) (string, *typeDefinition) {
-	return c.resolveTypeConstraint(typeName, func(typeDef *typeDefinition) bool {
-		return len(typeDef.Range) > 0
-	})
-}
-
-func (c *processingContext) resolveMaxLenConstraint(typeName string) (string, *typeDefinition) {
-	return c.resolveTypeConstraint(typeName, func(typeDef *typeDefinition) bool {
-		return typeDef.MaxLen != nil
-	})
-}
-
 func (c *processingContext) resolveTypeConstraint(
 	typeName string,
 	predicate func(*typeDefinition) bool,
@@ -817,32 +828,160 @@ func (c *processingContext) resolveTypeConstraint(
 	return resolveTypeConstraint(c.dictionary, typeName, predicate)
 }
 
-func (si *schemaImpl) ensureValidationMetadata() {
+func (si *schemaImpl) ensureValidationMetadata() error {
 	si.validationMetadataOnce.Do(func() {
 		version, versionOK := parseVersion(si.version)
 		metadata := schemaValidationMetadata{
-			version:          version,
-			versionOK:        versionOK,
-			regexConstraints: make(map[string]compiledRegexConstraint),
+			version:           version,
+			versionOK:         versionOK,
+			regexConstraints:  make(map[string]compiledRegexConstraint),
+			valueConstraints:  make(map[string]compiledValueConstraint),
+			rangeConstraints:  make(map[string]compiledRangeConstraint),
+			maxLenConstraints: make(map[string]compiledMaxLenConstraint),
 		}
 		for typeName := range si.dictionary.Types.Attributes {
 			resolvedName, typeDef := resolveTypeConstraint(si.dictionary, typeName, func(typeDef *typeDefinition) bool {
 				return typeDef.RegEx != nil
 			})
-			if typeDef == nil || typeDef.RegEx == nil {
-				continue
+			if typeDef != nil && typeDef.RegEx != nil {
+				regex := *typeDef.RegEx
+				compiled, err := regexp.Compile(regex)
+				metadata.regexConstraints[typeName] = compiledRegexConstraint{
+					typeName: resolvedName,
+					regex:    regex,
+					compiled: compiled,
+					err:      err,
+				}
 			}
-			regex := *typeDef.RegEx
-			compiled, err := regexp.Compile(regex)
-			metadata.regexConstraints[typeName] = compiledRegexConstraint{
-				typeName: resolvedName,
-				regex:    regex,
-				compiled: compiled,
-				err:      err,
+
+			resolvedValueType, valueTypeDef := resolveTypeConstraint(si.dictionary, typeName, func(typeDef *typeDefinition) bool {
+				return len(typeDef.Values) > 0
+			})
+			if valueTypeDef != nil {
+				constraint, err := compileValueConstraint(resolvedValueType, valueTypeDef)
+				if err != nil {
+					si.validationMetadataErr = err
+					return
+				}
+				metadata.valueConstraints[typeName] = constraint
+			}
+
+			resolvedRangeType, rangeTypeDef := resolveTypeConstraint(si.dictionary, typeName, func(typeDef *typeDefinition) bool {
+				return len(typeDef.Range) == 2
+			})
+			if rangeTypeDef != nil {
+				metadata.rangeConstraints[typeName] = compiledRangeConstraint{
+					typeName: resolvedRangeType,
+					low:      rangeTypeDef.Range[0],
+					high:     rangeTypeDef.Range[1],
+				}
+			}
+
+			resolvedMaxLenType, maxLenTypeDef := resolveTypeConstraint(si.dictionary, typeName, func(typeDef *typeDefinition) bool {
+				return typeDef.MaxLen != nil
+			})
+			if maxLenTypeDef != nil {
+				metadata.maxLenConstraints[typeName] = compiledMaxLenConstraint{
+					typeName: resolvedMaxLenType,
+					maxLen:   *maxLenTypeDef.MaxLen,
+				}
 			}
 		}
 		si.validationMetadata = metadata
 	})
+	return si.validationMetadataErr
+}
+
+func compileValueConstraint(typeName string, typeDef *typeDefinition) (compiledValueConstraint, error) {
+	constraint := compiledValueConstraint{typeName: typeName}
+	primitiveType := typeName
+	if typeDef.Type != "" {
+		primitiveType = typeDef.Type
+	}
+	for index, value := range typeDef.Values {
+		switch primitiveType {
+		case "integer_t", "long_t":
+			normalized, ok := getInt64Value(value)
+			if !ok {
+				return compiledValueConstraint{}, fmt.Errorf(
+					"type %q allowed value at index %d is not a signed 64-bit integer", typeName, index,
+				)
+			}
+			constraint.intValues = append(constraint.intValues, normalized)
+		case "float_t":
+			normalized, ok := schemaFloat64(value)
+			if !ok {
+				return compiledValueConstraint{}, fmt.Errorf(
+					"type %q allowed value at index %d is not a finite float64", typeName, index,
+				)
+			}
+			constraint.floatValues = append(constraint.floatValues, normalized)
+		case "string_t":
+			normalized, ok := value.(string)
+			if !ok {
+				return compiledValueConstraint{}, fmt.Errorf(
+					"type %q allowed value at index %d is not a string", typeName, index,
+				)
+			}
+			constraint.stringValues = append(constraint.stringValues, normalized)
+		case "boolean_t":
+			normalized, ok := value.(bool)
+			if !ok {
+				return compiledValueConstraint{}, fmt.Errorf(
+					"type %q allowed value at index %d is not a boolean", typeName, index,
+				)
+			}
+			constraint.boolValues = append(constraint.boolValues, normalized)
+		default:
+			return compiledValueConstraint{}, fmt.Errorf(
+				"type %q has allowed values but unsupported primitive type %q", typeName, primitiveType,
+			)
+		}
+	}
+	return constraint, nil
+}
+
+func schemaFloat64(value any) (float64, bool) {
+	var normalized float64
+	switch value := value.(type) {
+	case json.Number:
+		var err error
+		normalized, err = value.Float64()
+		if err != nil {
+			return 0, false
+		}
+	case float32:
+		normalized = float64(value)
+	case float64:
+		normalized = value
+	default:
+		if integer, ok := getInt64Value(value); ok {
+			normalized = float64(integer)
+		} else {
+			return 0, false
+		}
+	}
+	return normalized, !math.IsNaN(normalized) && !math.IsInf(normalized, 0)
+}
+
+func (c compiledValueConstraint) contains(value any) bool {
+	if c.intValues != nil {
+		candidate, ok := getInt64Value(value)
+		if !ok {
+			return false
+		}
+		return slices.Contains(c.intValues, candidate)
+	}
+	if c.floatValues != nil {
+		candidate, ok := getFloat64(value)
+		return ok && slices.Contains(c.floatValues, candidate)
+	}
+	if c.stringValues != nil {
+		candidate, ok := value.(string)
+		return ok && slices.Contains(c.stringValues, candidate)
+	}
+	candidate, ok := value.(bool)
+	return ok && slices.Contains(c.boolValues, candidate)
 }
 
 func resolveTypeConstraint(

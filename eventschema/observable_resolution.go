@@ -210,14 +210,18 @@ func parseObservablePath(name string) (observablePath, error) {
 		return observablePath{}, fmt.Errorf("the path is empty")
 	}
 
-	parts := strings.Split(name, ".")
-	path := observablePath{segments: make([]observablePathSegment, 0, len(parts))}
-	for _, part := range parts {
+	path := observablePath{segments: make([]observablePathSegment, 0, strings.Count(name, ".")+1)}
+	for {
+		part, remainder, more := strings.Cut(name, ".")
 		segment, err := parseObservablePathSegment(part)
 		if err != nil {
 			return observablePath{}, err
 		}
 		path.segments = append(path.segments, segment)
+		if !more {
+			break
+		}
+		name = remainder
 	}
 	return path, nil
 }
