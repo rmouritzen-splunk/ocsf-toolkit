@@ -184,6 +184,14 @@ func (p *enrichmentProcessor) addGeneratedObservables(
 	existing any,
 	existingObservables []any,
 ) {
+	if len(context.observables) == 0 {
+		return
+	}
+	if existing == nil && len(context.observables) == 1 {
+		event["observables"] = context.observables
+		context.result.Enrichment.ObservablesAdded = 1
+		return
+	}
 	seen := make(map[observableIdentity]string, len(existingObservables)+len(context.observables))
 	for _, observable := range existingObservables {
 		if identity, ok := getObservableIdentity(observable); ok {

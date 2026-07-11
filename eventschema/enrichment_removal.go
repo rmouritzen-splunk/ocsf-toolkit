@@ -117,24 +117,24 @@ func (p *enrichmentRemovalProcessor) removeObservables(context *processingContex
 		return
 	}
 
-	remove := make(map[int]struct{})
+	removeCount := 0
 	for index := range resolution.entries {
 		entry := &resolution.entries[index]
 		if entry.removable {
-			remove[entry.index] = struct{}{}
 			entry.removed = true
+			removeCount++
 		}
 	}
-	context.result.EnrichmentRemoval.ObservablesRemoved += len(remove)
-	context.result.EnrichmentRemoval.ObservablesRetained += len(observables) - len(remove)
-	if len(remove) == len(observables) {
+	context.result.EnrichmentRemoval.ObservablesRemoved += removeCount
+	context.result.EnrichmentRemoval.ObservablesRetained += len(observables) - removeCount
+	if removeCount == len(observables) {
 		delete(event, "observables")
 		return
 	}
-	if len(remove) == 0 {
+	if removeCount == 0 {
 		return
 	}
-	event["observables"] = filterObservableSlice(value, remove)
+	event["observables"] = filterObservableSlice(value, resolution.entries, removeCount)
 }
 
 func (p *enrichmentRemovalProcessor) forceRemoveObservablesWithoutAnalysis(
@@ -184,20 +184,20 @@ func (c *processingContext) typeDerivedFrom(typeName, baseType string) bool {
 	return false
 }
 
-func filterObservableSlice(value any, remove map[int]struct{}) any {
+func filterObservableSlice(value any, entries []observableEntryResolution, removeCount int) any {
 	switch values := value.(type) {
 	case []jsonish.Map:
-		filtered := make([]jsonish.Map, 0, len(values)-len(remove))
+		filtered := make([]jsonish.Map, 0, len(values)-removeCount)
 		for index, element := range values {
-			if _, removed := remove[index]; !removed {
+			if !entries[index].removed {
 				filtered = append(filtered, element)
 			}
 		}
 		return filtered
 	case []any:
-		filtered := make([]any, 0, len(values)-len(remove))
+		filtered := make([]any, 0, len(values)-removeCount)
 		for index, element := range values {
-			if _, removed := remove[index]; !removed {
+			if !entries[index].removed {
 				filtered = append(filtered, element)
 			}
 		}
@@ -205,18 +205,18 @@ func filterObservableSlice(value any, remove map[int]struct{}) any {
 	default:
 		reflected := reflect.ValueOf(value)
 		if reflected.Kind() == reflect.Slice {
-			filtered := reflect.MakeSlice(reflected.Type(), 0, reflected.Len()-len(remove))
+			filtered := reflect.MakeSlice(reflected.Type(), 0, reflected.Len()-removeCount)
 			for index := range reflected.Len() {
-				if _, removed := remove[index]; !removed {
+				if !entries[index].removed {
 					filtered = reflect.Append(filtered, reflected.Index(index))
 				}
 			}
 			return filtered.Interface()
 		}
 		if reflected.Kind() == reflect.Array {
-			filtered := reflect.MakeSlice(reflect.SliceOf(reflected.Type().Elem()), 0, reflected.Len()-len(remove))
+			filtered := reflect.MakeSlice(reflect.SliceOf(reflected.Type().Elem()), 0, reflected.Len()-removeCount)
 			for index := range reflected.Len() {
-				if _, removed := remove[index]; !removed {
+				if !entries[index].removed {
 					filtered = reflect.Append(filtered, reflected.Index(index))
 				}
 			}
