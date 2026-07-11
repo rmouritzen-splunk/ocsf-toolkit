@@ -49,7 +49,7 @@ func (c *processingContext) resolveObservables(event jsonish.Map) *observableRes
 	}
 	resolution := &observableResolution{}
 	c.observableResolution = resolution
-	observables, ok := asSlice(value)
+	observables, ok := newArrayView(value)
 	if !ok {
 		resolution.entries = append(resolution.entries, observableEntryResolution{
 			index: -1,
@@ -62,9 +62,9 @@ func (c *processingContext) resolveObservables(event jsonish.Map) *observableRes
 		return resolution
 	}
 
-	resolution.entries = make([]observableEntryResolution, 0, len(observables))
-	for index, value := range observables {
-		resolution.entries = append(resolution.entries, c.resolveObservableEntry(event, index, value))
+	resolution.entries = make([]observableEntryResolution, 0, observables.Len())
+	for index := range observables.Len() {
+		resolution.entries = append(resolution.entries, c.resolveObservableEntry(event, index, observables.At(index)))
 	}
 	return resolution
 }
@@ -313,12 +313,12 @@ func resolveObservablePath(event jsonish.Map, path observablePath) observablePat
 }
 
 func resolveObservableSegment(value any, segment observablePathSegment, result *[]any, missing *bool) {
-	if values, ok := asSlice(value); ok {
-		if len(values) == 0 {
+	if values, ok := newArrayView(value); ok {
+		if values.Len() == 0 {
 			*missing = true
 		}
-		for _, element := range values {
-			resolveObservableSegment(element, segment, result, missing)
+		for index := range values.Len() {
+			resolveObservableSegment(values.At(index), segment, result, missing)
 		}
 		return
 	}
@@ -351,19 +351,21 @@ func applyObservableSelector(values []any, selector observableArraySelector) ([]
 	result := make([]any, 0)
 	missing := false
 	for _, value := range values {
-		array, ok := asSlice(value)
+		array, ok := newArrayView(value)
 		if !ok {
 			continue
 		}
 		if selector.all {
-			if len(array) == 0 {
+			if array.Len() == 0 {
 				missing = true
 			}
-			result = append(result, array...)
+			for index := range array.Len() {
+				result = append(result, array.At(index))
+			}
 			continue
 		}
-		if selector.index < len(array) {
-			result = append(result, array[selector.index])
+		if selector.index < array.Len() {
+			result = append(result, array.At(selector.index))
 		} else {
 			missing = true
 		}
@@ -375,9 +377,9 @@ func flattenObservableCandidates(values []any) []any {
 	result := make([]any, 0, len(values))
 	var appendValue func(any)
 	appendValue = func(value any) {
-		if array, ok := asSlice(value); ok {
-			for _, element := range array {
-				appendValue(element)
+		if array, ok := newArrayView(value); ok {
+			for index := range array.Len() {
+				appendValue(array.At(index))
 			}
 			return
 		}

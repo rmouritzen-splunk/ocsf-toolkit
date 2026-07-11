@@ -65,32 +65,64 @@ func getFloat64(value any) (float64, bool) {
 	}
 }
 
-func asSlice(value any) ([]any, bool) {
-	switch value := value.(type) {
+type arrayView struct {
+	value     any
+	reflected reflect.Value
+}
+
+func newArrayView(value any) (arrayView, bool) {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Kind() != reflect.Slice && reflected.Kind() != reflect.Array {
+		return arrayView{}, false
+	}
+	return arrayView{value: value, reflected: reflected}, true
+}
+
+func (a arrayView) Len() int {
+	if !a.reflected.IsValid() {
+		return 0
+	}
+	return a.reflected.Len()
+}
+
+func (a arrayView) At(index int) any {
+	switch values := a.value.(type) {
 	case []any:
-		return value, true
+		return values[index]
 	case []jsonish.Map:
-		result := make([]any, len(value))
-		for i, element := range value {
-			result[i] = element
-		}
-		return result, true
+		return values[index]
 	case []string:
-		result := make([]any, len(value))
-		for i, element := range value {
-			result[i] = element
-		}
-		return result, true
+		return values[index]
+	case []bool:
+		return values[index]
+	case []int:
+		return values[index]
+	case []int8:
+		return values[index]
+	case []int16:
+		return values[index]
+	case []int32:
+		return values[index]
+	case []int64:
+		return values[index]
+	case []uint:
+		return values[index]
+	case []uint8:
+		return values[index]
+	case []uint16:
+		return values[index]
+	case []uint32:
+		return values[index]
+	case []uint64:
+		return values[index]
+	case []float32:
+		return values[index]
+	case []float64:
+		return values[index]
+	case []json.Number:
+		return values[index]
 	default:
-		reflected := reflect.ValueOf(value)
-		if reflected.Kind() != reflect.Slice && reflected.Kind() != reflect.Array {
-			return nil, false
-		}
-		result := make([]any, reflected.Len())
-		for i := range reflected.Len() {
-			result[i] = reflected.Index(i).Interface()
-		}
-		return result, true
+		return a.reflected.Index(index).Interface()
 	}
 }
 

@@ -111,7 +111,7 @@ func (p *enrichmentRemovalProcessor) removeObservables(context *processingContex
 		}
 	}
 
-	observables, isArray := asSlice(value)
+	observables, isArray := newArrayView(value)
 	if !isArray {
 		context.result.EnrichmentRemoval.ObservablesRetained++
 		return
@@ -126,8 +126,8 @@ func (p *enrichmentRemovalProcessor) removeObservables(context *processingContex
 		}
 	}
 	context.result.EnrichmentRemoval.ObservablesRemoved += removeCount
-	context.result.EnrichmentRemoval.ObservablesRetained += len(observables) - removeCount
-	if removeCount == len(observables) {
+	context.result.EnrichmentRemoval.ObservablesRetained += observables.Len() - removeCount
+	if removeCount == observables.Len() {
 		delete(event, "observables")
 		return
 	}
@@ -145,8 +145,8 @@ func (p *enrichmentRemovalProcessor) forceRemoveObservablesWithoutAnalysis(
 	if !present {
 		return
 	}
-	if observables, ok := asSlice(value); ok {
-		context.result.EnrichmentRemoval.ObservablesRemoved += len(observables)
+	if observables, ok := newArrayView(value); ok {
+		context.result.EnrichmentRemoval.ObservablesRemoved += observables.Len()
 	}
 	delete(event, "observables")
 }

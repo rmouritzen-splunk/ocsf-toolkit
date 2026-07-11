@@ -452,7 +452,7 @@ func (c *processingContext) processArray(
 	attributeName string,
 	attrDef *itemAttributeDefinition,
 ) {
-	values, ok := asSlice(value)
+	values, ok := newArrayView(value)
 	if !ok {
 		c.visitAttribute(attributeVisit{
 			item:           item,
@@ -467,7 +467,8 @@ func (c *processingContext) processArray(
 		return
 	}
 
-	for index, element := range values {
+	for index := range values.Len() {
+		element := values.At(index)
 		elementValidationPath := validationPath
 		if c.pipeline.needsValidationPath {
 			elementValidationPath = makeArrayElementPath(validationPath, index)

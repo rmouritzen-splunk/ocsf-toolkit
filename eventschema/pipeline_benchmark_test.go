@@ -95,6 +95,23 @@ func BenchmarkProcessEventNestedArray(b *testing.B) {
 	}
 }
 
+func BenchmarkProcessEventTypedSlices(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	event := validValidationEvent()
+	event["status_ids"] = []int64{1, 2}
+	event["statuses"] = []string{"Open", "Closed"}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkProcessEventObservableHeavy(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)

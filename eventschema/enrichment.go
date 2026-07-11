@@ -138,11 +138,11 @@ func (p *enrichmentProcessor) onEventDone(context *processingContext, event json
 		present = false
 	}
 	if !present {
-		p.addGeneratedObservables(context, event, nil, nil)
+		p.addGeneratedObservables(context, event, nil, arrayView{})
 		return
 	}
 
-	existingObservables, ok := asSlice(existing)
+	existingObservables, ok := newArrayView(existing)
 	if !ok {
 		if len(context.observables) > 0 {
 			context.addProcessorIssue(issuePhaseEnrichment, newProcessingDiagnostic(
@@ -158,7 +158,7 @@ func (p *enrichmentProcessor) onEventDone(context *processingContext, event json
 		}
 		return
 	}
-	if len(existingObservables) == 0 {
+	if existingObservables.Len() == 0 {
 		delete(event, "observables")
 		existing = nil
 	}
@@ -182,7 +182,7 @@ func (p *enrichmentProcessor) addGeneratedObservables(
 	context *processingContext,
 	event jsonish.Map,
 	existing any,
-	existingObservables []any,
+	existingObservables arrayView,
 ) {
 	if len(context.observables) == 0 {
 		return
@@ -192,8 +192,9 @@ func (p *enrichmentProcessor) addGeneratedObservables(
 		context.result.Enrichment.ObservablesAdded = 1
 		return
 	}
-	seen := make(map[observableIdentity]string, len(existingObservables)+len(context.observables))
-	for _, observable := range existingObservables {
+	seen := make(map[observableIdentity]string, existingObservables.Len()+len(context.observables))
+	for index := range existingObservables.Len() {
+		observable := existingObservables.At(index)
 		if identity, ok := getObservableIdentity(observable); ok {
 			seen[identity] = "existing"
 		}
@@ -268,7 +269,7 @@ func getObservableIdentity(value any) (observableIdentity, bool) {
 	return identity, true
 }
 
-func appendObservableMaps(existing any, existingObservables []any, generated []jsonish.Map) any {
+func appendObservableMaps(existing any, existingObservables arrayView, generated []jsonish.Map) any {
 	switch values := existing.(type) {
 	case []jsonish.Map:
 		result := make([]jsonish.Map, 0, len(values)+len(generated))
@@ -310,9 +311,11 @@ func appendObservableMaps(existing any, existingObservables []any, generated []j
 	return appendObservableMapsAsAny(existingObservables, generated)
 }
 
-func appendObservableMapsAsAny(existing []any, generated []jsonish.Map) []any {
-	result := make([]any, 0, len(existing)+len(generated))
-	result = append(result, existing...)
+func appendObservableMapsAsAny(existing arrayView, generated []jsonish.Map) []any {
+	result := make([]any, 0, existing.Len()+len(generated))
+	for index := range existing.Len() {
+		result = append(result, existing.At(index))
+	}
 	for _, observable := range generated {
 		result = append(result, observable)
 	}

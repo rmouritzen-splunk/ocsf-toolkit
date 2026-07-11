@@ -82,11 +82,12 @@ func (p *validationProcessor) onClass(context *processingContext, visit classVis
 		return
 	}
 	profilesValue := metadata["profiles"]
-	profiles, ok := asSlice(profilesValue)
+	profiles, ok := newArrayView(profilesValue)
 	if profilesValue == nil || !ok {
 		return
 	}
-	for index, profileValue := range profiles {
+	for index := range profiles.Len() {
+		profileValue := profiles.At(index)
 		profile, ok := profileValue.(string)
 		if !ok {
 			continue
@@ -292,13 +293,14 @@ func (c *processingContext) validateAndReturnProfiles(event jsonish.Map) []strin
 		return nil
 	}
 	profilesValue := metadata["profiles"]
-	profiles, ok := asSlice(profilesValue)
+	profiles, ok := newArrayView(profilesValue)
 	if profilesValue == nil || !ok {
 		return nil
 	}
 
-	result := make([]string, 0, len(profiles))
-	for _, profileValue := range profiles {
+	result := make([]string, 0, profiles.Len())
+	for index := range profiles.Len() {
+		profileValue := profiles.At(index)
 		profile, ok := profileValue.(string)
 		if !ok {
 			continue
@@ -412,13 +414,13 @@ func (c *processingContext) validateEnumArraySibling(
 		return
 	}
 
-	siblingArray, ok := asSlice(siblingArrayValue)
+	siblingArray, ok := newArrayView(siblingArrayValue)
 	if !ok {
 		return
 	}
 
 	siblingPath := makeArrayElementPath(makeAttributePath(parentPath(validationPath), siblingName), arrayIndex)
-	if arrayIndex >= len(siblingArray) || siblingArray[arrayIndex] == nil {
+	if arrayIndex >= siblingArray.Len() || siblingArray.At(arrayIndex) == nil {
 		c.addError(
 			"attribute_enum_array_sibling_missing",
 			fmt.Sprintf(
@@ -436,7 +438,7 @@ func (c *processingContext) validateEnumArraySibling(
 		return
 	}
 
-	siblingValue := siblingArray[arrayIndex]
+	siblingValue := siblingArray.At(arrayIndex)
 	if siblingValue != enumDetail.Caption {
 		c.addError(
 			"attribute_enum_array_sibling_incorrect",
