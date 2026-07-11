@@ -5,7 +5,6 @@ This file tracks unfinished or intentionally deferred work. Implemented architec
 ## Validation And Schema
 
 - Continue parity testing against OCSF Server's `validator2.ex` using the same event fixtures where practical. See [ocsf-server-validation.md](ocsf-server-validation.md).
-- Consider validating schema references at load time, including referenced object names, dictionary type names, and observable type IDs. Any load-time validation must continue to accept lean compiled schemas that legitimately omit optional sections.
 - Consider a separate bundle-processing API if library consumers need OCSF bundle validation. `ProcessEvent` should remain a single-event operation.
 
 ## Event Processing Performance
