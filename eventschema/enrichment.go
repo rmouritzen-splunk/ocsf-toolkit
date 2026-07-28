@@ -445,8 +445,8 @@ func (c *processingContext) addObjectObservable(
 		"type_id": observableTypeID,
 	}
 	if addTypeSibling {
-		if typeStr, present := c.observableTypes[observableTypeID]; present {
-			observable["type"] = typeStr
+		if typeCaption, present := c.observableTypes[observableTypeID]; present {
+			observable["type"] = typeCaption
 		}
 	}
 	c.observables = append(c.observables, observable)
@@ -468,8 +468,8 @@ func (c *processingContext) addValueObservable(
 		"value":   valueStr,
 	}
 	if addTypeSibling {
-		if typeStr, present := c.observableTypes[observableTypeID]; present {
-			observable["type"] = typeStr
+		if typeCaption, present := c.observableTypes[observableTypeID]; present {
+			observable["type"] = typeCaption
 		}
 	}
 	c.observables = append(c.observables, observable)
