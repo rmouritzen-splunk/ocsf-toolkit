@@ -290,17 +290,18 @@ func (c *processingContext) processItem(
 			continue
 		}
 		value, present := attributeValue(item, attributeName)
-		validationPath, enrichmentPath := c.makeProcessingPaths(
-			validationParentPath,
-			enrichmentParentPath,
-			attributeName,
-		)
 
 		if !present {
+			// Only validation reports missing attributes, and it reads the validation
+			// path alone. Missing attributes greatly outnumber present ones in typical
+			// events, so building unread paths here dominates traversal allocations.
+			var validationPath string
+			if c.pipeline.needsMissingAttributePath {
+				validationPath = makeAttributePath(validationParentPath, attributeName)
+			}
 			c.visitAttribute(attributeVisit{
 				item:           item,
 				validationPath: validationPath,
-				enrichmentPath: enrichmentPath,
 				attributeName:  attributeName,
 				attrDef:        attrDef,
 				arrayIndex:     -1,
@@ -309,6 +310,11 @@ func (c *processingContext) processItem(
 			continue
 		}
 
+		validationPath, enrichmentPath := c.makeProcessingPaths(
+			validationParentPath,
+			enrichmentParentPath,
+			attributeName,
+		)
 		c.processAttribute(
 			item,
 			value,
