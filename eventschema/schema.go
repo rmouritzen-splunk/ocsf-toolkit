@@ -344,6 +344,25 @@ func New(name string) (Schema, error) {
 	return schema, nil
 }
 
+// NewFromReader loads a compiled OCSF schema from a reader.
+//
+// The reader must be in the compiled schema format produced by the OCSF Schema Compiler.
+func NewFromReader(reader io.Reader) (Schema, error) {
+	var sd schemaDefinition
+	decoder := jsonio.NewDecoder(reader)
+	if err := decoder.Decode(&sd); err != nil {
+		return nil, fmt.Errorf("failed to decode schema from reader: %w", err)
+	}
+	if err := ensureSchemaEOF(decoder); err != nil {
+		return nil, fmt.Errorf("failed to decode schema from reader: %w", err)
+	}
+	schema, err := newSchemaImpl(&sd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load schema from reader: %w", err)
+	}
+	return schema, nil
+}
+
 func newSchemaImpl(sd *schemaDefinition) (*schemaImpl, error) {
 	if sd.CompileVersion != expectedCompileVersion {
 		return nil, fmt.Errorf("unsupported compile_version: %d", sd.CompileVersion)
