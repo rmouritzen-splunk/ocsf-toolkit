@@ -38,6 +38,16 @@ func TestLoadSchemaFromFile(t *testing.T) {
 	checkSchema(assert, schema)
 }
 
+func TestLoadSchemaFromReader(t *testing.T) {
+	assert := require.New(t)
+	testSchemaFile, err := os.Open(testSchemaFilePath)
+	assert.NoError(err)
+	defer func(f *os.File) { _ = f.Close() }(testSchemaFile)
+	schema, err := NewFromReader(testSchemaFile)
+	assert.NoError(err)
+	checkSchema(assert, schema)
+}
+
 func TestLoadSchemaFromFilePreservesTypeValueNumbers(t *testing.T) {
 	assert := require.New(t)
 	path := filepath.Join(t.TempDir(), "schema.json")
