@@ -1,0 +1,49 @@
+{
+  "compile_version": 1,
+  "version": "1.0.0",
+  "dictionary": {
+    "attributes": {
+      "action_id": {
+        "type": "integer_t",
+        "enum": {
+          "1": {
+            "caption": "Allowed"
+          }
+        },
+        "sibling": "action"
+      },
+      "action": {
+        "type": "string_t"
+      }
+    }
+  },
+  "classes": {
+    "test": {
+      "name": "test",
+      "uid": 1,
+      "attributes": {
+        "action_id": {
+          "type": "integer_t",
+          "enum": {
+            "1": {
+              "caption": "Allowed"
+            }
+          },
+          "sibling": "action"
+        },
+        "action": {
+          "type": "string_t",
+          "enum": {
+            "allowed": {
+              "caption": "Allowed"
+            }
+          },
+          "sibling": "synthetic_caption"
+        },
+        "synthetic_caption": {
+          "type": "string_t"
+        }
+      }
+    }
+  }
+}
