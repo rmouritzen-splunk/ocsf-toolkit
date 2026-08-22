@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ocsf/ocsf-toolkit/enrichment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,15 +34,15 @@ func TestValidateOutputNamespacesRejectsWindowsDirectoryJunction(t *testing.T) {
 	outputDir := t.TempDir()
 	eventsDir := filepath.Join(outputDir, eventsOutputDirectory)
 	targetDir := filepath.Join(t.TempDir(), "outside")
-	require.NoError(t, os.Mkdir(eventsDir, 0o755))
-	require.NoError(t, os.Mkdir(targetDir, 0o755))
+	require.NoError(t, os.Mkdir(eventsDir, 0o750))
+	require.NoError(t, os.Mkdir(targetDir, 0o750))
 	junctionPath := filepath.Join(eventsDir, "redirect")
 	output, err := exec.Command("cmd.exe", "/c", "mklink", "/J", junctionPath, targetDir).CombinedOutput()
 	require.NoError(t, err, string(output))
 	outputRoot, err := newFilesystemPath(outputDir)
 	require.NoError(t, err)
 
-	err = validateOutputNamespaces(processConfig{addEnumSiblings: true}, outputRoot)
+	err = validateOutputNamespaces(processConfig{enumSiblingsAction: enrichment.Add}, outputRoot)
 
 	require.ErrorContains(t, err, "unsupported filesystem entry")
 }

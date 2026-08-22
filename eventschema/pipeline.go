@@ -1,174 +1,167 @@
 package eventschema
 
 import (
+	"encoding/json"
 	"errors"
-	"fmt"
+
+	"github.com/ocsf/ocsf-toolkit/enrichment"
+	"github.com/ocsf/ocsf-toolkit/eventresult"
+	"github.com/ocsf/ocsf-toolkit/internal/processing"
+	"github.com/ocsf/ocsf-toolkit/jsonish"
+	"github.com/ocsf/ocsf-toolkit/pathstyle"
 )
 
-type processorKind string
+var errUninitializedSchema = errors.New("schema is not initialized; create it with eventschema.Load")
 
-const (
-	processorKindEnrichment        processorKind = "enrichment"
-	processorKindEnrichmentRemoval processorKind = "enrichment-removal"
-	processorKindValidation        processorKind = "validation"
-)
-
-type pipelineConfig struct {
-	processors []configuredProcessor
+// Pipeline processes OCSF events in place. Pipeline values must be created with Schema.NewPipeline and are safe for
+// concurrent use when each call receives a distinct event map.
+type Pipeline struct {
+	state *processing.Pipeline
 }
 
-type configuredProcessor struct {
-	kind       processorKind
-	factory    processorFactory
-	enrichment enrichmentConfig
-	removal    enrichmentRemovalConfig
+// ProcessingResult is the result returned by Pipeline.ProcessEvent. Its private value storage allows new
+// processor-family results and public accessor methods to be added without changing its public structure. The
+// supported Go compiler inlines the simple, statically dispatched accessors into direct private-state access, making
+// this a zero-cost abstraction without interface boxing or an inherently necessary allocation. The zero value is a
+// valid empty result.
+//
+// Validation errors and warnings are reported here instead of through the Go error return.
+type ProcessingResult struct {
+	state processingResultState
 }
 
-type processorFactory func() eventProcessVisitor
-
-type eventProcessorPipelineImpl struct {
-	schema     *schemaImpl
-	transforms []transformEventProcessor
-	validation *validationProcessor
-	// needsValidationPath and needsEnrichmentPath report whether any configured
-	// processor reads the corresponding attribute path. needsMissingAttributePath
-	// reports the same for attributes that are absent from the event, which only
-	// validation examines.
-	needsValidationPath       bool
-	needsEnrichmentPath       bool
-	needsMissingAttributePath bool
+type processingResultState struct {
+	validation        eventresult.ValidationResult
+	enrichment        eventresult.EnrichmentResult
+	enrichmentRemoval eventresult.EnrichmentRemovalResult
+	issues            []eventresult.ProcessingIssue
+	suppressedIssues  int
 }
 
-type transformEventProcessor struct {
-	enrichment *enrichmentProcessor
-	removal    *enrichmentRemovalProcessor
+// Validation returns validation findings and their effective reporting levels.
+func (r ProcessingResult) Validation() eventresult.ValidationResult {
+	return r.state.validation
 }
 
-func (si *schemaImpl) NewEventProcessorPipeline(processors ...EventProcessor) (EventProcessorPipeline, error) {
-	var config pipelineConfig
-	for _, processor := range processors {
-		if processor != nil {
-			processor.applyProcessor(&config)
+// Enrichment returns counts for values added to the event during enrichment.
+func (r ProcessingResult) Enrichment() eventresult.EnrichmentResult {
+	return r.state.enrichment
+}
+
+// EnrichmentRemoval returns counts for values removed or retained during enrichment removal.
+func (r ProcessingResult) EnrichmentRemoval() eventresult.EnrichmentRemovalResult {
+	return r.state.enrichmentRemoval
+}
+
+// Issues returns non-fatal event-processing issues that are separate from OCSF validation findings. The returned
+// slice is owned by the result and may be modified by the caller.
+func (r ProcessingResult) Issues() []eventresult.ProcessingIssue {
+	return r.state.issues
+}
+
+// SuppressedIssueCount returns the number of non-fatal processing issues omitted by pipeline issue suppression.
+func (r ProcessingResult) SuppressedIssueCount() int {
+	return r.state.suppressedIssues
+}
+
+// MarshalJSON preserves the stable processor-result object used by earlier releases while the Go representation
+// remains opaque and free to grow through new accessor methods.
+func (r ProcessingResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(processingResultJSON{
+		Validation:           r.state.validation,
+		Enrichment:           r.state.enrichment,
+		EnrichmentRemoval:    r.state.enrichmentRemoval,
+		Issues:               r.state.issues,
+		SuppressedIssueCount: r.state.suppressedIssues,
+	})
+}
+
+type processingResultJSON struct {
+	Validation           eventresult.ValidationResult        `json:"validation"`
+	Enrichment           eventresult.EnrichmentResult        `json:"enrichment"`
+	EnrichmentRemoval    eventresult.EnrichmentRemovalResult `json:"enrichment_removal"`
+	Issues               []eventresult.ProcessingIssue       `json:"issues,omitempty"`
+	SuppressedIssueCount int                                 `json:"suppressed_issue_count,omitempty"`
+}
+
+// ProcessEvent adds or removes enrichment and/or validates event in place.
+//
+// The event map and any nested maps or slices it contains must not be accessed or mutated concurrently
+// while ProcessEvent is running. Processing is not transactional: the event may be partially modified
+// if ProcessEvent returns an error. Invalid OCSF events are reported in ProcessingResult; the error
+// return is reserved for an uninitialized pipeline, processing failures, or unusable caller input. Defined Go slice
+// and array containers are accepted; their elements follow the same validation rules as values in []any.
+// Processing
+// results and errors do not repeat event values in their diagnostic text or details; a future error may use the
+// event's metadata.uid as a correlation identifier.
+func (p *Pipeline) ProcessEvent(event jsonish.Map) (ProcessingResult, error) {
+	var state *processing.Pipeline
+	if p != nil {
+		state = p.state
+	}
+	result, err := state.ProcessEvent(event)
+	return ProcessingResult{state: processingResultState{
+		validation:        result.Validation,
+		enrichment:        result.Enrichment,
+		enrichmentRemoval: result.EnrichmentRemoval,
+		issues:            result.Issues,
+		suppressedIssues:  result.SuppressedIssues,
+	}}, err
+}
+
+// NewPipeline builds a reusable pipeline from the requested options. Validation runs after mutating processors
+// regardless of the supplied option order.
+func (s *Schema) NewPipeline(options ...PipelineOption) (*Pipeline, error) {
+	config := pipelineConfig{
+		enumSiblingsAction: enrichment.None,
+		observablesAction:  enrichment.None,
+		pathNotation:       pathstyle.Simple,
+	}
+	for _, option := range options {
+		if option != nil {
+			option.applyPipeline(&config)
 		}
 	}
-	if err := validatePipelineConfig(config); err != nil {
-		return nil, err
+
+	internalConfig := processing.PipelineConfig{
+		EnumSiblingsAction: config.enumSiblingsAction,
+		ObservablesAction:  config.observablesAction,
+		Observables: processing.ObservablesConfig{
+			TypeIDs:                config.observableTypeIDs,
+			PathNotation:           config.pathNotation,
+			PathNotationConfigured: config.pathNotationConfigured,
+		},
+		IssueSuppression: processing.IssueSuppressionConfig{
+			Configured: config.issueSuppression.configured,
+			Codes:      config.issueSuppression.codes,
+			Invalid:    config.issueSuppression.invalid,
+		},
+
+		ValidationEnabled: config.validationEnabled,
+		Validation: processing.ValidationConfig{
+			WarnOnMissingRecommended: config.validation.warnOnMissingRecommended,
+			PathNotation:             config.validation.preferredPathNotation,
+			PathNotationConfigured:   config.validation.preferredPathNotationConfigured,
+			PolicyRules:              make([]processing.ValidationPolicyRule, len(config.validation.policyRules)),
+		},
 	}
-	si.ensureProcessingMetadata()
-	validationEnabled := false
-	for _, processor := range config.processors {
-		if processor.kind == processorKindValidation {
-			validationEnabled = true
-			break
+	for index, rule := range config.validation.policyRules {
+		internalConfig.Validation.PolicyRules[index] = processing.ValidationPolicyRule{
+			Action:       processing.ValidationPolicyAction(rule.action),
+			DefaultLevel: rule.defaultLevel,
+			Codes:        rule.codes,
 		}
 	}
-	if validationEnabled {
-		if err := si.ensureValidationMetadata(); err != nil {
+
+	if s == nil || s.pipelineFactory == nil {
+		if err := internalConfig.Validate(); err != nil {
 			return nil, err
 		}
+		return nil, errUninitializedSchema
 	}
-	transformCount := len(config.processors)
-	if validationEnabled {
-		transformCount--
+	pipeline, err := s.pipelineFactory.NewPipeline(internalConfig)
+	if err != nil {
+		return nil, err
 	}
-	pipeline := &eventProcessorPipelineImpl{
-		schema:     si,
-		transforms: make([]transformEventProcessor, 0, transformCount),
-	}
-	for _, processor := range config.processors {
-		switch processor.kind {
-		case processorKindEnrichment:
-			visitor, ok := processor.factory().(*enrichmentProcessor)
-			if !ok {
-				return nil, errors.New("enrichment processor factory returned an unexpected implementation")
-			}
-			pipeline.transforms = append(pipeline.transforms, transformEventProcessor{enrichment: visitor})
-			pipeline.needsValidationPath = true
-			pipeline.needsEnrichmentPath = processor.enrichment.addObservables
-		case processorKindEnrichmentRemoval:
-			visitor, ok := processor.factory().(*enrichmentRemovalProcessor)
-			if !ok {
-				return nil, errors.New("enrichment-removal processor factory returned an unexpected implementation")
-			}
-			pipeline.transforms = append(pipeline.transforms, transformEventProcessor{removal: visitor})
-		case processorKindValidation:
-			visitor, ok := processor.factory().(*validationProcessor)
-			if !ok {
-				return nil, errors.New("validation processor factory returned an unexpected implementation")
-			}
-			pipeline.validation = visitor
-			pipeline.needsValidationPath = true
-			pipeline.needsMissingAttributePath = true
-		}
-	}
-	return pipeline, nil
-}
-
-func validatePipelineConfig(config pipelineConfig) error {
-	if len(config.processors) == 0 {
-		return errors.New("at least one event processing action is required")
-	}
-
-	counts := make(map[processorKind]int, 3)
-	for _, processor := range config.processors {
-		counts[processor.kind]++
-	}
-
-	var problems []error
-	for _, kind := range []processorKind{
-		processorKindValidation,
-		processorKindEnrichment,
-		processorKindEnrichmentRemoval,
-	} {
-		if counts[kind] > 1 {
-			problems = append(problems, fmt.Errorf("%s processor may only be configured once", kind))
-		}
-	}
-
-	var addEnumSiblings, addObservables bool
-	var removeEnumSiblings, removeObservables bool
-	for index, processor := range config.processors {
-		label := processorLabel(processor.kind, index, counts[processor.kind])
-		if processor.factory == nil {
-			problems = append(problems, fmt.Errorf("%s has no factory", label))
-		}
-		switch processor.kind {
-		case processorKindEnrichment:
-			if !processor.enrichment.addEnumSiblings && !processor.enrichment.addObservables {
-				problems = append(problems, fmt.Errorf("%s must enable at least one action", label))
-			}
-			addEnumSiblings = addEnumSiblings || processor.enrichment.addEnumSiblings
-			addObservables = addObservables || processor.enrichment.addObservables
-		case processorKindEnrichmentRemoval:
-			if !processor.removal.removeEnumSiblings && !processor.removal.removeObservables {
-				problems = append(problems, fmt.Errorf("%s must enable at least one action", label))
-			}
-			if processor.removal.forceRemoveEnumSiblings && processor.removal.retainEnumSiblings {
-				problems = append(problems, fmt.Errorf("%s forces and retains enum siblings", label))
-			}
-			if processor.removal.forceRemoveObservables && processor.removal.retainObservables {
-				problems = append(problems, fmt.Errorf("%s forces and retains observables", label))
-			}
-			removeEnumSiblings = removeEnumSiblings || processor.removal.removeEnumSiblings
-			removeObservables = removeObservables || processor.removal.removeObservables
-		case processorKindValidation:
-		default:
-			problems = append(problems, fmt.Errorf("%s has an unknown processor kind", label))
-		}
-	}
-
-	if addEnumSiblings && removeEnumSiblings {
-		problems = append(problems, errors.New("adding and removing enum siblings are mutually exclusive"))
-	}
-	if addObservables && removeObservables {
-		problems = append(problems, errors.New("adding and removing observables are mutually exclusive"))
-	}
-	return errors.Join(problems...)
-}
-
-func processorLabel(kind processorKind, index int, count int) string {
-	if count > 1 {
-		return fmt.Sprintf("%s processor at position %d", kind, index+1)
-	}
-	return string(kind) + " processor"
+	return &Pipeline{state: pipeline}, nil
 }

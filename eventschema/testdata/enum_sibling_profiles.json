@@ -1,0 +1,99 @@
+{
+  "compile_version": 1,
+  "version": "1.0.0",
+  "dictionary": {
+    "types": {
+      "attributes": {
+        "integer_t": {},
+        "string_t": {}
+      }
+    },
+    "attributes": {
+      "action_id": {
+        "type": "integer_t",
+        "enum": {
+          "1": {
+            "caption": "Allowed"
+          }
+        },
+        "sibling": "action"
+      },
+      "action": {
+        "type": "string_t"
+      },
+      "status_id": {
+        "type": "integer_t",
+        "enum": {
+          "1": {
+            "caption": "Ready"
+          }
+        },
+        "sibling": "status"
+      },
+      "status": {
+        "type": "string_t"
+      }
+    }
+  },
+  "profiles": {
+    "p1": {},
+    "p2": {}
+  },
+  "classes": {
+    "test": {
+      "name": "test",
+      "uid": 1,
+      "attributes": {
+        "class_uid": {
+          "type": "integer_t",
+          "requirement": "required"
+        },
+        "action_id": {
+          "type": "integer_t",
+          "enum": {
+            "1": {
+              "caption": "Allowed"
+            }
+          },
+          "sibling": "action"
+        },
+        "action": {
+          "type": "string_t",
+          "profiles": [
+            "p1"
+          ]
+        },
+        "status_id": {
+          "type": "integer_t",
+          "enum": {
+            "1": {
+              "caption": "Ready"
+            }
+          },
+          "sibling": "status",
+          "profiles": [
+            "p2"
+          ]
+        },
+        "status": {
+          "type": "string_t"
+        },
+        "metadata": {
+          "type": "object_t",
+          "object_type": "metadata"
+        }
+      }
+    }
+  },
+  "objects": {
+    "metadata": {
+      "name": "metadata",
+      "attributes": {
+        "profiles": {
+          "type": "string_t",
+          "is_array": true
+        }
+      }
+    }
+  }
+}

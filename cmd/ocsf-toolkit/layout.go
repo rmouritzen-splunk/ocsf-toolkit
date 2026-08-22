@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/ocsf/ocsf-toolkit/internal/fserror"
 )
 
 const (
@@ -21,14 +23,23 @@ type inputEvent struct {
 	rel  string
 }
 
-// filesystemPath retains the absolute spelling of a path, its longest existing prefix, and the
-// form obtained by resolving symbolic links in that prefix. The existing prefix lets containment
-// checks use filesystem identity without detecting or assuming case-sensitivity rules.
+// singleEventInput builds the inputEvent for single-event mode (--event), which both
+// buildProcessingDestinations (reserving output paths) and processEvents (writing them) must
+// derive identically.
+func singleEventInput(config processConfig) inputEvent {
+	input := inputEvent{path: config.eventPath}
+	if config.eventPath == stdioPath {
+		input.rel = stdinEventRelativePath
+	}
+	return input
+}
+
+// filesystemPath retains the absolute spelling of a path and the form obtained by resolving
+// symbolic links in its longest existing prefix.
 type filesystemPath struct {
 	display  string
 	absolute string
 	resolved string
-	existing string
 }
 
 type reservedPath struct {
@@ -53,17 +64,17 @@ type processingDestinations struct {
 func newFilesystemPath(display string) (filesystemPath, error) {
 	absolute, err := filepath.Abs(display)
 	if err != nil {
-		return filesystemPath{}, fmt.Errorf("resolve absolute path for %q: %w", display, err)
+		return filesystemPath{}, fmt.Errorf("resolve absolute path for %q: %w", display, fserror.QuotePaths(err))
 	}
 	absolute = filepath.Clean(absolute)
-	resolved, existing, err := resolveExistingPathPrefix(absolute)
+	resolved, err := resolveExistingPathPrefix(absolute)
 	if err != nil {
 		return filesystemPath{}, fmt.Errorf("resolve symlinks for %q: %w", display, err)
 	}
-	return filesystemPath{display: display, absolute: absolute, resolved: resolved, existing: existing}, nil
+	return filesystemPath{display: display, absolute: absolute, resolved: resolved}, nil
 }
 
-func resolveExistingPathPrefix(absolute string) (string, string, error) {
+func resolveExistingPathPrefix(absolute string) (string, error) {
 	current := absolute
 	missing := make([]string, 0)
 	for {
@@ -71,21 +82,21 @@ func resolveExistingPathPrefix(absolute string) (string, string, error) {
 		if err == nil {
 			resolvedPrefix, err := filepath.EvalSymlinks(current)
 			if err != nil {
-				return "", "", err
+				return "", fserror.QuotePaths(err)
 			}
 			resolved := resolvedPrefix
 			for _, component := range slices.Backward(missing) {
 				resolved = filepath.Join(resolved, component)
 			}
-			return filepath.Clean(resolved), filepath.Clean(current), nil
+			return filepath.Clean(resolved), nil
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
-			return "", "", err
+			return "", fserror.QuotePaths(err)
 		}
 
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", "", fmt.Errorf("no existing ancestor for %q", absolute)
+			return "", fmt.Errorf("no existing ancestor for %q", absolute)
 		}
 		missing = append(missing, filepath.Base(current))
 		current = parent
@@ -104,26 +115,30 @@ func newOutputDestination(display string) (*outputDestination, error) {
 }
 
 func pathContains(root, path filesystemPath) bool {
-	if existingPathContains(root, path) {
+	relative, err := filepath.Rel(root.resolved, path.resolved)
+	if err == nil &&
+		(relative == "." ||
+			relative != ".." &&
+				!strings.HasPrefix(relative, ".."+string(filepath.Separator)) &&
+				!filepath.IsAbs(relative)) {
 		return true
 	}
-	relative, err := filepath.Rel(root.resolved, path.resolved)
+	return filesystemContainsPath(root.absolute, path.absolute)
+}
+
+// filesystemContainsPath is pathContains' filesystem-identity fallback. EvalSymlinks does not normalize
+// case, so on a case-insensitive filesystem two differently-cased spellings of the same existing
+// directory resolve to different strings even though they name the same location; comparing resolved
+// strings alone would then miss a real overlap. This walks path's existing ancestors comparing
+// filesystem identity (os.SameFile) against root, which catches that case regardless of spelling.
+func filesystemContainsPath(root, path string) bool {
+	rootInfo, err := os.Stat(root)
 	if err != nil {
 		return false
 	}
-	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) &&
-		!filepath.IsAbs(relative)
-}
-
-func existingPathContains(root, path filesystemPath) bool {
-	rootInfo, err := os.Stat(root.absolute)
-	if err != nil || path.existing == "" {
-		return false
-	}
-	current := path.existing
+	current := path
 	for {
-		info, err := os.Stat(current)
-		if err == nil && os.SameFile(rootInfo, info) {
+		if info, err := os.Stat(current); err == nil && os.SameFile(rootInfo, info) {
 			return true
 		}
 		parent := filepath.Dir(current)
@@ -148,112 +163,158 @@ func pathsOverlap(left, right filesystemPath) bool {
 }
 
 func buildProcessingDestinations(config processConfig) (processingDestinations, error) {
+	destinations, schemaPath, inputRoot, reserved, err := resolveDestinationRoots(config)
+	if err != nil {
+		return processingDestinations{}, err
+	}
+	if err := validateSchemaOutputNamespaces(config, destinations.outputRoot, schemaPath); err != nil {
+		return processingDestinations{}, err
+	}
+	if err := resolveEventDestinations(config, &destinations, &reserved); err != nil {
+		return processingDestinations{}, err
+	}
+	if err := resolveSummaryDestinations(config, &destinations, &reserved); err != nil {
+		return processingDestinations{}, err
+	}
+	if err := validateSummaryDestinations(destinations, inputRoot); err != nil {
+		return processingDestinations{}, err
+	}
+	return destinations, nil
+}
+
+func resolveDestinationRoots(
+	config processConfig,
+) (processingDestinations, filesystemPath, *filesystemPath, []reservedPath, error) {
 	destinations := processingDestinations{}
 	schemaPath, err := newFilesystemPath(config.schemaPath)
 	if err != nil {
-		return processingDestinations{}, fmt.Errorf("resolve schema %q: %w", config.schemaPath, err)
+		return destinations, filesystemPath{}, nil, nil, fmt.Errorf("resolve schema %q: %w", config.schemaPath, err)
 	}
-	reserved := []reservedPath{
-		{path: schemaPath, description: fmt.Sprintf("schema %q", config.schemaPath)},
-	}
-	var inputRoot *filesystemPath
+	reserved := []reservedPath{{path: schemaPath, description: fmt.Sprintf("schema %q", config.schemaPath)}}
 	if config.outputDir != "" {
-		outputRoot, err := newFilesystemPath(config.outputDir)
-		if err != nil {
-			return processingDestinations{}, fmt.Errorf("resolve output directory: %w", err)
+		outputRoot, resolveErr := newFilesystemPath(config.outputDir)
+		if resolveErr != nil {
+			return destinations, filesystemPath{}, nil, nil, fmt.Errorf("resolve output directory: %w", resolveErr)
 		}
 		destinations.outputRoot = &outputRoot
 		if err := validateOutputDirectory(config, outputRoot); err != nil {
-			return processingDestinations{}, err
+			return destinations, filesystemPath{}, nil, nil, err
 		}
 	}
-
+	var inputRoot *filesystemPath
 	if config.eventsDir != "" && destinations.outputRoot != nil {
-		root, err := newFilesystemPath(config.eventsDir)
-		if err != nil {
-			return processingDestinations{}, fmt.Errorf("resolve events input directory: %w", err)
+		root, resolveErr := newFilesystemPath(config.eventsDir)
+		if resolveErr != nil {
+			return destinations, filesystemPath{}, nil, nil,
+				fmt.Errorf("resolve events input directory: %w", resolveErr)
+		}
+		if err := validateEventsDirectory(root); err != nil {
+			return destinations, filesystemPath{}, nil, nil, err
 		}
 		inputRoot = &root
 		if pathsOverlap(root, *destinations.outputRoot) {
-			return processingDestinations{}, errors.New("input and output directory trees must not overlap")
+			return destinations, filesystemPath{}, nil, nil,
+				errors.New("input and output directory trees must not overlap")
 		}
 	}
+	return destinations, schemaPath, inputRoot, reserved, nil
+}
 
-	if destinations.outputRoot != nil {
-		for _, name := range activeOutputNamespaces(config) {
-			if pathContains(outputNamespace(*destinations.outputRoot, name), schemaPath) {
-				return processingDestinations{}, fmt.Errorf(
-					"schema path %q conflicts with reserved output namespace %q",
-					config.schemaPath,
-					name,
-				)
-			}
+func validateSchemaOutputNamespaces(config processConfig, outputRoot *filesystemPath, schemaPath filesystemPath) error {
+	if outputRoot == nil {
+		return nil
+	}
+	for _, name := range activeOutputNamespaces(config) {
+		if pathContains(outputNamespace(*outputRoot, name), schemaPath) {
+			return fmt.Errorf(
+				"schema path %q conflicts with reserved output namespace %q", config.schemaPath, name,
+			)
 		}
 	}
+	return nil
+}
 
+func resolveEventDestinations(
+	config processConfig,
+	destinations *processingDestinations,
+	reserved *[]reservedPath,
+) error {
 	if config.eventPath != "" && config.eventPath != stdioPath {
 		inputPath, err := newFilesystemPath(config.eventPath)
 		if err != nil {
-			return processingDestinations{}, fmt.Errorf("resolve input event %q: %w", config.eventPath, err)
+			return fmt.Errorf("resolve input event %q: %w", config.eventPath, err)
 		}
-		reserved = append(reserved, reservedPath{
+		*reserved = append(*reserved, reservedPath{
 			path: inputPath, description: fmt.Sprintf("input event %q", config.eventPath),
 		})
 	}
-
 	if config.eventPath != "" {
-		input := inputEvent{path: config.eventPath, rel: stdinEventRelativePath}
-		if config.eventPath != stdioPath {
-			input.rel = ""
-		}
+		input := singleEventInput(config)
 		if config.mutatesEvent() {
+			var err error
 			destinations.eventOutput, err = resolveDistinctDestination(
-				eventOutputPath(config, input), "processed event", &reserved,
+				eventOutputPath(config, input), "processed event", reserved,
 			)
 			if err != nil {
-				return processingDestinations{}, err
+				return err
 			}
 		}
 		if config.generatesReport() {
+			var err error
 			destinations.reportOutput, err = resolveDistinctDestination(
-				reportOutputPath(config, input), "processing report", &reserved,
+				reportOutputPath(config, input), "processing report", reserved,
 			)
 			if err != nil {
-				return processingDestinations{}, err
+				return err
 			}
 		}
 	}
+	return nil
+}
+
+func resolveSummaryDestinations(
+	config processConfig,
+	destinations *processingDestinations,
+	reserved *[]reservedPath,
+) error {
 	if config.summaryFile != "" {
 		summaryFile, resolveErr := resolveDistinctDestination(
-			config.summaryFile, "human-readable summary", &reserved,
+			config.summaryFile, "human-readable summary", reserved,
 		)
 		if resolveErr != nil {
-			return processingDestinations{}, resolveErr
+			return resolveErr
 		}
 		destinations.summaryFiles = append(destinations.summaryFiles, summaryFile)
 	}
 	if config.summaryJSONFile != "" {
+		var err error
 		destinations.summaryJSONFile, err = resolveDistinctDestination(
-			config.summaryJSONFile, "JSON summary", &reserved,
+			config.summaryJSONFile, "JSON summary", reserved,
 		)
 		if err != nil {
-			return processingDestinations{}, err
+			return err
 		}
 	}
 
-	if config.eventsDir != "" && !config.quiet && config.summaryFile != stdioPath {
-		destinations.summaryFiles = append([]*outputDestination{displayDestination(stdioPath)}, destinations.summaryFiles...)
+	if config.eventsDir != "" && !config.quiet && config.summaryFile != stdioPath &&
+		config.summaryJSONFile != stdioPath {
+		destinations.summaryFiles = append(
+			[]*outputDestination{displayDestination(stdioPath)},
+			destinations.summaryFiles...,
+		)
 	}
+	return nil
+}
 
+func validateSummaryDestinations(destinations processingDestinations, inputRoot *filesystemPath) error {
 	if destinations.outputRoot != nil {
 		for _, summary := range summaryDestinations(destinations) {
 			if summary == nil || summary.path.display == stdioPath {
 				continue
 			}
-			if sameFilesystemPath(summary.path, *destinations.outputRoot) ||
-				pathContains(outputNamespace(*destinations.outputRoot, eventsOutputDirectory), summary.path) ||
-				pathContains(outputNamespace(*destinations.outputRoot, reportsOutputDirectory), summary.path) {
-				return processingDestinations{}, fmt.Errorf(
+			if pathsOverlap(summary.path, outputNamespace(*destinations.outputRoot, eventsOutputDirectory)) ||
+				pathsOverlap(summary.path, outputNamespace(*destinations.outputRoot, reportsOutputDirectory)) {
+				return fmt.Errorf(
 					"summary output path %q conflicts with a reserved output namespace",
 					summary.path.display,
 				)
@@ -262,15 +323,15 @@ func buildProcessingDestinations(config processConfig) (processingDestinations, 
 	}
 	if inputRoot != nil {
 		for _, summary := range summaryDestinations(destinations) {
-			if summary != nil && summary.path.display != stdioPath && pathContains(*inputRoot, summary.path) {
-				return processingDestinations{}, fmt.Errorf(
+			if summary != nil && summary.path.display != stdioPath && pathsOverlap(*inputRoot, summary.path) {
+				return fmt.Errorf(
 					"summary output path %q conflicts with the input event directory",
 					summary.path.display,
 				)
 			}
 		}
 	}
-	return destinations, nil
+	return nil
 }
 
 func summaryDestinations(destinations processingDestinations) []*outputDestination {
@@ -288,7 +349,7 @@ func validateOutputDirectory(config processConfig, outputRoot filesystemPath) er
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect output directory %q: %w", outputRoot.display, err)
+		return fmt.Errorf("inspect output directory %q: %w", outputRoot.display, fserror.QuotePaths(err))
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("output path %q is not a directory", outputRoot.display)
@@ -298,12 +359,34 @@ func validateOutputDirectory(config processConfig, outputRoot filesystemPath) er
 	}
 	empty, err := directoryIsEmpty(outputRoot.absolute)
 	if err != nil {
-		return fmt.Errorf("read output directory %q: %w", outputRoot.display, err)
+		return fmt.Errorf("read output directory %q: %w", outputRoot.display, fserror.QuotePaths(err))
 	}
 	if !empty {
-		return fmt.Errorf("output directory %q is not empty (use --overwrite to replace existing outputs)", outputRoot.display)
+		return fmt.Errorf(
+			"output directory %q is not empty (use --overwrite to replace existing outputs)",
+			outputRoot.display,
+		)
 	}
 	return validateOutputNamespaces(config, outputRoot)
+}
+
+func validateEventsDirectory(inputRoot filesystemPath) error {
+	info, err := os.Lstat(inputRoot.absolute)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("events input directory %q does not exist", inputRoot.display)
+	}
+	if err != nil {
+		return fmt.Errorf(
+			"inspect events input directory %q: %w", inputRoot.display, fserror.QuotePaths(err),
+		)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("events input path %q is a symbolic link", inputRoot.display)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("events input path %q is not a directory", inputRoot.display)
+	}
+	return nil
 }
 
 func directoryIsEmpty(path string) (bool, error) {
@@ -328,7 +411,7 @@ func validateOutputNamespaces(config processConfig, outputRoot filesystemPath) e
 				return fs.SkipAll
 			}
 			if err != nil {
-				return err
+				return fserror.QuotePaths(err)
 			}
 			if path == root && !entry.IsDir() {
 				return fmt.Errorf("output namespace %q is not a directory", name)
@@ -338,7 +421,7 @@ func validateOutputNamespaces(config processConfig, outputRoot filesystemPath) e
 			}
 			info, err := entry.Info()
 			if err != nil {
-				return err
+				return fserror.QuotePaths(err)
 			}
 			if !info.IsDir() && !info.Mode().IsRegular() {
 				return fmt.Errorf("output namespace %q contains unsupported filesystem entry %q", name, path)
@@ -346,7 +429,7 @@ func validateOutputNamespaces(config processConfig, outputRoot filesystemPath) e
 			return nil
 		})
 		if err != nil {
-			return err
+			return fserror.QuotePaths(err)
 		}
 	}
 	return nil
@@ -363,6 +446,16 @@ func activeOutputNamespaces(config processConfig) []string {
 	return names
 }
 
+// resolveDistinctDestination is a one-time preflight check: it compares every explicitly selected destination
+// against every other destination reserved so far in this run and rejects a collision before any output is
+// written. It intentionally stops there. It does not claim, lock, or otherwise track these paths for the rest of
+// the run, and nothing later re-checks them against concurrent external modification: the CLI is a local tool that
+// assumes a stable filesystem while it runs, not a service defending against other processes or users. If the
+// filesystem changes after this check passes (or a case-folding or link-based alias this check cannot see causes an
+// unresolved collision), the write itself fails with an ordinary error — see writeOutputFile and
+// installTemporaryFileWithoutOverwrite in output.go — instead of being retried, reconciled, or specially handled.
+// See "CLI Boundary" in docs/architecture.md and the FAQ entries "What happens if input or output directories
+// change during processing?" and "Can two different input files produce the same output path?" in docs/FAQ.md.
 func resolveDistinctDestination(
 	display string,
 	description string,
@@ -382,6 +475,15 @@ func resolveDistinctDestination(
 				display,
 				previous.description,
 				description,
+			)
+		}
+		if pathsOverlap(destination.path, previous.path) {
+			return nil, fmt.Errorf(
+				"path %q selected for %s overlaps %s path %q",
+				display,
+				description,
+				previous.description,
+				previous.path.display,
 			)
 		}
 	}
@@ -408,17 +510,24 @@ func reportOutputPath(config processConfig, input inputEvent) string {
 	if config.eventPath != "" && config.reportOutput != "" {
 		return config.reportOutput
 	}
-	return filepath.Join(config.outputDir, reportsOutputDirectory, eventOutputRelativePath(input))
+	return filepath.Join(config.outputDir, reportsOutputDirectory, reportOutputRelativePath(input))
 }
 
 func eventOutputRelativePath(input inputEvent) string {
 	if input.rel != "" {
 		return safeOutputRelativePath(input.rel)
 	}
-	if input.path == stdioPath {
-		return stdinEventRelativePath
-	}
 	return safeOutputRelativePath(input.path)
+}
+
+// reportOutputRelativePath inserts a ".report" suffix before the file extension of the derived event
+// path, making an auto-derived report name unlikely to collide with a real event's filename.
+func reportOutputRelativePath(input inputEvent) string {
+	relative := eventOutputRelativePath(input)
+	dir, base := filepath.Split(relative)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	return filepath.Join(dir, stem+".report"+ext)
 }
 
 func safeOutputRelativePath(path string) string {

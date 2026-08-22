@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,7 +25,7 @@ func TestProcessRejectsExistingOutputWithoutOverwrite(t *testing.T) {
 	outputPath := filepath.Join(dir, "enriched.json")
 	reportPath := filepath.Join(dir, "report.json")
 	writeJSONFile(assert, eventPath, validCLIEvent())
-	assert.NoError(os.WriteFile(outputPath, []byte("existing\n"), 0o644))
+	assert.NoError(os.WriteFile(outputPath, []byte("existing\n"), 0o600))
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -101,12 +103,12 @@ func TestProcessStopsAfterFirstOutputWriteError(t *testing.T) {
 	eventPath := filepath.Join(dir, "event.json")
 	outputDir := filepath.Join(dir, "out")
 	enrichedPath := filepath.Join(outputDir, "events", "event.json")
-	reportPath := filepath.Join(outputDir, "reports", "event.json")
+	reportPath := filepath.Join(outputDir, "reports", "event.report.json")
 	writeJSONFile(assert, eventPath, validCLIEvent())
-	assert.NoError(os.MkdirAll(filepath.Dir(enrichedPath), 0o755))
-	assert.NoError(os.MkdirAll(filepath.Dir(reportPath), 0o755))
-	assert.NoError(os.WriteFile(enrichedPath, []byte("existing enriched\n"), 0o644))
-	assert.NoError(os.WriteFile(reportPath, []byte("existing report\n"), 0o644))
+	assert.NoError(os.MkdirAll(filepath.Dir(enrichedPath), 0o750))
+	assert.NoError(os.MkdirAll(filepath.Dir(reportPath), 0o750))
+	assert.NoError(os.WriteFile(enrichedPath, []byte("existing enriched\n"), 0o600))
+	assert.NoError(os.WriteFile(reportPath, []byte("existing report\n"), 0o600))
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
@@ -139,7 +141,7 @@ func TestProcessOverwriteAllowsExistingOutput(t *testing.T) {
 	outputPath := filepath.Join(dir, "enriched.json")
 	reportPath := filepath.Join(dir, "report.json")
 	writeJSONFile(assert, eventPath, validCLIEvent())
-	assert.NoError(os.WriteFile(outputPath, []byte("existing\n"), 0o644))
+	assert.NoError(os.WriteFile(outputPath, []byte("existing\n"), 0o600))
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -156,6 +158,91 @@ func TestProcessOverwriteAllowsExistingOutput(t *testing.T) {
 	assert.Equal("Alpha", enrichedEvent["class_name"])
 }
 
+func TestWriteTextOutputFilePreservesExistingPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix permission bits")
+	}
+
+	assert := require.New(t)
+	path := filepath.Join(t.TempDir(), "output.json")
+	assert.NoError(os.WriteFile(path, []byte("existing\n"), 0o600))
+	assert.NoError(os.Chmod(path, 0o400))
+
+	assert.NoError(writeTextOutputFile(path, "replacement\n", true))
+	info, err := os.Stat(path)
+	assert.NoError(err)
+	assert.Equal(os.FileMode(0o400), info.Mode().Perm())
+}
+
+func TestWriteTextOutputFileSupportsLongDestinationBasename(t *testing.T) {
+	assert := require.New(t)
+	path := filepath.Join(t.TempDir(), strings.Repeat("a", 250))
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Skipf("filesystem does not support the long destination basename: %v", err)
+	}
+	assert.NoError(os.Remove(path))
+
+	assert.NoError(writeTextOutputFile(path, "output\n", false))
+	data, err := os.ReadFile(path)
+	assert.NoError(err)
+	assert.Equal("output\n", string(data))
+}
+
+func TestProcessOverwriteReplacesExistingReport(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	reportPath := filepath.Join(dir, "report.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+	assert.NoError(os.WriteFile(reportPath, []byte(`{"unrelated": true}`), 0o600))
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", reportPath,
+		"--overwrite",
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	report := readEventReport(assert, reportPath)
+	assert.Equal(eventPath, report.EventSource)
+}
+
+func TestDestinationWriterOverwriteReplacesEarlierOutput(t *testing.T) {
+	assert := require.New(t)
+	path := filepath.Join(t.TempDir(), "event.json")
+	writer := newDestinationWriter(io.Discard, writeOptions{overwrite: true})
+
+	assert.NoError(writer.writeJSON(path, map[string]string{"source": "first"}))
+	err := writer.writeJSON(path, map[string]string{"source": "second"})
+
+	assert.NoError(err)
+	var output map[string]string
+	data, readErr := os.ReadFile(path)
+	assert.NoError(readErr)
+	assert.NoError(json.Unmarshal(data, &output))
+	assert.Equal(map[string]string{"source": "second"}, output)
+}
+
+func TestDestinationWriterOverwriteReplacesFilesystemAlias(t *testing.T) {
+	assert := require.New(t)
+	path := filepath.Join(t.TempDir(), "event.json")
+	writer := newDestinationWriter(io.Discard, writeOptions{overwrite: true})
+
+	assert.NoError(writer.writeJSON(path, map[string]string{"source": "first"}))
+	alias := caseAliasPath(t, path)
+	err := writer.writeJSON(alias, map[string]string{"source": "second"})
+
+	assert.NoError(err)
+	var output map[string]string
+	data, readErr := os.ReadFile(path)
+	assert.NoError(readErr)
+	assert.NoError(json.Unmarshal(data, &output))
+	assert.Equal(map[string]string{"source": "second"}, output)
+}
+
 func TestProcessRejectsFilesystemAliasesAcrossOutputsWithOverwrite(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
@@ -164,7 +251,7 @@ func TestProcessRejectsFilesystemAliasesAcrossOutputsWithOverwrite(t *testing.T)
 	eventOutput := filepath.Join(dir, "processed.json")
 	reportOutput := filepath.Join(dir, "report.json")
 	writeJSONFile(assert, eventPath, validCLIEvent())
-	assert.NoError(os.WriteFile(eventOutput, []byte("existing\n"), 0o644))
+	assert.NoError(os.WriteFile(eventOutput, []byte("existing\n"), 0o600))
 	if err := os.Link(eventOutput, reportOutput); err != nil {
 		t.Skipf("hard links are unavailable: %v", err)
 	}
@@ -189,7 +276,87 @@ func TestProcessRejectsFilesystemAliasesAcrossOutputsWithOverwrite(t *testing.T)
 	assert.Equal("existing\n", string(reportBytes))
 }
 
-func TestProcessWritesMultiplePrettyJSONOutputsSequentially(t *testing.T) {
+func TestEngineeringInvariantProcessRejectsCaseAliasedOutputs(t *testing.T) {
+	// Engineering invariant test: case-aliased event and report outputs must be rejected during best-effort
+	// preflight or, when the alias becomes observable only after creation, before the report can replace the event.
+	for _, overwrite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("overwrite=%t", overwrite), func(t *testing.T) {
+			assert := require.New(t)
+			dir := t.TempDir()
+			schemaPath := writeTestSchema(assert, dir)
+			eventPath := filepath.Join(dir, "event.json")
+			eventOutput := filepath.Join(dir, "Processed.json")
+			writeJSONFile(assert, eventPath, validCLIEvent())
+			assert.NoError(os.WriteFile(eventOutput, []byte("case-sensitivity probe\n"), 0o600))
+			reportOutput := caseAliasPath(t, eventOutput)
+			assert.NoError(os.Remove(eventOutput))
+
+			args := []string{
+				"--schema", schemaPath,
+				"--event", eventPath,
+				"--enrich",
+				"--event-output", eventOutput,
+				"--validate",
+				"--report-output", reportOutput,
+			}
+			if overwrite {
+				args = append(args, "--overwrite")
+			}
+
+			exitCode, _, stderr := runCLI(args...)
+
+			assert.Equal(1, exitCode)
+			if strings.Contains(stderr, "selected for processing report overlaps processed event path") {
+				assert.NoFileExists(eventOutput)
+				return
+			}
+			assert.Contains(stderr, "processing report was not written")
+			assert.Contains(stderr, fmt.Sprintf("report output %q", reportOutput))
+			assert.Contains(stderr, "names the same file as event output")
+			assert.Contains(stderr, fmt.Sprintf("event output %q", eventOutput))
+			assert.Contains(stderr, "which was already written")
+			event, err := jsonio.ReadObject(eventOutput)
+			assert.NoError(err)
+			assert.Equal("Alpha", event["class_name"])
+		})
+	}
+}
+
+func TestEngineeringInvariantProcessAllowsCaseVariantOutputsWhenDistinct(t *testing.T) {
+	// Engineering invariant test: case-variant event and report outputs remain valid when the filesystem
+	// identifies them as distinct files.
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	eventOutput := filepath.Join(dir, "Processed.json")
+	reportOutput := filepath.Join(dir, "processed.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+	assert.NoError(os.WriteFile(eventOutput, []byte("case-sensitivity probe\n"), 0o600))
+	if _, err := os.Stat(reportOutput); !errors.Is(err, os.ErrNotExist) {
+		t.Skip("filesystem is case-insensitive")
+	}
+	assert.NoError(os.Remove(eventOutput))
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--event-output", eventOutput,
+		"--validate",
+		"--report-output", reportOutput,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	event, err := jsonio.ReadObject(eventOutput)
+	assert.NoError(err)
+	assert.Equal("Alpha", event["class_name"])
+	report := readEventReport(assert, reportOutput)
+	assert.Equal(eventPath, report.EventSource)
+}
+
+func TestInvariantProcessAllowsOnlyOneStdoutOutput(t *testing.T) {
+	// Invariant test: one invocation may select stdout for at most one output option.
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
@@ -203,81 +370,65 @@ func TestProcessWritesMultiplePrettyJSONOutputsSequentially(t *testing.T) {
 		"--event-output", "-",
 		"--validate",
 		"--report-output", "-",
-		"--pretty-json",
+	)
+
+	assert.Equal(2, exitCode)
+	assert.Empty(stdout)
+	assert.Contains(stderr, "only one output option may use stdout")
+}
+
+func TestInvariantProcessAllowsEventOutputOnStdout(t *testing.T) {
+	// Invariant test: an event output may use stdout when every other selected output uses a file.
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	reportPath := filepath.Join(dir, "report.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--event-output", "-",
+		"--report-output", reportPath,
 	)
 
 	assert.Equal(0, exitCode, stderr)
 	assert.Empty(stderr)
-	decoder := json.NewDecoder(strings.NewReader(stdout))
 	var event map[string]any
-	assert.NoError(decoder.Decode(&event))
+	assert.NoError(json.Unmarshal([]byte(stdout), &event))
 	assert.Equal("Alpha", event["class_name"])
-	var report eventReport
-	assert.NoError(decoder.Decode(&report))
-	assert.Equal(eventPath, report.EventSource)
+	report := readEventReport(assert, reportPath)
 	assert.Equal("-", report.EventDestination)
-	var extra any
-	assert.ErrorIs(decoder.Decode(&extra), io.EOF)
-	assert.Contains(stdout, "\n  \"class_uid\":")
 }
 
-func TestProcessWritesMultipleCompactJSONOutputsAsJSONLines(t *testing.T) {
+func TestInvariantProcessAllowsJSONSummaryOnStdout(t *testing.T) {
+	// Invariant test: a JSON directory summary may use stdout when no other output option does.
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
-	eventPath := filepath.Join(dir, "event.json")
-	writeJSONFile(assert, eventPath, validCLIEvent())
+	eventsDir := filepath.Join(dir, "events")
+	outputDir := filepath.Join(dir, "output")
+	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
-		"--event", eventPath,
-		"--enrich",
-		"--event-output", "-",
+		"--events-dir", eventsDir,
 		"--validate",
-		"--report-output", "-",
+		"--output-dir", outputDir,
+		"--summary-json", "-",
 	)
 
 	assert.Equal(0, exitCode, stderr)
 	assert.Empty(stderr)
-	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	assert.Len(lines, 2)
-	var event map[string]any
-	assert.NoError(json.Unmarshal([]byte(lines[0]), &event))
-	assert.Equal("Alpha", event["class_name"])
-	var report eventReport
-	assert.NoError(json.Unmarshal([]byte(lines[1]), &report))
-	assert.Equal(eventPath, report.EventSource)
+	var summary summaryReport
+	assert.NoError(json.Unmarshal([]byte(stdout), &summary))
+	assert.Equal(1, summary.EventFilesProcessed)
 }
 
-func TestProcessSequentialJSONOmitsSkippedEvent(t *testing.T) {
-	assert := require.New(t)
-	dir := t.TempDir()
-	schemaPath := writeTestSchema(assert, dir)
-	eventPath := filepath.Join(dir, "event.json")
-	event := validCLIEvent()
-	delete(event, "activity_id")
-	writeJSONFile(assert, eventPath, event)
-
-	exitCode, stdout, stderr := runCLI(
-		"--schema", schemaPath,
-		"--event", eventPath,
-		"--enrich",
-		"--event-output", "-",
-		"--validate",
-		"--report-output", "-",
-		"--skip-invalid-output",
-	)
-
-	assert.Equal(0, exitCode, stderr)
-	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	assert.Len(lines, 1)
-	var report eventReport
-	assert.NoError(json.Unmarshal([]byte(lines[0]), &report))
-	assert.Empty(report.EventDestination)
-	assert.NotEmpty(report.Validation.Errors)
-}
-
-func TestProcessDirectoryWritesBothSummariesToStdout(t *testing.T) {
+func TestInvariantProcessRejectsBothSummariesOnStdout(t *testing.T) {
+	// Invariant test: human-readable and JSON summaries cannot both select stdout.
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
@@ -291,18 +442,13 @@ func TestProcessDirectoryWritesBothSummariesToStdout(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--validate",
 		"--output-dir", outputDir,
-		"--summary-file", "-",
-		"--summary-json-file", "-",
+		"--summary", "-",
+		"--summary-json", "-",
 	)
 
-	assert.Equal(0, exitCode, stderr)
-	assert.Empty(stderr)
-	assert.True(strings.HasPrefix(stdout, "ocsf-toolkit "))
-	jsonStart := strings.LastIndex(stdout, "\n{") + 1
-	assert.Positive(jsonStart)
-	var summary summaryReport
-	assert.NoError(json.Unmarshal([]byte(stdout[jsonStart:]), &summary))
-	assert.Equal(1, *summary.EventFilesProcessed)
+	assert.Equal(2, exitCode)
+	assert.Empty(stdout)
+	assert.Contains(stderr, "only one output option may use stdout")
 }
 
 func TestProcessRejectsSingleEventSummaryFile(t *testing.T) {
@@ -317,7 +463,7 @@ func TestProcessRejectsSingleEventSummaryFile(t *testing.T) {
 		"--event", eventPath,
 		"--validate",
 		"--report-output", "-",
-		"--summary-file", "-",
+		"--summary", "-",
 	)
 
 	assert.Equal(2, exitCode)
@@ -332,8 +478,8 @@ func TestProcessDirectoryDefaultSummaryBehavior(t *testing.T) {
 		summaryCount int
 	}{
 		{name: "default", summaryCount: 1},
-		{name: "explicit stdout", summaryArgs: []string{"--summary-file", "-"}, summaryCount: 1},
-		{name: "explicit stdout with quiet", summaryArgs: []string{"--summary-file", "-", "--quiet"}, summaryCount: 1},
+		{name: "explicit stdout", summaryArgs: []string{"--summary", "-"}, summaryCount: 1},
+		{name: "explicit stdout with quiet", summaryArgs: []string{"--summary", "-", "--quiet"}, summaryCount: 1},
 		{name: "quiet", summaryArgs: []string{"--quiet"}, summaryCount: 0},
 	}
 

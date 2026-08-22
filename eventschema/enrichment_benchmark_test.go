@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ocsf/ocsf-toolkit/enrichment"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
@@ -22,14 +23,14 @@ import (
 
 const benchmarkEvidenceCount = 20
 
-func makeRealSchema(assert *require.Assertions) Schema {
-	schema, err := New(testSchemaFilePath)
+func makeRealSchema(assert *require.Assertions) *Schema {
+	schema, _, err := Load(testSchemaFilePath)
 	assert.NoError(err)
 	return schema
 }
 
 // benchmarkDetectionFinding builds a detection_finding event with roughly six
-// hundred attributes. Integral numbers use int64 because OCSF int_t and long_t
+// hundred attributes. Integral numbers use int64 because OCSF integer_t and long_t
 // values are signed 64-bit integers and enum lookups require an integer kind.
 func benchmarkDetectionFinding() jsonish.Map {
 	return jsonish.Map{
@@ -240,10 +241,15 @@ func benchmarkEvidences() []jsonish.Map {
 				"parent_folder": "C:\\Users\\dana.reed\\AppData\\Local\\Temp",
 				"uid":           "file-1a2b3c4d5e" + suffix,
 				"hashes": []jsonish.Map{
-					{"algorithm_id": int64(3), "value": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e" + suffix},
+					{
+						"algorithm_id": int64(3),
+						"value":        "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e" + suffix,
+					},
 				},
 			},
-			"user":         jsonish.Map{"name": "dana.reed", "uid": "S-1-5-21-1004", "email_addr": "dana.reed@example.com"},
+			"user": jsonish.Map{
+				"name": "dana.reed", "uid": "S-1-5-21-1004", "email_addr": "dana.reed@example.com",
+			},
 			"src_endpoint": benchmarkEndpoint("win-fin-0042.corp.example.com", "10.42.13.201", int64(49152+index)),
 			"dst_endpoint": benchmarkEndpoint("cdn.example-malicious.test", "203.0.113.77", 443),
 		})
@@ -258,12 +264,26 @@ func resetBenchmarkEvent(event jsonish.Map) {
 	for _, sibling := range benchmarkTopLevelSiblings {
 		delete(event, sibling)
 	}
-	delete(event["device"].(jsonish.Map), "type")
-	delete(event["actor"].(jsonish.Map)["session"].(jsonish.Map), "logon_type")
-	delete(event["finding_info"].(jsonish.Map)["analytic"].(jsonish.Map), "type")
-	for _, evidence := range event["evidences"].([]jsonish.Map) {
+	device, deviceOK := event["device"].(jsonish.Map)
+	actor, actorOK := event["actor"].(jsonish.Map)
+	session, sessionOK := actor["session"].(jsonish.Map)
+	findingInfo, findingInfoOK := event["finding_info"].(jsonish.Map)
+	analytic, analyticOK := findingInfo["analytic"].(jsonish.Map)
+	evidences, evidencesOK := event["evidences"].([]jsonish.Map)
+	if !deviceOK || !actorOK || !sessionOK || !findingInfoOK || !analyticOK || !evidencesOK {
+		panic("representative benchmark event has an unexpected shape")
+	}
+	delete(device, "type")
+	delete(session, "logon_type")
+	delete(analytic, "type")
+	for _, evidence := range evidences {
 		delete(evidence, "verdict")
-		delete(evidence["file"].(jsonish.Map)["hashes"].([]jsonish.Map)[0], "algorithm")
+		file, fileOK := evidence["file"].(jsonish.Map)
+		hashes, hashesOK := file["hashes"].([]jsonish.Map)
+		if !fileOK || !hashesOK || len(hashes) == 0 {
+			panic("representative benchmark evidence has an unexpected shape")
+		}
+		delete(hashes[0], "algorithm")
 	}
 	for _, hashes := range benchmarkProcessChainHashes(event) {
 		delete(hashes, "algorithm")
@@ -294,8 +314,10 @@ var benchmarkTopLevelSiblings = []string{
 func BenchmarkProcessEventEnrichmentDetectionFinding(b *testing.B) {
 	assert := require.New(b)
 	schema := makeRealSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema,
-		NewEnrichment(WithAddObservables(true), WithAddEnumSiblings(true)))
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Add),
+		WithObservables(enrichment.Add),
+	)
 	event := benchmarkDetectionFinding()
 
 	b.ReportAllocs()
@@ -311,8 +333,10 @@ func BenchmarkProcessEventEnrichmentDetectionFinding(b *testing.B) {
 func BenchmarkProcessEventEnrichmentDetectionFindingParallel(b *testing.B) {
 	assert := require.New(b)
 	schema := makeRealSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema,
-		NewEnrichment(WithAddObservables(true), WithAddEnumSiblings(true)))
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Add),
+		WithObservables(enrichment.Add),
+	)
 
 	b.ReportAllocs()
 	b.ResetTimer()
