@@ -3,6 +3,7 @@ package eventschema
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/ocsf/ocsf-toolkit/internal/coerce"
@@ -209,10 +210,12 @@ func (p *enrichmentProcessor) addGeneratedObservables(
 				if duplicateOf == "generated" {
 					duplicateDescription = "earlier generated"
 				}
+				// Concatenation rather than fmt because events that repeat artifact
+				// values report this diagnostic once per duplicate observable.
 				context.addProcessorIssue(issuePhaseEnrichment, newProcessingDiagnostic(
 					"enrichment_observable_duplicate_skipped",
-					fmt.Sprintf("Generated observable %q was skipped because it duplicates an %s observable.",
-						identity.name, duplicateDescription),
+					"Generated observable "+strconv.Quote(identity.name)+
+						" was skipped because it duplicates an "+duplicateDescription+" observable.",
 					jsonish.Map{
 						"attribute_path": identity.name,
 						"attribute":      "observables",
@@ -445,8 +448,8 @@ func (c *processingContext) addObjectObservable(
 		"type_id": observableTypeID,
 	}
 	if addTypeSibling {
-		if typeStr, present := c.observableTypes[observableTypeID]; present {
-			observable["type"] = typeStr
+		if typeCaption, present := c.observableTypes[observableTypeID]; present {
+			observable["type"] = typeCaption
 		}
 	}
 	c.observables = append(c.observables, observable)
@@ -468,8 +471,8 @@ func (c *processingContext) addValueObservable(
 		"value":   valueStr,
 	}
 	if addTypeSibling {
-		if typeStr, present := c.observableTypes[observableTypeID]; present {
-			observable["type"] = typeStr
+		if typeCaption, present := c.observableTypes[observableTypeID]; present {
+			observable["type"] = typeCaption
 		}
 	}
 	c.observables = append(c.observables, observable)

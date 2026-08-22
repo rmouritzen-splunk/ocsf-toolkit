@@ -27,11 +27,16 @@ type configuredProcessor struct {
 type processorFactory func() eventProcessVisitor
 
 type eventProcessorPipelineImpl struct {
-	schema              *schemaImpl
-	transforms          []transformEventProcessor
-	validation          *validationProcessor
-	needsValidationPath bool
-	needsEnrichmentPath bool
+	schema     *schemaImpl
+	transforms []transformEventProcessor
+	validation *validationProcessor
+	// needsValidationPath and needsEnrichmentPath report whether any configured
+	// processor reads the corresponding attribute path. needsMissingAttributePath
+	// reports the same for attributes that are absent from the event, which only
+	// validation examines.
+	needsValidationPath       bool
+	needsEnrichmentPath       bool
+	needsMissingAttributePath bool
 }
 
 type transformEventProcessor struct {
@@ -93,6 +98,7 @@ func (si *schemaImpl) NewEventProcessorPipeline(processors ...EventProcessor) (E
 			}
 			pipeline.validation = visitor
 			pipeline.needsValidationPath = true
+			pipeline.needsMissingAttributePath = true
 		}
 	}
 	return pipeline, nil

@@ -439,12 +439,16 @@ func ensureSchemaEOF(decoder *json.Decoder) error {
 	return errors.New("unexpected trailing JSON value")
 }
 
-func makeObservableTypes(objects map[string]*objectDefinition) (map[int64]string, error) {
+// makeObservableTypes maps observable type IDs to their captions. Captions are
+// stored as any because enrichment only ever copies them into an observable
+// object, and converting a string to any allocates. Converting once here keeps
+// that cost out of the per-event path.
+func makeObservableTypes(objects map[string]*objectDefinition) (map[int64]any, error) {
 	observableObjectDef, objectDefPresent := objects["observable"]
 	if objectDefPresent && observableObjectDef != nil {
 		typeIDDef, typeIDDefPresent := observableObjectDef.Attributes["type_id"]
 		if typeIDDefPresent && typeIDDef != nil && typeIDDef.Enum != nil {
-			observableTypes := make(map[int64]string, len(typeIDDef.Enum))
+			observableTypes := make(map[int64]any, len(typeIDDef.Enum))
 			for typeIDStr, enumDef := range typeIDDef.Enum {
 				if enumDef == nil {
 					return nil, fmt.Errorf("observable type enum %q has a null definition", typeIDStr)
@@ -457,7 +461,7 @@ func makeObservableTypes(objects map[string]*objectDefinition) (map[int64]string
 			return observableTypes, nil
 		}
 	}
-	return make(map[int64]string), nil
+	return make(map[int64]any), nil
 }
 
 type deprecatedDefinition struct {
@@ -558,7 +562,7 @@ type schemaImpl struct {
 	dictionary      *dictionaryDefinition
 	profiles        map[string]*profileDefinition
 	version         string
-	observableTypes map[int64]string
+	observableTypes map[int64]any
 
 	processingMetadataOnce sync.Once // Pipeline construction only; never entered by ProcessEvent.
 	validationMetadataOnce sync.Once // Pipeline construction only; never entered by ProcessEvent.

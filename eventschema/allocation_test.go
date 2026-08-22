@@ -24,6 +24,7 @@ func TestProcessEventAllocationCeilings(t *testing.T) {
 		{name: "typed slices", ceiling: 28, setup: allocationTypedSlicesCase},
 		{name: "nested arrays", ceiling: 20, setup: allocationNestedArrayCase},
 		{name: "observable heavy", ceiling: 28, setup: allocationObservableCase},
+		{name: "enrichment detection finding", ceiling: 6600, setup: allocationDetectionFindingCase},
 	}
 
 	for _, test := range tests {
@@ -89,6 +90,16 @@ func allocationObservableCase(assert *require.Assertions) (EventProcessorPipelin
 	event["ball"] = jsonish.Map{"green": "go"}
 	pipeline := mustNewEventProcessorPipeline(assert, schema, NewEnrichment(), NewValidation())
 	return pipeline, event, resetEnrichedEvent
+}
+
+// allocationDetectionFindingCase budgets enrichment of a representative event
+// against the released schema fixture. The small cases above cannot detect
+// regressions in paths that only a real schema and a deeply nested event reach.
+func allocationDetectionFindingCase(assert *require.Assertions) (EventProcessorPipeline, jsonish.Map, func(jsonish.Map)) {
+	schema := makeRealSchema(assert)
+	pipeline := mustNewEventProcessorPipeline(assert, schema,
+		NewEnrichment(WithAddObservables(true), WithAddEnumSiblings(true)))
+	return pipeline, benchmarkDetectionFinding(), resetBenchmarkEvent
 }
 
 func resetEnrichedEvent(event jsonish.Map) {
