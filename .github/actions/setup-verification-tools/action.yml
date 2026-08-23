@@ -1,0 +1,33 @@
+name: Set up verification tools
+description: Install the pinned tools used by repository verification and release builds.
+
+runs:
+  using: composite
+  steps:
+    # Keep all verification-tool version pins in this action so every workflow uses the same versions.
+    - name: Install goimports
+      shell: bash
+      run: go install golang.org/x/tools/cmd/goimports@v0.49.0
+
+    - name: Show goimports version
+      shell: bash
+      run: go version -m "$(command -v goimports)"
+
+    - name: Install golangci-lint
+      uses: golangci/golangci-lint-action@v9
+      with:
+        version: v2.13.1
+        install-mode: binary
+        install-only: true
+
+    - name: Show golangci-lint version
+      shell: bash
+      run: golangci-lint version
+
+    - name: Install govulncheck
+      shell: bash
+      run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+    - name: Show govulncheck version
+      shell: bash
+      run: govulncheck -version

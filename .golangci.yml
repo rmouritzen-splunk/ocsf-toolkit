@@ -6,10 +6,38 @@ run:
 
 linters:
   enable:
+    - asciicheck
+    - bidichk
+    - contextcheck
+    - dupl
+    - durationcheck
+    - errchkjson
     - errorlint
+    - fatcontext
+    - forcetypeassert
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - gocritic
+    - gosec
+    - lll
+    - makezero
     - misspell
     - modernize
+    - musttag
     - nilerr
+    - nilnesserr
     - nilnil
+    - perfsprint
+    - reassign
     - unconvert
     - unparam
+    - usetesting
+  settings:
+    gosec:
+      excludes:
+        # This local-file library and CLI intentionally accept caller- and operator-selected paths.
+        # Path confinement is enforced where an operation requires it rather than for every file read.
+        - G304 # Potential file inclusion via variable
+    lll:
+      line-length: 120
+      tab-width: 4

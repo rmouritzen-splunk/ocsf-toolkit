@@ -440,7 +440,7 @@ For a complete working example of library usage, see the CLI implementation in `
 
 ## Development
 
-Local development requires a local checkout of this repository, Go 1.25.0 or newer, and `golangci-lint`.
+Local development, the development-tools module, and complete verification use Go 1.27. The main library and CLI module remains compatible with Go 1.25; a dedicated CI job runs `go test ./...` with the latest Go 1.25 patch release and `GOTOOLCHAIN=local` so automatic toolchain switching cannot conceal an unintended dependency on a newer language or standard library. Go 1.25 alone cannot run the complete verification targets. A local checkout also requires `golangci-lint`.
 
 Run the standard local verification target before submitting changes:
 

@@ -12,9 +12,8 @@ concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
-env:
-  GOLANGCI_LINT_VERSION: v2.12.2
-
+# Moving major-version tags are intentional for maintained actions: this project prefers receiving compatible fixes
+# automatically over commit-SHA pinning.
 jobs:
   release:
     name: Build and publish release
@@ -24,8 +23,9 @@ jobs:
       - name: Validate release tag
         shell: bash
         run: |
-          # This is intentionally a simple typo guard, not full SemVer validation.
-          # A stricter regular expression can be added if full SemVer enforcement becomes necessary.
+          # This is intentionally a simple typo guard, not full SemVer validation. Release tags are
+          # maintainer-controlled, so duplicating the complete SemVer parser here would add complexity without
+          # materially protecting this workflow. Keep scripts/latest-release-tag.sh's eligibility rule aligned.
           case "${GITHUB_REF_NAME}" in
             *+*)
               printf 'Release tags must not contain build metadata (+): %s\n' \
@@ -49,23 +49,16 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26.4"
+          go-version: "1.27.0"
           cache-dependency-path: go.sum
 
       - name: Show Go version
         run: go version
 
-      - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          install-mode: binary
-          install-only: true
-
-      - name: Show golangci-lint version
-        run: golangci-lint version
+      - name: Set up verification tools
+        uses: ./.github/actions/setup-verification-tools
 
       - name: Build release artifacts
         run: make package VERSION="${GITHUB_REF_NAME}"

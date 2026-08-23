@@ -4,6 +4,8 @@ set -eu
 requested_tag="${1:-}"
 
 eligible_tag() {
+	# This intentionally mirrors the release workflow's lightweight typo guard rather than duplicating the complete
+	# SemVer parser. Release tags are maintainer-controlled; benchmark selection needs the same acceptance policy.
 	case "$1" in
 		v[0-9]*) ;;
 		*) return 1 ;;

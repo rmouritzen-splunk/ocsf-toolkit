@@ -1,8 +1,9 @@
+.DS_Store
 .idea
 .vscode
-build
-dist
+.agents/
+build/
+dist/
 coverage.out
 coverage-percentages.out
 go-vet.out
-.DS_Store
