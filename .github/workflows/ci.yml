@@ -85,7 +85,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build
-          scripts/benchmark-compare.sh 2>&1 | tee build/benchmark-comparison.txt
+          scripts/benchmark-compare.sh --count 5 --time 250ms 2>&1 | tee build/benchmark-comparison.txt
 
       - name: Add benchmark comparison to job summary
         if: always()

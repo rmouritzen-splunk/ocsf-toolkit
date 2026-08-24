@@ -626,6 +626,8 @@ scripts/benchmark-compare.sh --base v0.8.0
 
 Use `--pattern REGEXP` to focus the suite and `--count N` or `--time DURATION` when the defaults do not provide enough statistical confidence. Run `scripts/benchmark-compare.sh --help` for the complete argument summary.
 
+The pull-request workflow uses five 250 ms samples for a lightweight comparison. Use the script's default ten 500 ms samples for deliberate local regression analysis, increasing either setting when the results need more statistical confidence.
+
 The comparison runs both revisions on the same machine and reports statistically evaluated runtime, bytes, and allocation differences through `benchstat`. The event-processing suite includes numeric enum coverage for integer-spelled and integral-float-spelled `json.Number` values, `int64`, and `float64`. A benchmark introduced after the selected release appears only in the current column until a later release contains the same benchmark.
 
 Project design and maintenance documentation:
