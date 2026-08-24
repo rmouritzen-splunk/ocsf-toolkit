@@ -1,20 +1,27 @@
 package eventschema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ocsf/ocsf-toolkit/enrichment"
+	"github.com/ocsf/ocsf-toolkit/internal/observablepath"
+	internalversion "github.com/ocsf/ocsf-toolkit/internal/semver"
+	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
+	"github.com/ocsf/ocsf-toolkit/validation"
 )
 
 func BenchmarkProcessEventValidation(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
 	event := validValidationEvent()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -26,10 +33,93 @@ func BenchmarkProcessEventValidation(b *testing.B) {
 	}
 }
 
+func BenchmarkProcessEventInactiveProfileAttribute(b *testing.B) {
+	benchmarks := []struct {
+		name  string
+		value any
+	}{
+		{name: "valid_primitive", value: "inactive"},
+		{name: "invalid_primitive", value: json.Number("1")},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			assert := require.New(b)
+			schema := makeValidationTestSchema(assert)
+			pipeline := mustNewPipeline(assert, schema, WithValidation())
+			event := validValidationEvent()
+			event["profile_attr"] = benchmark.value
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				if _, err := pipeline.ProcessEvent(event); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkProcessEventValidationPolicy(b *testing.B) {
+	benchmarks := []struct {
+		name            string
+		policy          ValidationOption
+		wantLevel       validation.Level
+		wantSuppression bool
+	}{
+		{name: "reported", wantLevel: validation.LevelError},
+		{name: "suppress_all", policy: WithSuppressValidation(), wantSuppression: true},
+		{
+			name:            "suppress_selected",
+			policy:          WithSuppressValidation(validation.AttributeWrongType),
+			wantSuppression: true,
+		},
+		{
+			name:      "error_as_warning",
+			policy:    WithValidationErrorsAsWarnings(validation.AttributeWrongType),
+			wantLevel: validation.LevelWarning,
+		},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			assert := require.New(b)
+			schema := makeValidationTestSchema(assert)
+			options := make([]ValidationOption, 0, 1)
+			if benchmark.policy != nil {
+				options = append(options, benchmark.policy)
+			}
+			pipeline := mustNewPipeline(assert, schema, WithValidation(options...))
+			event := validValidationEvent()
+			event["port"] = "invalid"
+			result, err := pipeline.ProcessEvent(event)
+			assert.NoError(err)
+			matching := issuesWithCode(result.Validation().Findings, validation.AttributeWrongType.String())
+			if benchmark.wantSuppression {
+				assert.Empty(matching)
+				assert.Equal(1, result.Validation().SuppressedErrorCount)
+			} else {
+				assert.Len(matching, 1)
+				assert.Equal(benchmark.wantLevel, matching[0].Level)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				if _, err := pipeline.ProcessEvent(event); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkProcessEventEnrichment(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewEnrichment())
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Add),
+		WithObservables(enrichment.Add),
+	)
 	event := validValidationEvent()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -47,7 +137,11 @@ func BenchmarkProcessEventEnrichment(b *testing.B) {
 func BenchmarkProcessEventCombined(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewEnrichment(), NewValidation())
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Add),
+		WithObservables(enrichment.Add),
+		WithValidation(),
+	)
 	event := validValidationEvent()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -65,7 +159,10 @@ func BenchmarkProcessEventCombined(b *testing.B) {
 func BenchmarkProcessEventEnrichmentRemoval(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewEnrichmentRemoval(WithRemoveObservables(false)))
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Remove),
+		WithObservables(enrichment.None),
+	)
 	event := validValidationEvent()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -79,10 +176,100 @@ func BenchmarkProcessEventEnrichmentRemoval(b *testing.B) {
 	}
 }
 
+func BenchmarkProcessEventIssueReporting(b *testing.B) {
+	benchmarks := []struct {
+		name        string
+		suppression PipelineOption
+	}{
+		{name: "reported"},
+		{name: "suppress_all", suppression: WithSuppressIssues()},
+		{
+			name:        "suppress_selected",
+			suppression: WithSuppressIssues(issue.EnrichmentEnumSiblingNotAdded),
+		},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			assert := require.New(b)
+			schema := makeValidationTestSchema(assert)
+			options := []PipelineOption{WithEnumSiblings(enrichment.Add), WithObservables(enrichment.None)}
+			if benchmark.suppression != nil {
+				options = append(options, benchmark.suppression)
+			}
+			pipeline := mustNewPipeline(assert, schema, options...)
+			event := validValidationEvent()
+			event["activity_id"] = json.Number("1234")
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				delete(event, "class_name")
+				if _, err := pipeline.ProcessEvent(event); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkProcessEventIssueSuppressionCleanPath(b *testing.B) {
+	benchmarks := []struct {
+		name    string
+		options []PipelineOption
+	}{
+		{name: "collect_all"},
+		{name: "suppress_all", options: []PipelineOption{WithSuppressIssues()}},
+		{
+			name:    "suppress_selected",
+			options: []PipelineOption{WithSuppressIssues(issue.EnrichmentEnumSiblingNotAdded)},
+		},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			assert := require.New(b)
+			schema := makeValidationTestSchema(assert)
+			options := append(
+				[]PipelineOption{WithEnumSiblings(enrichment.Add), WithObservables(enrichment.None)},
+				benchmark.options...,
+			)
+			pipeline := mustNewPipeline(assert, schema, options...)
+			event := validValidationEvent()
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for b.Loop() {
+				delete(event, "class_name")
+				delete(event, "activity_name")
+				if _, err := pipeline.ProcessEvent(event); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkProcessEventObservableRemoval(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.None), WithObservables(enrichment.Remove))
+	event := validValidationEvent()
+	observables := []any{jsonish.Map{"name": "name", "type_id": int64(1000), "value": "event name"}}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		event["observables"] = observables
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkProcessEventNestedArray(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
 	event := validValidationEvent()
 	event["status_ids"] = []any{json.Number("1"), json.Number("2")}
 	event["statuses"] = []any{"Open", "Closed"}
@@ -99,7 +286,7 @@ func BenchmarkProcessEventNestedArray(b *testing.B) {
 func BenchmarkProcessEventTypedSlices(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
 	event := validValidationEvent()
 	event["status_ids"] = []int64{1, 2}
 	event["statuses"] = []string{"Open", "Closed"}
@@ -116,7 +303,11 @@ func BenchmarkProcessEventTypedSlices(b *testing.B) {
 func BenchmarkProcessEventObservableHeavy(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewEnrichment(), NewValidation())
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Add),
+		WithObservables(enrichment.Add),
+		WithValidation(),
+	)
 	event := validValidationEvent()
 	event["ball"] = jsonish.Map{"green": "go"}
 	b.ReportAllocs()
@@ -132,12 +323,213 @@ func BenchmarkProcessEventObservableHeavy(b *testing.B) {
 	}
 }
 
+func BenchmarkProcessEventAddObservables(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.None),
+		WithObservables(enrichment.Add),
+	)
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		delete(event, "observables")
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventAddSelectedObservables(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	schema.compiledForTest().ObservableTypes[1000] = "Test observable"
+	pipeline := mustNewPipeline(
+		assert,
+		schema,
+		WithEnumSiblings(enrichment.None), WithObservables(enrichment.Add, 1000),
+	)
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		delete(event, "observables")
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventAddEnumSiblings(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Add),
+		WithObservables(enrichment.None),
+	)
+	event := validValidationEvent()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		delete(event, "class_name")
+		delete(event, "activity_name")
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventAddEnumSiblingsAndObservables(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Add),
+		WithObservables(enrichment.Add),
+	)
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		delete(event, "class_name")
+		delete(event, "activity_name")
+		delete(event, "observables")
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventAddObservablesAndValidate(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(
+		assert,
+		schema,
+		WithEnumSiblings(enrichment.None), WithObservables(enrichment.Add),
+		WithValidation(),
+	)
+	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		delete(event, "observables")
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkProcessEventMalformed(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
 	event := validValidationEvent()
 	event["class_uid"] = json.Number("invalid")
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventObservableStructuralFinding(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
+	event := validValidationEvent()
+	event["observables"] = []any{"not an object"}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventObservableSemanticFinding(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
+	event := validValidationEvent()
+	event["observables"] = []any{jsonish.Map{"name": "missing", "value": "value"}}
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventSuperTypeConstraintFinding(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	schema.compiledForTest().Dictionary.Types.Attributes["derived_bounded_int_t"] = &typeDefinition{
+		CommonAttributeDefinition: commonAttributeDefinition{Type: "bounded_int_t"},
+	}
+	schema.compiledForTest().Classes[1].Attributes["derived_bounded_count"] = &itemAttributeDefinition{
+		CommonAttributeDefinition: commonAttributeDefinition{Type: "derived_bounded_int_t"},
+	}
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
+	event := validValidationEvent()
+	event["derived_bounded_count"] = json.Number("11")
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventEnumSiblingRemovalFinding(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Remove),
+		WithObservables(enrichment.None),
+	)
+	event := validValidationEvent()
+	event["mode_id"] = json.Number("1")
+	event["mode"] = "Mismatch"
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessEventEnumSiblingRemovalFindingSuppressed(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema,
+		WithEnumSiblings(enrichment.Remove),
+		WithObservables(enrichment.None),
+		WithSuppressIssues(issue.EnrichmentRemovalEnumSiblingNotRemoved),
+	)
+	event := validValidationEvent()
+	event["mode_id"] = json.Number("1")
+	event["mode"] = "Mismatch"
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -151,8 +543,8 @@ func BenchmarkProcessEventMalformed(b *testing.B) {
 func BenchmarkProcessEventAllowedIntegerValue(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	schema.dictionary.Types.Attributes["level_t"].Values = []any{int64(9007199254740993)}
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	schema.compiledForTest().Dictionary.Types.Attributes["level_t"].Values = []any{int64(9007199254740993)}
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
 	event := validValidationEvent()
 	event["level"] = json.Number("9007199254740993")
 	b.ReportAllocs()
@@ -168,7 +560,7 @@ func BenchmarkProcessEventAllowedIntegerValue(b *testing.B) {
 func BenchmarkProcessEventScalarConstraints(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
 	event := validValidationEvent()
 	event["bounded_count"] = json.Number("5")
 	event["short_text"] = "abc"
@@ -187,7 +579,7 @@ func BenchmarkProcessEventScalarConstraints(b *testing.B) {
 func BenchmarkParseVersionRepeated(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, ok := parseVersion("1.7.0-custom.1"); !ok {
+		if _, ok := internalversion.Parse("1.7.0-custom.1"); !ok {
 			b.Fatal("version was not parsed")
 		}
 	}
@@ -201,7 +593,7 @@ func BenchmarkParseVersionRotating(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; b.Loop(); index++ {
-		if _, ok := parseVersion(versions[index%len(versions)]); !ok {
+		if _, ok := internalversion.Parse(versions[index%len(versions)]); !ok {
 			b.Fatal("version was not parsed")
 		}
 	}
@@ -210,7 +602,7 @@ func BenchmarkParseVersionRotating(b *testing.B) {
 func BenchmarkParseObservablePathRepeated(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := parseObservablePath("actor.user.groups[].name"); err != nil {
+		if _, err := observablepath.Parse("actor.user.groups[].name"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -224,7 +616,7 @@ func BenchmarkParseObservablePathRotating(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; b.Loop(); index++ {
-		if _, err := parseObservablePath(paths[index%len(paths)]); err != nil {
+		if _, err := observablepath.Parse(paths[index%len(paths)]); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -233,8 +625,8 @@ func BenchmarkParseObservablePathRotating(b *testing.B) {
 func BenchmarkProcessEventConstraintPath(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
-	schema.classes[1].Constraints = map[string][]string{"just_one": {"ball.green"}}
-	pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation())
+	schema.compiledForTest().Classes[1].Constraints = map[string][]string{"just_one": {"ball.green"}}
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
 	event := validValidationEvent()
 	event["ball"] = jsonish.Map{"green": "go"}
 	b.ReportAllocs()
@@ -250,7 +642,39 @@ func BenchmarkProcessEventConstraintPath(b *testing.B) {
 func BenchmarkLoadSchema(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		schema, err := New(testSchemaFilePath)
+		schema, _, err := Load(testSchemaFilePath)
+		if err != nil {
+			b.Fatal(err)
+		}
+		runtime.KeepAlive(schema)
+	}
+}
+
+func BenchmarkLoadSchemaFromReader(b *testing.B) {
+	data, err := os.ReadFile(testSchemaFilePath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		schema, _, err := LoadReader(bytes.NewReader(data))
+		if err != nil {
+			b.Fatal(err)
+		}
+		runtime.KeepAlive(schema)
+	}
+}
+
+func BenchmarkLoadSchemaFromBytes(b *testing.B) {
+	data, err := os.ReadFile(testSchemaFilePath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		schema, _, err := LoadBytes(data)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -261,11 +685,11 @@ func BenchmarkLoadSchema(b *testing.B) {
 func BenchmarkLoadSchemaWithValidationPipeline(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		schema, err := New(testSchemaFilePath)
+		schema, _, err := Load(testSchemaFilePath)
 		if err != nil {
 			b.Fatal(err)
 		}
-		pipeline, err := schema.NewEventProcessorPipeline(NewValidation())
+		pipeline, err := schema.NewPipeline(WithValidation())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -273,11 +697,39 @@ func BenchmarkLoadSchemaWithValidationPipeline(b *testing.B) {
 	}
 }
 
+func BenchmarkSchemaRetained(b *testing.B) {
+	data, err := os.ReadFile(testSchemaFilePath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var retainedBytes int64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		runtime.GC()
+		var before runtime.MemStats
+		runtime.ReadMemStats(&before)
+
+		schema, _, err := LoadBytes(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+		runtime.GC()
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+		//nolint:gosec // heap byte counts never approach int64's range.
+		retainedBytes += int64(after.HeapAlloc) - int64(before.HeapAlloc)
+		runtime.KeepAlive(schema)
+	}
+	b.ReportMetric(float64(retainedBytes)/float64(b.N), "retained-B/op")
+	runtime.KeepAlive(data)
+}
+
 func BenchmarkValidationMetadataRetained(b *testing.B) {
 	var retainedBytes int64
 	b.ReportAllocs()
 	for b.Loop() {
-		schema, err := New(testSchemaFilePath)
+		schema, _, err := Load(testSchemaFilePath)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -285,13 +737,14 @@ func BenchmarkValidationMetadataRetained(b *testing.B) {
 		var before runtime.MemStats
 		runtime.ReadMemStats(&before)
 
-		pipeline, err := schema.NewEventProcessorPipeline(NewValidation())
+		pipeline, err := schema.NewPipeline(WithValidation())
 		if err != nil {
 			b.Fatal(err)
 		}
 		runtime.GC()
 		var after runtime.MemStats
 		runtime.ReadMemStats(&after)
+		//nolint:gosec // heap byte counts never approach int64's range.
 		retainedBytes += int64(after.HeapAlloc) - int64(before.HeapAlloc)
 		runtime.KeepAlive(pipeline)
 	}

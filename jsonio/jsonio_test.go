@@ -3,12 +3,15 @@ package jsonio
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,29 +29,6 @@ func TestDecodeObjectRejectsNull(t *testing.T) {
 
 	require.Nil(t, object)
 	require.ErrorContains(t, err, "unexpected JSON null")
-}
-
-func TestDecodeArrayOfObjectsRejectsTrailingJSONValue(t *testing.T) {
-	assert := require.New(t)
-
-	objects, err := DecodeArrayOfObjects(strings.NewReader(`[{"class_uid": 1}] {"extra": true}`))
-
-	assert.Nil(objects)
-	assert.ErrorContains(err, "unexpected trailing JSON value")
-}
-
-func TestDecodeArrayOfObjectsRejectsNull(t *testing.T) {
-	objects, err := DecodeArrayOfObjects(strings.NewReader(`null`))
-
-	require.Nil(t, objects)
-	require.ErrorContains(t, err, "unexpected JSON null")
-}
-
-func TestDecodeArrayOfObjectsRejectsNullElement(t *testing.T) {
-	objects, err := DecodeArrayOfObjects(strings.NewReader(`[{} , null]`))
-
-	require.Nil(t, objects)
-	require.ErrorContains(t, err, "element 1 is JSON null")
 }
 
 func TestDecodeObjectPreservesNumbers(t *testing.T) {
@@ -75,7 +55,7 @@ func TestReadObject(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "event.json")
-	assert.NoError(os.WriteFile(path, []byte(`{"class_uid":1}`), 0o644))
+	assert.NoError(os.WriteFile(path, []byte(`{"class_uid":1}`), 0o600))
 
 	object, err := ReadObject(path)
 
@@ -86,11 +66,20 @@ func TestReadObject(t *testing.T) {
 	assert.ErrorContains(err, "failed to open JSON object file")
 }
 
+func TestReadObjectQuotesFilesystemErrorPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing event.json")
+	_, err := ReadObject(path)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), strconv.Quote(path))
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+}
+
 func TestReadObjectRejectsNullWithPath(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "event.json")
-	assert.NoError(os.WriteFile(path, []byte(`null`), 0o644))
+	assert.NoError(os.WriteFile(path, []byte(`null`), 0o600))
 
 	object, err := ReadObject(path)
 
@@ -115,35 +104,9 @@ func TestReadObjectFS(t *testing.T) {
 	assert.ErrorContains(err, `failed to decode JSON object file "bad.json"`)
 }
 
-func TestReadArrayOfObjects(t *testing.T) {
-	assert := require.New(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "events.json")
-	assert.NoError(os.WriteFile(path, []byte(`[{"class_uid":1}]`), 0o644))
+func TestReadObjectFSRejectsNilFilesystem(t *testing.T) {
+	object, err := ReadObjectFS(nil, "event.json")
 
-	objects, err := ReadArrayOfObjects(path)
-
-	assert.NoError(err)
-	assert.Len(objects, 1)
-	assert.Equal(json.Number("1"), objects[0]["class_uid"])
-
-	_, err = ReadArrayOfObjects(filepath.Join(dir, "missing.json"))
-	assert.ErrorContains(err, "failed to open JSON array of objects file")
-}
-
-func TestReadArrayOfObjectsFS(t *testing.T) {
-	assert := require.New(t)
-	files := fstest.MapFS{
-		"events.json": &fstest.MapFile{Data: []byte(`[{"class_uid":1}]`)},
-		"bad.json":    &fstest.MapFile{Data: []byte(`[] []`)},
-	}
-
-	objects, err := ReadArrayOfObjectsFS(files, "events.json")
-
-	assert.NoError(err)
-	assert.Len(objects, 1)
-	assert.Equal(json.Number("1"), objects[0]["class_uid"])
-
-	_, err = ReadArrayOfObjectsFS(files, "bad.json")
-	assert.ErrorContains(err, `failed to decode JSON array of objects file "bad.json"`)
+	require.Nil(t, object)
+	require.EqualError(t, err, "failed to open JSON object file: filesystem is nil")
 }

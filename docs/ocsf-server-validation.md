@@ -1,8 +1,8 @@
-# OCSF Server Validation Parity
+# Historical OCSF Server Validation Parity Notes
 
-Add matching tests to OCSF Server's `validator2.ex` implementation for the Go validation behavior listed here. Use the same event fixtures where practical and compare normalized issue codes and structured details rather than exact human-readable messages when language-specific formatting differs.
+This document records validation differences and possible OCSF Server changes identified while OCSF Toolkit still pursued parity with `validator2.ex`. It is retained as historical technical reference, not as an active back-port plan. OCSF Toolkit validation has progressed beyond the server implementation, and this project does not plan to port these behaviors back to OCSF Server.
 
-The local OCSF Server work has used the `fix-validator2` branch. The `long_t` range correction on that branch should remain aligned with OCSF's signed 8-byte integer definition.
+The earlier local OCSF Server work used the `fix-validator2` branch. The observations below describe that implementation at the time of review and may no longer reflect its current state.
 
 ## Robustness And Untrusted Input
 
@@ -17,8 +17,12 @@ After structural type validation reports an issue, later validation stages must 
 - Run enum-array validation only when the event value is an array.
 - Convert scalar enum values only when their primitive type supports the conversion.
 - Index an enum sibling array only when the sibling value is an array.
+- Validate enum and sibling arrays as equal-length, index-matched pairs. Report one length-mismatch finding for either a shorter or longer sibling array, then validate every available pair.
+- Apply the source-specific `Other` rule to integral enum ID 99 at scalar and array positions. A string enum key `"99"` has no equivalent special meaning.
 
 Malformed values should produce validation issues and must not raise from `Enum.reduce/3`, `Enum.at/2`, `to_string/1`, or atom conversion.
+
+OCSF Toolkit validation errors and warnings identify the affected location with `details.attribute_path` and omit event values from both messages and details. OCSF Server parity does not require retaining its original echoed value field or repeating values in messages; exact paths provide the machine-readable location without borrowing or duplicating event content.
 
 ## Event Processing
 
@@ -37,6 +41,7 @@ Throughout validation, treat an explicit JSON `null` as equivalent to a missing 
 - Other object types and event classes remain closed when profile filtering leaves no active attributes.
 - Flattened inherited profile attributes are accepted on a derived object only when their profile is active.
 - Null inactive-profile attributes are treated as missing.
+- A present inactive-profile attribute is defined by the schema rather than unknown. Report every profile that can enable it and whether its value is valid, shallowly valid, or invalid. Fully validate ordinary primitive scalars; check only the underlying primitive representation of enums, array shape, or object shape and resolved object type. Retain detected errors as an `invalid_value` validation result nested in the profile finding rather than independent findings.
 
 `validator2.ex` currently treats every empty filtered attribute set as open-ended. It should instead carry the containing attribute's `object_type` into nested validation and allow unknown keys only for a direct `object_type: "object"` reference. The generic `object` convention must not be inferred from an empty filtered or unfiltered attribute collection.
 
@@ -47,6 +52,7 @@ Throughout validation, treat an explicit JSON `null` as equivalent to a missing 
 - Enum arrays report missing sibling elements.
 - Enum arrays report incorrect sibling elements.
 - Unknown enum array values produce the array-specific unknown-enum issue.
+- An enum value with an unusable representation of the enum's resolved primitive type produces the ordinary type finding without a redundant unknown-enum finding.
 
 Enum validation currently assumes structurally valid event values and performs unbounded event-string-to-atom conversion. Apply the robustness changes above before looking up enum definitions or sibling array elements. Structural validation can report the original type issue; enum-specific validation should then skip values it cannot safely interpret.
 
@@ -70,7 +76,7 @@ Enum validation currently assumes structurally valid event values and performs u
 
 The inherited-regex branch in `validator2.ex` checks that the supertype has a regex but then reads the regex from the derived type. Compile and report the supertype's regex in that branch.
 
-OCSF `max_len` is measured in Unicode code points. Elixir's `String.length/1` counts grapheme clusters, so `validator2.ex` should instead count `String.codepoints/1` and include a combining-character parity test. Go's `utf8.RuneCountInString` already provides the required code-point count.
+For parity with OCSF Toolkit's documented interpretation, `max_len` is measured in Unicode code points. Elixir's `String.length/1` counts grapheme clusters, so `validator2.ex` would instead need to count `String.codepoints/1` and include a combining-character parity test. Go's `utf8.RuneCountInString` provides the toolkit's code-point count. The OCSF metaschema specifies a maximum length but does not define whether its unit is bytes, code points, or grapheme clusters.
 
 ## Numeric Bounds
 
@@ -78,13 +84,18 @@ OCSF `max_len` is measured in Unicode code points. Elixir's `String.length/1` co
 - `integer_t` rejects values below signed `int64` minimum and above signed `int64` maximum.
 - `long_t` accepts signed `int64` minimum and maximum values.
 - `long_t` rejects values below signed `int64` minimum and above signed `int64` maximum.
+- Integral fields accept native floating-point values and decimal or exponent representations when their values are finite, in range, and mathematically integral.
 - Integral fields reject numeric values with decimal or exponent representations when the represented value is not integral.
+- `float_t` fields accept integral numeric representations that can be converted to the implementation's floating-point type.
+
+`validator2.ex` currently relies on Elixir's disjoint `is_integer/1` and `is_float/1` runtime predicates. Normalize compatible numeric representations before applying the OCSF primitive type and constraint checks so validation does not depend on whether an encoding or decoder represented an integral value as an integer or a float.
 
 ## Deprecations
 
 - Deprecated classes produce warnings.
 - Deprecated objects produce warnings when visited.
 - Deprecated attributes produce warnings when present.
+- A present non-deprecated attribute whose declared dictionary type is deprecated produces a type-deprecation warning. A deprecated attribute produces only its attribute-deprecation warning rather than a redundant warning for its deprecated type.
 - Deprecated enum values produce warnings when used.
 
 ## Observables

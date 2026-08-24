@@ -2,6 +2,8 @@
 
 Enrichment removal removes redundant enum siblings and observables while preserving content that cannot be proven redundant. It can reduce event size when downstream systems can reconstruct enrichment from the same schema.
 
+Enum-sibling removal follows the shared recursive-object boundary described in [Event Processing](event-processing.md#recursive-objects). If an event reaches that boundary, descendants are not inspected or modified and the report contains the single top-level `issue_event_traversal_limited` processing issue for the event. Observable resolution applies the same boundary and retains an entry when proving it redundant would require deeper traversal.
+
 This guide describes the language-neutral behavior. See [Event Processing Model](event-processing.md) for class resolution, profiles, null handling, encodings, in-memory representations, and operation ordering.
 
 ## Safe And Forced Removal
@@ -10,23 +12,23 @@ Safe removal is the default. It removes content only when the schema and event p
 
 Forced removal is explicitly destructive:
 
-- forced enum sibling removal skips caption equality checks, but still retains enum ID 99 siblings because OCSF requires them;
-- forced observable removal deletes the top-level `observables` attribute without inspecting its entries and does not require a resolvable class.
+- forced enum sibling removal skips caption equality checks, but still retains integral enum ID 99 siblings because the OCSF convention requires them;
+- forced observable removal deletes the top-level `observables` attribute without inspecting its entries or using the resolved class schema, but like every mutation it runs only after `class_uid` resolves successfully.
 
 ## Enum Siblings
 
-Removal applies only to the standard scalar integral enum-ID and string-sibling form. Array enum siblings and other legacy or non-standard forms are retained.
+Removal applies to direct `integer_t` and `long_t` enums whose declared sibling has direct type `string_t` and the same scalar or array shape. Named subtypes do not qualify. Invalid declarations are retained on the ordinary processing path; when the declaration belongs to an enum, the schema loader reports the precise source or target problem as a nonfatal initialization issue.
 
 For each active supported enum attribute:
 
 1. If the sibling is absent, do nothing.
 2. If the sibling is null, remove it because null and missing are equivalent.
-3. If the enum ID or sibling has the wrong type, retain the sibling.
-4. If the enum ID is 99, always retain the sibling because OCSF requires a sibling for `Other`.
-5. In safe mode, remove the sibling only when its string value exactly equals the schema caption for the enum ID.
+3. If the enum value or sibling has the wrong type, retain the sibling and report that requested removal could not be performed.
+4. If an integral enum value is 99, always retain the sibling without a processing issue because OCSF requires a source-specific sibling for `Other`; string enum key `"99"` follows ordinary caption rules.
+5. In safe mode, remove the sibling only when its string value exactly equals the schema caption for the enum value; remove an array sibling only when the arrays have equal lengths and every value matches the caption at the same index.
 6. In forced mode, remove the sibling without comparing it to the caption.
 
-The safe equality rule preserves non-standard source text attached to ordinary enum IDs. It also avoids discarding a value when the schema does not provide a usable caption.
+The safe equality rule preserves non-standard source text attached to ordinary enum values. When an enum value is unknown or the sibling differs from the schema caption, safe removal retains the sibling and reports why it could not prove the content redundant. Validation may independently report the invalid final enum or sibling when validation is enabled.
 
 ## Observable Names
 
@@ -50,22 +52,24 @@ Retain and report entries whose names are missing, malformed, undefined by the a
 
 ## Filtering The Array
 
-Analyze all observable entries before removing enum siblings or otherwise changing referenced event content. Mark redundant entries by their original array indexes. After analysis:
+Enum-sibling work always completes before observable analysis, with no exception (see [Ordering Multiple Operations](event-processing.md#ordering-multiple-operations)); analyze observable entries against the event state that results, so an entry derived from an enum sibling that enum-sibling work has already removed cannot be verified and is retained. Mark redundant entries by their original array indexes. After analysis:
 
 - delete the `observables` attribute when every entry is removable;
 - otherwise, construct the retained array in original order and omit marked entries;
 - delete a null or empty `observables` attribute without further analysis;
 - leave a malformed non-array value intact in safe mode and report it.
 
-This mark-then-filter approach avoids index changes during analysis and supports shared observable analysis with a later validation stage.
+This mark-then-filter approach avoids index changes during removal analysis. A later validation stage independently analyzes the filtered final array and reports paths using its final indexes.
 
 ## Language-Neutral Algorithm
 
 ```text
-if forced observable removal is enabled:
-    delete observables and continue with any requested enum removal
-
 resolve the event class and active profiles
+walk active class and nested object attributes:
+    safely or forcibly remove supported scalar and array enum siblings
+
+if forced observable removal is enabled:
+    delete observables
 if observables is null or an empty array:
     delete it
 else if observables is a valid array:
@@ -75,11 +79,11 @@ else if observables is a valid array:
 else:
     retain it and report the malformed value
 
-walk active class and nested object attributes:
-    safely or forcibly remove supported enum siblings
-
 return removed counts, retained counts, and non-fatal issues
 ```
 
 For immutable records, Parquet rows, or similar representations, “remove” can mean constructing an output projection without the redundant field or array entries. In-place mutation is not required for equivalent behavior.
 
+## Reference Implementation
+
+`internal/processing/enrichment_removal.go` is a fully functioning, tested example of this algorithm. `issue/code.go` lists every enrichment-removal issue code it can produce. Read it directly for anything this guide leaves out. The public API and internal design built on top of this algorithm are described in [architecture.md](architecture.md), not here.

@@ -1,8 +1,8 @@
 // Package eventschema loads compiled OCSF schemas and builds processors for OCSF events.
 //
-// Event processors enrich, remove enrichment from, or validate events. An EventProcessorPipeline
-// combines processors into one pass. Schema and EventProcessorPipeline values are safe for concurrent
-// use after construction, but each ProcessEvent call must receive an event map that is not being
+// A Pipeline enriches, removes enrichment from, or validates events in one pass, configured by
+// options passed to Schema.NewPipeline. Schema and Pipeline values are safe for concurrent use
+// after construction, but each ProcessEvent call must receive an event map that is not being
 // accessed or mutated concurrently.
 //
 // ProcessEvent mutates events in place when enrichment, enrichment removal, or another mutating

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,10 +17,7 @@ func TestProcessDirectoryAcceptsRelativeInputAndOutputDirectories(t *testing.T) 
 	schemaPath := writeTestSchema(assert, dir)
 	writeJSONFile(assert, filepath.Join(dir, "events", "event.json"), validCLIEvent())
 
-	previousWD, err := os.Getwd()
-	assert.NoError(err)
-	assert.NoError(os.Chdir(dir))
-	t.Cleanup(func() { assert.NoError(os.Chdir(previousWD)) })
+	t.Chdir(dir)
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -49,6 +47,121 @@ func TestProcessDirectoryRequiresOutput(t *testing.T) {
 
 	assert.Equal(2, exitCode)
 	assert.Contains(stderr, "directory processing requires --output-dir DIR")
+}
+
+func TestProcessDirectoryRejectsMissingInputDirectoryDuringPreflight(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "missing-events")
+	outputDir := filepath.Join(dir, "output")
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--output-dir", outputDir,
+		"--validate",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Empty(stdout)
+	assert.Contains(stderr, "events input directory "+strconv.Quote(eventsDir)+" does not exist")
+	assert.NoDirExists(outputDir)
+}
+
+func TestProcessDirectoryRejectsRegularFileInputRootDuringPreflight(t *testing.T) {
+	for _, extension := range []string{".json", ".txt"} {
+		t.Run(extension, func(t *testing.T) {
+			assert := require.New(t)
+			dir := t.TempDir()
+			schemaPath := writeTestSchema(assert, dir)
+			eventsPath := filepath.Join(dir, "events"+extension)
+			outputDir := filepath.Join(dir, "output")
+			writeJSONFile(assert, eventsPath, validCLIEvent())
+
+			exitCode, stdout, stderr := runCLI(
+				"--schema", schemaPath,
+				"--events-dir", eventsPath,
+				"--output-dir", outputDir,
+				"--validate",
+			)
+
+			assert.Equal(1, exitCode)
+			assert.Empty(stdout)
+			assert.Contains(stderr, "events input path "+strconv.Quote(eventsPath)+" is not a directory")
+			assert.NoDirExists(outputDir)
+		})
+	}
+}
+
+func TestProcessDirectoryRejectsSymlinkInputRootDuringPreflight(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	actualEventsDir := filepath.Join(dir, "actual-events")
+	eventsLink := filepath.Join(dir, "events-link")
+	outputDir := filepath.Join(dir, "output")
+	assert.NoError(os.Mkdir(actualEventsDir, 0o750))
+	makeTestSymlink(t, actualEventsDir, eventsLink)
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsLink,
+		"--output-dir", outputDir,
+		"--validate",
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Empty(stdout)
+	assert.Contains(stderr, "events input path "+strconv.Quote(eventsLink)+" is a symbolic link")
+	assert.NoDirExists(outputDir)
+}
+
+func TestProcessDirectoryAcceptsEmptyInputDirectory(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "events")
+	outputDir := filepath.Join(dir, "output")
+	assert.NoError(os.Mkdir(eventsDir, 0o750))
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--output-dir", outputDir,
+		"--validate",
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Contains(stdout, "Event files processed: 0")
+	assert.Empty(stderr)
+	assert.NoDirExists(outputDir)
+}
+
+func TestProcessDirectoryIgnoresSymlinksWithinInputTree(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "events")
+	outsideDir := filepath.Join(dir, "outside")
+	outsideEvent := filepath.Join(outsideDir, "event.json")
+	outputDir := filepath.Join(dir, "output")
+	assert.NoError(os.Mkdir(eventsDir, 0o750))
+	writeJSONFile(assert, outsideEvent, validCLIEvent())
+	makeTestSymlink(t, outsideEvent, filepath.Join(eventsDir, "linked-event.json"))
+	makeTestSymlink(t, outsideDir, filepath.Join(eventsDir, "linked-directory"))
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--output-dir", outputDir,
+		"--validate",
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Contains(stdout, "Event files processed: 0")
+	assert.Empty(stderr)
+	assert.NoDirExists(outputDir)
 }
 
 func TestProcessDirectoryRejectsOverlappingInputAndOutputTrees(t *testing.T) {
@@ -95,14 +208,13 @@ func TestProcessDirectoryRejectsCaseAliasedOverlap(t *testing.T) {
 	schemaPath := writeTestSchema(assert, dir)
 	eventsDir := filepath.Join(dir, "Events")
 	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
-	eventsAlias := caseAliasPath(t, eventsDir)
+	eventsDirAlias := caseAliasPath(t, eventsDir)
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
 		"--events-dir", eventsDir,
-		"--output-dir", filepath.Join(eventsAlias, "out"),
+		"--output-dir", filepath.Join(eventsDirAlias, "out"),
 		"--validate",
-		"--overwrite",
 	)
 
 	assert.Equal(1, exitCode)
@@ -117,7 +229,7 @@ func TestProcessDirectoryAllowsSymlinkAsSelectedOutputRoot(t *testing.T) {
 	actualOutput := filepath.Join(dir, "actual-output")
 	outputAlias := filepath.Join(dir, "output-alias")
 	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
-	assert.NoError(os.Mkdir(actualOutput, 0o755))
+	assert.NoError(os.Mkdir(actualOutput, 0o750))
 	makeTestSymlink(t, actualOutput, outputAlias)
 
 	exitCode, _, stderr := runCLI(
@@ -128,7 +240,7 @@ func TestProcessDirectoryAllowsSymlinkAsSelectedOutputRoot(t *testing.T) {
 	)
 
 	assert.Equal(0, exitCode, stderr)
-	assert.FileExists(filepath.Join(actualOutput, "reports", "event.json"))
+	assert.FileExists(filepath.Join(actualOutput, "reports", "event.report.json"))
 }
 
 func TestNewFilesystemPathResolvesExistingPrefixAndRetainsMissingSuffix(t *testing.T) {
@@ -136,7 +248,7 @@ func TestNewFilesystemPathResolvesExistingPrefixAndRetainsMissingSuffix(t *testi
 	dir := t.TempDir()
 	actual := filepath.Join(dir, "actual")
 	alias := filepath.Join(dir, "alias")
-	assert.NoError(os.Mkdir(actual, 0o755))
+	assert.NoError(os.Mkdir(actual, 0o750))
 	makeTestSymlink(t, actual, alias)
 
 	path, err := newFilesystemPath(filepath.Join(alias, "missing", "event.json"))
@@ -164,9 +276,26 @@ func TestEventOutputRelativePathDoesNotPreserveTraversal(t *testing.T) {
 		input inputEvent
 		want  string
 	}{
-		{name: "relative traversal", input: inputEvent{path: filepath.Join("..", "outside", "event.json")}, want: "event.json"},
-		{name: "directory traversal", input: inputEvent{path: "event.json", rel: filepath.Join("..", "event.json")}, want: "event.json"},
-		{name: "safe relative path", input: inputEvent{path: filepath.Join("nested", "event.json")}, want: filepath.Join("nested", "event.json")},
+		{
+			name:  "relative traversal",
+			input: inputEvent{path: filepath.Join("..", "outside", "event.json")},
+			want:  "event.json",
+		},
+		{
+			name:  "directory traversal",
+			input: inputEvent{path: "event.json", rel: filepath.Join("..", "event.json")},
+			want:  "event.json",
+		},
+		{
+			name:  "internal parent navigation",
+			input: inputEvent{path: filepath.Join("nested", "..", "other", "event.json")},
+			want:  filepath.Join("other", "event.json"),
+		},
+		{
+			name:  "safe relative path",
+			input: inputEvent{path: filepath.Join("nested", "event.json")},
+			want:  filepath.Join("nested", "event.json"),
+		},
 		{name: "absolute path", input: inputEvent{path: filepath.Join(t.TempDir(), "event.json")}, want: "event.json"},
 	}
 
@@ -190,9 +319,9 @@ func TestProcessDirectoryRequiresEmptyOutputWithoutOverwrite(t *testing.T) {
 	eventsDir := filepath.Join(dir, "input")
 	outputDir := filepath.Join(dir, "output")
 	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
-	assert.NoError(os.MkdirAll(outputDir, 0o755))
+	assert.NoError(os.MkdirAll(outputDir, 0o750))
 	existing := filepath.Join(outputDir, "existing.txt")
-	assert.NoError(os.WriteFile(existing, []byte("keep"), 0o644))
+	assert.NoError(os.WriteFile(existing, []byte("keep"), 0o600))
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -214,12 +343,12 @@ func TestProcessDirectoryOverwriteAllowsNonemptyOutput(t *testing.T) {
 	eventsDir := filepath.Join(dir, "input")
 	outputDir := filepath.Join(dir, "output")
 	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
-	assert.NoError(os.MkdirAll(outputDir, 0o755))
+	assert.NoError(os.MkdirAll(outputDir, 0o750))
 	existing := filepath.Join(outputDir, "existing.txt")
-	assert.NoError(os.WriteFile(existing, []byte("keep"), 0o644))
+	assert.NoError(os.WriteFile(existing, []byte("keep"), 0o600))
 	existingEvent := filepath.Join(outputDir, "events", "event.json")
-	assert.NoError(os.MkdirAll(filepath.Dir(existingEvent), 0o755))
-	assert.NoError(os.WriteFile(existingEvent, []byte("old"), 0o644))
+	assert.NoError(os.MkdirAll(filepath.Dir(existingEvent), 0o750))
+	assert.NoError(os.WriteFile(existingEvent, []byte("old"), 0o600))
 
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
@@ -244,8 +373,8 @@ func TestProcessDirectoryRejectsSymlinkInsideOutputNamespace(t *testing.T) {
 	outputDir := filepath.Join(dir, "output")
 	outside := filepath.Join(dir, "outside")
 	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
-	assert.NoError(os.MkdirAll(filepath.Join(outputDir, "events"), 0o755))
-	assert.NoError(os.MkdirAll(outside, 0o755))
+	assert.NoError(os.MkdirAll(filepath.Join(outputDir, "events"), 0o750))
+	assert.NoError(os.MkdirAll(outside, 0o750))
 	makeTestSymlink(t, outside, filepath.Join(outputDir, "events", "nested"))
 
 	exitCode, _, stderr := runCLI(
@@ -328,6 +457,47 @@ func TestProcessRejectsExplicitOutputAliasingSchema(t *testing.T) {
 	assert.Equal(originalSchema, actualSchema)
 }
 
+func TestProcessRejectsOverlappingExplicitOutputPathsBeforeWriting(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		eventOutput func(string) string
+		report      func(string) string
+	}{
+		{
+			name:        "processed event is ancestor",
+			eventOutput: func(root string) string { return root },
+			report:      func(root string) string { return filepath.Join(root, "report.json") },
+		},
+		{
+			name:        "processing report is ancestor",
+			eventOutput: func(root string) string { return filepath.Join(root, "event.json") },
+			report:      func(root string) string { return root },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			dir := t.TempDir()
+			schemaPath := writeTestSchema(assert, dir)
+			eventPath := filepath.Join(dir, "input.json")
+			outputRoot := filepath.Join(dir, "selected-output")
+			writeJSONFile(assert, eventPath, validCLIEvent())
+
+			exitCode, _, stderr := runCLI(
+				"--schema", schemaPath,
+				"--event", eventPath,
+				"--enrich",
+				"--event-output", test.eventOutput(outputRoot),
+				"--report-output", test.report(outputRoot),
+			)
+
+			assert.Equal(1, exitCode)
+			assert.Contains(stderr, "overlaps")
+			assert.NoFileExists(test.eventOutput(outputRoot))
+			assert.NoFileExists(test.report(outputRoot))
+		})
+	}
+}
+
 func TestProcessRejectsCaseAliasedOutputOverwritingSchema(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
@@ -393,11 +563,33 @@ func TestProcessRejectsSummaryInsideReservedNamespace(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--enrich",
 		"--output-dir", outputDir,
-		"--summary-json-file", filepath.Join(outputDir, "events", "summary.json"),
+		"--summary-json", filepath.Join(outputDir, "events", "summary.json"),
 	)
 
 	assert.Equal(1, exitCode)
 	assert.Contains(stderr, "conflicts with a reserved output namespace")
+}
+
+func TestProcessRejectsSummaryContainingReservedNamespace(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "events")
+	destination := filepath.Join(dir, "destination")
+	outputDir := filepath.Join(destination, "output")
+	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--enrich",
+		"--output-dir", outputDir,
+		"--summary-json", destination,
+	)
+
+	assert.Equal(1, exitCode)
+	assert.Contains(stderr, "conflicts with a reserved output namespace")
+	assert.NoDirExists(outputDir)
 }
 
 func TestProcessRejectsSummaryInsideInputDirectory(t *testing.T) {
@@ -412,7 +604,7 @@ func TestProcessRejectsSummaryInsideInputDirectory(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--validate",
 		"--output-dir", filepath.Join(dir, "output"),
-		"--summary-file", filepath.Join(eventsDir, "summary.txt"),
+		"--summary", filepath.Join(eventsDir, "summary.txt"),
 		"--overwrite",
 	)
 
@@ -433,8 +625,8 @@ func TestProcessRejectsSameFileForBothSummaries(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--validate",
 		"--output-dir", filepath.Join(dir, "output"),
-		"--summary-file", summaryPath,
-		"--summary-json-file", summaryPath,
+		"--summary", summaryPath,
+		"--summary-json", summaryPath,
 	)
 
 	assert.Equal(1, exitCode)
@@ -445,7 +637,7 @@ func TestPathsOverlapUsesResolvedSymlinks(t *testing.T) {
 	dir := t.TempDir()
 	actual := filepath.Join(dir, "actual")
 	alias := filepath.Join(dir, "alias")
-	require.NoError(t, os.Mkdir(actual, 0o755))
+	require.NoError(t, os.Mkdir(actual, 0o750))
 	makeTestSymlink(t, actual, alias)
 
 	left, err := newFilesystemPath(actual)

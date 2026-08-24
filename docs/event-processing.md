@@ -14,6 +14,8 @@ The operation-specific guides are:
 
 An OCSF event is a logical tree of named attributes, scalar values, objects, and arrays. JSON is one encoding of that tree, but these algorithms do not depend on JSON text. The same approach can be applied to data decoded from Parquet, Avro, a database row, a message protocol, or another encoding, provided the logical OCSF structure and scalar values are preserved.
 
+Encoding-specific ambiguity must be resolved before processing. For example, an in-memory event object has at most one value for an attribute, while a JSON parser determines whether duplicate object member names are rejected or which value is retained. Such parsing policy belongs at the decoding boundary rather than in schema-guided event processing.
+
 The in-memory representation is also an implementation choice. Examples include:
 
 - generic maps, arrays, and scalar values, as used by this project;
@@ -43,13 +45,13 @@ Schema compilation owns semantic schema validation, including reference integrit
 
 The top-level `class_uid` identifies the event class. Resolve it as a signed integral value and look up the corresponding compiled class definition before performing schema-guided processing.
 
-If `class_uid` is missing, malformed, or unknown, ordinary schema-guided walking cannot continue because the event shape is not known. Validation should report the class problem. Enrichment and safe enrichment removal should not guess a class. Operations that do not require a class, such as forced removal of the top-level `observables` attribute, may still proceed.
+If `class_uid` is missing, malformed, or unknown, event processing stops because the event does not identify a valid OCSF class. Report a mandatory processing issue for this termination whether or not validation is enabled. Validation should additionally report the class problem when enabled; this finding cannot be suppressed, although reporting policy may change its effective level. No mutation is performed, including force removal and other operations that would not otherwise require the class schema. Requiring class resolution before any mutation provides a minimal sanity check that the input is shaped as an OCSF event rather than arbitrary structured data.
 
 ## Profiles
 
 Read active profiles from `metadata.profiles`. A schema attribute with no profile restriction is active. A profile-restricted attribute is active when at least one of its profiles is active for the event.
 
-Profile filtering affects traversal, enrichment, removal, requirements, and unknown-attribute validation. An attribute that exists only in an inactive profile is not part of the event's active schema.
+Profile filtering affects traversal, enrichment, removal, requirements, and validation. An attribute defined only by inactive profiles is not part of the event's active schema, so mutation processors do not receive it. Validation distinguishes a present inactive attribute from an undefined attribute, identifies every profile that can enable it, and performs a best-effort check of its top-level value shape. Ordinary primitive scalars receive complete value validation; enums, arrays, and objects receive only shallow validation because enabling the profile will place them in the ordinary complete walk and may reveal additional findings.
 
 The generic `object` object type is an open-ended OCSF object when used directly. Its contents are not restricted by profile-defined attributes. A derived object with no attributes is still a closed object and remains affected by profile definitions inherited into its compiled definition.
 
@@ -71,15 +73,29 @@ After resolving the class and profiles, walk the active class attributes defined
 4. If it is an object attribute, resolve its compiled `object_type` and recursively process the object.
 5. Apply completed-object or completed-class checks, such as structural constraints.
 
-Walking schema attributes rather than only the attributes present in an event is important: requirements and missing enum siblings cannot otherwise be detected. Validation additionally enumerates actual object attributes to detect names that are not present in the active schema.
+Walking schema attributes rather than only the attributes present in an event is important: requirements and missing enum siblings cannot otherwise be detected. The walker classifies present attributes excluded by profile filtering separately for validation. Validation additionally enumerates actual object attributes to detect names that are not present in the compiled schema definition.
 
-Paths used in reports should identify array elements with zero-based indexes, for example `network_endpoint[1].ip`. Observable names have their own path syntax described in the operation guides.
+A supported scalar or array enum and its same-shaped string sibling form one logical processing unit when both attributes are active. The enum must have direct type `integer_t` or `long_t`; the target must exist in the same concrete item, must not itself have an enum, and must have direct type `string_t` with the same `is_array` value. Named subtypes and attribute naming do not affect this decision. Array values are parallel: their lengths must match and each enum element is paired only with the sibling element at the same index. Dispatch that pair instead of dispatching either definition as an ordinary attribute; an operation that does not need pair-specific behavior may process either or both definitions using its ordinary attribute logic internally. The enum's ordered schema entry owns the pair dispatch, and the sibling's ordered entry is skipped, so the pair is processed exactly once whether neither, either, or both values are present in the event. Profile activation is evaluated independently for each attribute. If only one member is active, process it as an ordinary attribute and do not enrich, remove, or validate a sibling relationship through the inactive member. A present inactive member receives the normal profile-required validation treatment. An invalid declaration produces a specific nonfatal schema initialization issue, is not linked as a pair, and leaves its attributes on the ordinary processing path. A `sibling` property on a non-enum attribute is ignored without an issue.
+
+Paths used in reports identify array elements with zero-based indexes, for example `network_endpoint[1].ip`. This canonical diagnostic form is independent of the selected observable name notation. Observable names have their own path syntax described in the operation guides.
+
+### Recursive object definitions
+
+OCSF object definitions may be recursive. The shared attribute dictionary gives recursive relationships consistent attribute names, so processing uses repeated object-attribute names as the recursion boundary. When an object-valued attribute has the same name as an earlier attribute on the active traversal branch, encounter and report that repeated attribute normally but treat its object value as opaque: do not process any attributes inside the repeated object. Array positions do not participate in this comparison.
+
+For example, processing may walk from a file into its parent file, but a second parent attribute is only reported as the boundary; the second parent object is not processed. Similarly, traversal proceeds through `person.ldap_person.manager` because each relationship name is distinct, but a subsequent `ldap_person` attribute is the boundary and the second LDAP person object is not processed. The same attribute name on a separate sibling branch remains eligible for normal traversal.
+
+This depth agrees with OCSF's process-specific [guidance for representing process parentage](https://github.com/ocsf/ocsf-docs/blob/main/articles/representing-process-parentage.md), which recommends populating `process.parent_process` only on the top-level process object and using `process.ancestry` for ancestry beyond the immediate parent. The toolkit applies its attribute-name boundary generally because recursive relationships also exist outside process parentage.
+
+The boundary also protects processing performance and robustness. Recursive object relationships combined with arrays or multiple recursive branches can create a geometrically growing nested structure. Treating the first repeated relationship as opaque bounds schema-guided recursion before processing follows that expansion indefinitely or performs disproportionate work below the boundary. This rule does not impose a general event-size or array-breadth limit.
+
+Content below this recursion boundary is retained but is not enriched, unenriched, or validated by schema-guided processing. Reaching the boundary does not make the event invalid, but it means processing is incomplete. Report at most one top-level `issue_event_traversal_limited` processing issue per event, using the first affected indexed path. Do not report the limitation as a validation warning or error.
 
 ## Ordering Multiple Operations
 
-Operations that mutate an event run before validation so validation observes the final event. When enrichment removal is enabled, observable redundancy is analyzed before enum siblings are removed; observable references are therefore evaluated against the original enriched content. Removable observables are then filtered before ordinary validation walks the event.
+Operations that mutate an event run before validation so validation observes the final event. Enum-sibling work (adding, safely removing, or force-removing) always completes before observable work, with no exception, regardless of which actions are combined; observable analysis and generation therefore see the event state after any enum-sibling change has already been applied. An observable derived from an enum sibling that enum-sibling work has already removed cannot be verified and is retained, not removed. Removable observables are then filtered, and validation independently analyzes the retained observables and the rest of the final event.
 
-Adding and removing the same enrichment category in one operation is ambiguous and should be rejected. Adding observables while removing enum siblings, or adding enum siblings while removing observables, can be valid when the implementation defines and preserves the ordering.
+Adding and removing the same enrichment category in one operation is ambiguous and should be rejected.
 
 Processing is not inherently transactional. A mutating implementation may leave an event partially changed if a later operation fails. Systems that require rollback should process a copy or use an encoding-specific transactional mechanism.
 
@@ -89,3 +105,8 @@ Keep validation errors and warnings distinct from processing failures. An invali
 
 Enrichment and enrichment removal should report non-fatal issues that explain why requested content was not added or safely removed. Counts should describe actual mutations and retained content, while directory or stream summaries may aggregate those results per event.
 
+An implementation may let callers suppress selected tolerable processing issues when diagnostics are not needed. Suppression should avoid constructing paths, messages, and details for the omitted issues, but must not alter mutations, counters, validation results, or processing failures. Issues that disclose incomplete processing, including class-resolution failure and the recursive-object traversal limitation, remain mandatory.
+
+## Reference Implementation
+
+`internal/processing` is a fully functioning, tested example of this model: `process.go` implements schema-guided walking and the recursive-object boundary, and `pipeline.go` and `config.go` implement operation ordering. `issue.IssueCode` (`issue/code.go`) lists every processing issue this implementation can produce. Read the code directly for anything this guide leaves out. The public API and internal design built on top of this model are described in [architecture.md](architecture.md), not here.

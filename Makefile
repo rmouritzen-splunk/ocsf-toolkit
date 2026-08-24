@@ -1,99 +1,28 @@
-base_dir := ${CURDIR}
-build_dir := ${base_dir}/build
-dist_dir := ${base_dir}/dist
 coverage_out := coverage.out
 coverage_percentages_out := coverage-percentages.out
-go_vet_out := go-vet.out
-target_platforms := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 VERSION ?= dev
-BENCHMARK_BASE ?=
-BENCHMARK_COUNT ?= 10
-BENCHMARK_TIME ?= 500ms
-BENCHMARK_PATTERN ?= .
+minimum_go_version := 1.25.13
+PACKAGE_GOEXPERIMENT := jsonv2
+
+export VERSION
+export GOEXPERIMENT
+
+.DEFAULT_GOAL := dev
+
+# --- Build ---
 
 .PHONY: build
-build: build-ocsf-toolkit
+build:
+	@echo "Building ocsf-toolkit"
+	@mkdir -p build
+	CGO_ENABLED=0 go build -C cmd/ocsf-toolkit -o "${CURDIR}/build" -trimpath
 
 .PHONY: build-all-platforms
-build-all-platforms: build-ocsf-toolkit-all-platforms
-
-.PHONY: build-dir
-build-dir: | $(build_dir)
-
-${build_dir}:
-	@echo "Creating build directory"
-	mkdir $@
-
-.PHONY: build-ocsf-toolkit
-build-ocsf-toolkit: build-dir
-	@echo "Building ocsf-toolkit"
-	CGO_ENABLED=0 go build -C cmd/ocsf-toolkit -o ${build_dir} -trimpath
-
-.PHONY: build-ocsf-toolkit-all-platforms
-build-ocsf-toolkit-all-platforms: build-dir
+build-all-platforms:
 	@echo "Building ocsf-toolkit for all target platforms"
-	@BUILD_DIR="${build_dir}" TARGET_PLATFORMS="${target_platforms}" VERSION="${VERSION}" scripts/build-ocsf-toolkit-all-platforms.sh
+	@scripts/build-all-platforms.sh
 
-.PHONY: lint
-lint:
-	@echo "Running golangci-lint"
-	command -v golangci-lint >/dev/null 2>&1 || ( \
-		echo "ERROR: golangci-lint is required for make lint."; \
-		exit 1 \
-	)
-	golangci-lint run
-
-.PHONY: gofmt-check
-gofmt-check:
-	@echo "Checking Go formatting"
-	test -z "$$(gofmt -l .)"
-
-.PHONY: govet
-govet:
-	@echo "Running go vet"
-	go vet ./...
-
-.PHONY: test
-test:
-	@echo "Running unit tests with coverage"
-	go test -v -cover -covermode=count -coverprofile=${coverage_out} -coverpkg ./... ./...
-
-.PHONY: test-race
-test-race:
-	@echo "Running unit tests with the race detector"
-	go test -race ./...
-
-.PHONY: test-release-scripts
-test-release-scripts:
-	@echo "Testing release script path safety"
-	@scripts/test-release-scripts.sh
-
-.PHONY: test-benchmark-scripts
-test-benchmark-scripts:
-	@echo "Testing benchmark scripts"
-	@scripts/test-benchmark-scripts.sh
-
-.PHONY: benchmark
-benchmark:
-	@echo "Running event processing benchmarks"
-	go test ./eventschema -run '^$$' -bench '${BENCHMARK_PATTERN}' -benchmem \
-		-benchtime '${BENCHMARK_TIME}' -count '${BENCHMARK_COUNT}'
-
-.PHONY: benchmark-compare
-benchmark-compare:
-	@echo "Comparing event processing benchmarks with the latest eligible release"
-	@BENCHMARK_BASE='${BENCHMARK_BASE}' BENCHMARK_COUNT='${BENCHMARK_COUNT}' \
-		BENCHMARK_TIME='${BENCHMARK_TIME}' BENCHMARK_PATTERN='${BENCHMARK_PATTERN}' \
-		scripts/benchmark-compare.sh
-
-.PHONY: coverage
-coverage: test
-	@echo "Generating coverage report"
-	go tool cover -func ${coverage_out} > ${coverage_percentages_out}
-	@echo
-	@echo "Total Statement Coverage:"
-	@tail -c 6 ${coverage_percentages_out}
-	@echo
+# --- Module tidiness ---
 
 .PHONY: gotidy-check
 gotidy-check:
@@ -109,28 +38,153 @@ gotidy:
 	rm -f tools/go.sum
 	go mod tidy -C tools
 
+# --- Checks ---
+
+.PHONY: lint
+lint:
+	@echo "Running golangci-lint"
+	@command -v golangci-lint >/dev/null 2>&1 || ( \
+		echo "ERROR: golangci-lint is required for make lint. See README.md's Development section for install instructions."; \
+		exit 1 \
+	)
+	golangci-lint run
+
+.PHONY: lint-audit
+lint-audit:
+	@echo "Running extended golangci-lint audit"
+	@command -v golangci-lint >/dev/null 2>&1 || ( \
+		echo "ERROR: golangci-lint is required for make lint-audit. See README.md's Development section for install instructions."; \
+		exit 1 \
+	)
+	golangci-lint run --enable exhaustive,gocognit,maintidx
+
+.PHONY: vulncheck
+vulncheck:
+	@echo "Running govulncheck"
+	@command -v govulncheck >/dev/null 2>&1 || ( \
+		echo "ERROR: govulncheck is required for make vulncheck. See README.md's Development section for install instructions."; \
+		exit 1 \
+	)
+	govulncheck ./...
+
+.PHONY: govet
+govet:
+	@echo "Running go vet"
+	go vet ./...
+
+.PHONY: gofmt-check
+gofmt-check:
+	@echo "Checking Go formatting"
+	test -z "$$(gofmt -l .)"
+
 .PHONY: gofmt
 gofmt:
 	@echo "Formatting Go files"
 	gofmt -w .
 
-.PHONY: verify
-verify: gotidy-check gofmt-check lint test test-race test-release-scripts test-benchmark-scripts govet build
+.PHONY: goimports-check
+goimports-check:
+	@echo "Checking Go import formatting via goimports"
+	@command -v goimports >/dev/null 2>&1 || ( \
+		echo "ERROR: goimports is required for make goimports-check. See README.md's Development section for install instructions."; \
+		exit 1 \
+	)
+	@files="$$(goimports -l .)"; \
+	if [ -n "$$files" ]; then \
+		echo "$$files"; \
+		echo "Import formatting differs above. Preview a fix with: goimports -d <file>"; \
+		exit 1; \
+	fi
 
-.PHONY: verify-all-platforms
-verify-all-platforms: gotidy-check gofmt-check lint coverage test-race test-release-scripts test-benchmark-scripts govet build-all-platforms
+.PHONY: goimports
+goimports:
+	@echo "Formatting Go imports"
+	@command -v goimports >/dev/null 2>&1 || ( \
+		echo "ERROR: goimports is required for make goimports. See README.md's Development section for install instructions."; \
+		exit 1 \
+	)
+	goimports -w .
 
-.PHONY: package-dist
-package-dist: build-all-platforms
-	@echo "Packaging release artifacts"
-	@BUILD_DIR="${build_dir}" DIST_DIR="${dist_dir}" TARGET_PLATFORMS="${target_platforms}" VERSION="${VERSION}" scripts/package-dist.sh
+.PHONY: check
+check: lint gotidy-check gofmt-check vulncheck govet
+
+.PHONY: check-all
+check-all: check goimports-check
+
+# --- Tests ---
+
+.PHONY: test
+test:
+	@echo "Running unit tests with the current Go toolchain and JSON v2"
+	GOEXPERIMENT=jsonv2 go test ./...
+
+.PHONY: test-coverage
+test-coverage:
+	@echo "Running unit tests with the current Go toolchain and default JSON implementation (with coverage)"
+	GOEXPERIMENT= go test -v -cover -covermode=count -coverprofile=${coverage_out} -coverpkg ./... ./...
+	@echo "Generating coverage report"
+	go tool cover -func ${coverage_out} > ${coverage_percentages_out}
+	@echo
+	@echo "Total Statement Coverage:"
+	@tail -c 6 ${coverage_percentages_out}
+	@echo
+
+.PHONY: test-compatibility
+test-compatibility:
+	@echo "Running unit tests with the current Go toolchain and default JSON implementation"
+	GOEXPERIMENT= go test ./...
+	@echo "Running unit tests with the current Go toolchain and JSON v2"
+	GOEXPERIMENT=jsonv2 go test ./...
+	@echo "Running unit tests with Go ${minimum_go_version} and the default JSON implementation"
+	GOTOOLCHAIN=go${minimum_go_version} GOEXPERIMENT= go test ./...
+	@echo "Running unit tests with Go ${minimum_go_version} and JSON v2"
+	GOTOOLCHAIN=go${minimum_go_version} GOEXPERIMENT=jsonv2 go test ./...
+
+.PHONY: test-race
+test-race:
+	@echo "Running unit tests with the race detector"
+	go test -race ./...
+
+.PHONY: test-latest-release-tag
+test-latest-release-tag:
+	@echo "Testing latest release tag selection"
+	@scripts/test-latest-release-tag.sh
+
+.PHONY: test-benchmark-compare
+test-benchmark-compare:
+	@echo "Testing benchmark comparison arguments"
+	@scripts/test-benchmark-compare.sh
+
+.PHONY: test-make-variable-safety
+test-make-variable-safety:
+	@echo "Testing Make variable handling"
+	@scripts/test-make-variable-safety.sh
+
+.PHONY: test-all
+test-all: test-compatibility test-coverage test-race test-latest-release-tag test-benchmark-compare \
+	test-make-variable-safety
+
+# --- Orchestration ---
+
+.PHONY: dev
+dev: check test build
+
+.PHONY: all
+all: check-all test-all build-all-platforms
+
+# --- Packaging ---
 
 .PHONY: package
-package: gotidy-check gofmt-check lint coverage test-race test-release-scripts govet package-dist
+package: export GOEXPERIMENT = ${PACKAGE_GOEXPERIMENT}
+package: all
+	@echo "Packaging release artifacts"
+	@scripts/package.sh
+
+# --- Housekeeping ---
 
 .PHONY: clean
 clean:
 	@echo "Removing generated build and report files"
 	rm -rf build
 	rm -rf dist
-	rm -f ${coverage_out} ${coverage_percentages_out} ${go_vet_out}
+	rm -f ${coverage_out} ${coverage_percentages_out}

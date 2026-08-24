@@ -4,12 +4,13 @@ This file lists third-party code incorporated into distributed OCSF Toolkit comm
 The OCSF Toolkit library packages do not have non-standard-library runtime dependencies. Test-only
 dependencies are intentionally omitted because they are not shipped in release artifacts.
 
-## github.com/jessevdk/go-flags v1.6.1
+## github.com/spf13/pflag v1.0.10
 
 License: BSD-3-Clause
 
 ```text
-Copyright (c) 2012 Jesse van den Kieboom. All rights reserved.
+Copyright (c) 2012 Alex Ogier. All rights reserved.
+Copyright (c) 2012 The Go Authors. All rights reserved.
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
 met:
@@ -37,7 +38,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## golang.org/x/sys v0.21.0
+## golang.org/x/term v0.45.0 and golang.org/x/sys v0.47.0
 
 License: BSD-3-Clause
 

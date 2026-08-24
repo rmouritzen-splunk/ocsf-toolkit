@@ -3,10 +3,50 @@ set -eu
 
 script_dir="$(dirname "$0")"
 repo_root="$(CDPATH= cd -P "${script_dir}/.." && pwd -P)"
-benchmark_base="${BENCHMARK_BASE:-}"
-benchmark_count="${BENCHMARK_COUNT:-10}"
-benchmark_time="${BENCHMARK_TIME:-500ms}"
-benchmark_pattern="${BENCHMARK_PATTERN:-.}"
+benchmark_base=""
+benchmark_count=10
+benchmark_time=500ms
+benchmark_pattern=.
+
+usage() {
+	printf '%s\n' \
+		"Usage: scripts/benchmark-compare.sh [options]" \
+		"" \
+		"Options:" \
+		"  --base TAG       Compare with a specific reachable release tag." \
+		"  --count N        Run each benchmark N times (default: 10)." \
+		"  --time DURATION  Run each benchmark for DURATION (default: 500ms)." \
+		"  --pattern REGEXP Run benchmarks matching REGEXP (default: .)." \
+		"  -h, --help       Show this help."
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--base | --count | --time | --pattern)
+		option="$1"
+		if [ "$#" -lt 2 ]; then
+			echo "Option ${option} requires an argument." >&2
+			exit 2
+		fi
+		case "${option}" in
+		--base) benchmark_base="$2" ;;
+		--count) benchmark_count="$2" ;;
+		--time) benchmark_time="$2" ;;
+		--pattern) benchmark_pattern="$2" ;;
+		esac
+		shift 2
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		echo "Unknown option: $1" >&2
+		usage >&2
+		exit 2
+		;;
+	esac
+done
 
 if [ -n "${benchmark_base}" ]; then
 	benchmark_base="$(${repo_root}/scripts/latest-release-tag.sh "${benchmark_base}")"

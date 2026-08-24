@@ -5,13 +5,57 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ocsf/ocsf-toolkit/eventresult"
+	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonio"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
+	"github.com/ocsf/ocsf-toolkit/validation"
 )
+
+func findingsAtLevel(findings []eventresult.ValidationFinding, level validation.Level) []eventresult.ValidationFinding {
+	selected := make([]eventresult.ValidationFinding, 0)
+	for _, finding := range findings {
+		if finding.Level == level {
+			selected = append(selected, finding)
+		}
+	}
+	return selected
+}
+
+func TestCLIReportsAndSuppressesSchemaInitializationIssues(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeInitializationIssueTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	reportPath := filepath.Join(dir, "report.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", reportPath,
+	)
+	assert.Zero(exitCode, stderr)
+	assert.Contains(stderr, "initialization issue issue_at_init_schema_enum_sibling_target_not_string:")
+	assert.Contains(stderr, "status_code")
+
+	exitCode, _, stderr = runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", reportPath,
+		"--overwrite",
+		"--suppress-issues=issue_at_init_schema_enum_sibling_target_not_string",
+	)
+	assert.Zero(exitCode, stderr)
+	assert.NotContains(stderr, "issue_at_init_schema_enum_sibling_target_not_string")
+}
 
 func TestProcessSingleEventEnrichesAndWritesReport(t *testing.T) {
 	assert := require.New(t)
@@ -46,8 +90,8 @@ func TestProcessSingleEventEnrichesAndWritesReport(t *testing.T) {
 	report := readEventReport(assert, reportPath)
 	assert.Equal(eventPath, report.EventSource)
 	assert.Equal(outputPath, report.EventDestination)
-	assert.Empty(report.Validation.Errors)
-	assert.Empty(report.Validation.Warnings)
+	assert.Empty(findingsAtLevel(report.Validation.Findings, validation.LevelError))
+	assert.Empty(findingsAtLevel(report.Validation.Findings, validation.LevelWarning))
 	assert.NotNil(report.Enrichment)
 	assert.Equal(2, report.Enrichment.EnumSiblingsAdded)
 	assert.Zero(report.Enrichment.ObservablesAdded)
@@ -79,8 +123,86 @@ func TestProcessSingleEventEnrichmentWritesIssuesToReport(t *testing.T) {
 	assert.NotNil(report.Enrichment)
 	assert.Equal(1, report.Enrichment.EnumSiblingsAdded)
 	assert.Len(report.Issues, 1)
-	assert.Equal("enrichment", report.Issues[0].Phase)
-	assert.Equal("enrichment_enum_sibling_not_added", report.Issues[0].Code)
+	assert.Equal(issue.SourceEnrichment, report.Issues[0].Source)
+	assert.Equal(issue.EnrichmentEnumSiblingNotAdded, report.Issues[0].Code)
+	reportJSON, err := os.ReadFile(reportOutput)
+	assert.NoError(err)
+	var serialized struct {
+		Issues []map[string]any `json:"issues"`
+	}
+	assert.NoError(json.Unmarshal(reportJSON, &serialized))
+	assert.Len(serialized.Issues, 1)
+	assert.NotContains(serialized.Issues[0], "severity")
+	assert.NotContains(serialized.Issues[0], "attribute_path")
+	assert.NotContains(serialized.Issues[0], "attribute")
+	assert.NotContains(serialized.Issues[0], "value")
+	assert.Contains(serialized.Issues[0]["details"], "attribute_path")
+}
+
+func TestProcessSuppressIssuesSuppressesNoneOneMultipleAndAllCodes(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeSuppressionTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	event := validCLIEvent()
+	event["activity_id"] = json.Number("1234")
+	event["ball"] = jsonish.Map{"green": "go"}
+	event["observables"] = []any{
+		jsonish.Map{"name": "ball.green", "type_id": json.Number("1000"), "value": "go"},
+	}
+	writeJSONFile(assert, eventPath, event)
+
+	reportFor := func(extraArgs ...string) eventReport {
+		reportPath := filepath.Join(t.TempDir(), "report.json")
+		args := append([]string{
+			"--schema", schemaPath,
+			"--event", eventPath,
+			"--enrich",
+			"--report-output", reportPath,
+			"--event-output", filepath.Join(t.TempDir(), "event.json"),
+		}, extraArgs...)
+
+		exitCode, stdout, stderr := runCLI(args...)
+
+		assert.Equal(0, exitCode, stderr)
+		assert.Empty(stdout)
+		assert.Empty(stderr)
+		report := readEventReport(assert, reportPath)
+		assert.Equal(eventReportVersion, report.ReportVersion)
+		return report
+	}
+	issueCodes := func(report eventReport) []issue.IssueCode {
+		codes := make([]issue.IssueCode, len(report.Issues))
+		for i, found := range report.Issues {
+			codes[i] = found.Code
+		}
+		return codes
+	}
+
+	assert.ElementsMatch(
+		[]issue.IssueCode{issue.EnrichmentEnumSiblingNotAdded, issue.EnrichmentObservableDuplicateSkipped},
+		issueCodes(reportFor()),
+		"suppressing none reports every suppressible issue",
+	)
+	oneSuppressed := reportFor("--suppress-issues=" + issue.EnrichmentEnumSiblingNotAdded.String())
+	assert.ElementsMatch(
+		[]issue.IssueCode{issue.EnrichmentObservableDuplicateSkipped},
+		issueCodes(oneSuppressed),
+		"suppressing one code leaves the other reported",
+	)
+	assert.Equal(1, oneSuppressed.SuppressedIssueCount)
+	multipleSuppressed := reportFor("--suppress-issues=" + strings.Join([]string{
+		issue.EnrichmentEnumSiblingNotAdded.String(),
+		issue.EnrichmentObservableDuplicateSkipped.String(),
+	}, ","))
+	assert.Empty(issueCodes(multipleSuppressed), "suppressing multiple selected codes suppresses each of them")
+	assert.Equal(2, multipleSuppressed.SuppressedIssueCount)
+	allSuppressed := reportFor("--suppress-issues")
+	assert.Empty(
+		issueCodes(allSuppressed),
+		"--suppress-issues without a value suppresses every suppressible issue",
+	)
+	assert.Equal(2, allSuppressed.SuppressedIssueCount)
 }
 
 func TestProcessSingleEventSupportsCommonShortOptions(t *testing.T) {
@@ -105,7 +227,7 @@ func TestProcessSingleEventSupportsCommonShortOptions(t *testing.T) {
 	enrichedEvent, err := jsonio.ReadObject(filepath.Join(outputDir, "events", "event.json"))
 	assert.NoError(err)
 	assert.Equal("Alpha", enrichedEvent["class_name"])
-	report := readEventReport(assert, filepath.Join(outputDir, "reports", "event.json"))
+	report := readEventReport(assert, filepath.Join(outputDir, "reports", "event.report.json"))
 	assert.Equal(eventPath, report.EventSource)
 }
 
@@ -168,8 +290,107 @@ func TestProcessSingleEventValidationCanWriteToStdout(t *testing.T) {
 	assert.NoError(json.Unmarshal([]byte(stdout), &report))
 	assert.Equal(eventPath, report.EventSource)
 	assert.Empty(report.EventDestination)
-	assert.Empty(report.Validation.Errors)
-	assert.Empty(report.Validation.Warnings)
+	assert.Empty(findingsAtLevel(report.Validation.Findings, validation.LevelError))
+	assert.Empty(findingsAtLevel(report.Validation.Findings, validation.LevelWarning))
+}
+
+func TestProcessValidationWarnsAboutObservablePathNotation(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	reportPath := filepath.Join(dir, "report.json")
+	event := validCLIEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
+	event["observables"] = []any{
+		jsonish.Map{"name": "ball.green", "type_id": json.Number("1000"), "value": "go"},
+	}
+	writeJSONFile(assert, eventPath, event)
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--observable-path-notation", "jsonpath",
+		"--report-output", reportPath,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Empty(stdout)
+	assert.Empty(stderr)
+	report := readEventReport(assert, reportPath)
+	assert.Empty(findingsAtLevel(report.Validation.Findings, validation.LevelError))
+	warnings := findingsAtLevel(report.Validation.Findings, validation.LevelWarning)
+	assert.Len(warnings, 1)
+	assert.Equal(validation.ObservableNamePathNotation, warnings[0].Code)
+	assert.Equal("observables[0].name", warnings[0].Details["attribute_path"])
+}
+
+func TestProcessAppliesPathNotationOnlyToEnabledConsumers(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	outputDir := filepath.Join(dir, "out")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enum-siblings",
+		"--validate",
+		"--observable-path-notation", "indexed",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Empty(stdout)
+	assert.Empty(stderr)
+}
+
+func TestProcessAcceptsSelectedObservableTypeIDs(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	outputDir := filepath.Join(dir, "output")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--observable-ids", "0,1000,1000",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Empty(stdout)
+	assert.Empty(stderr)
+	assert.FileExists(filepath.Join(outputDir, "events", "event.json"))
+}
+
+func TestProcessRejectsUnknownObservableTypeIDs(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	outputDir := filepath.Join(dir, "output")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enrich",
+		"--observable-ids", "3000,-1,3000",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(2, exitCode)
+	assert.Empty(stdout)
+	assert.Contains(stderr, "enrichment processor has unknown observable type IDs: -1, 3000")
+	assert.Contains(stderr, `Run "ocsf-toolkit --help" for full usage.`)
+	assert.NoDirExists(outputDir)
 }
 
 func TestDirectoryEventAndReportNamespacesCannotCollide(t *testing.T) {
@@ -192,8 +413,8 @@ func TestDirectoryEventAndReportNamespacesCannotCollide(t *testing.T) {
 	assert.Equal(0, exitCode, stderr)
 	assert.FileExists(filepath.Join(outputDir, "events", "event.json"))
 	assert.FileExists(filepath.Join(outputDir, "events", "event-validation.json"))
-	assert.FileExists(filepath.Join(outputDir, "reports", "event.json"))
-	assert.FileExists(filepath.Join(outputDir, "reports", "event-validation.json"))
+	assert.FileExists(filepath.Join(outputDir, "reports", "event.report.json"))
+	assert.FileExists(filepath.Join(outputDir, "reports", "event-validation.report.json"))
 }
 
 func TestProcessValidationFailureCanSetExitCode(t *testing.T) {
@@ -216,39 +437,70 @@ func TestProcessValidationFailureCanSetExitCode(t *testing.T) {
 
 	assert.Equal(1, exitCode, stderr)
 	report := readEventReport(assert, validationPath)
-	assert.NotEmpty(report.Validation.Errors)
+	assert.NotEmpty(findingsAtLevel(report.Validation.Findings, validation.LevelError))
+	assert.Empty(report.Issues)
+	reportJSON, err := os.ReadFile(validationPath)
+	assert.NoError(err)
+	assert.NotContains(string(reportJSON), `"source"`)
+	assert.NotContains(string(reportJSON), `"severity"`)
 }
 
-func TestProcessSkipInvalidOutput(t *testing.T) {
+func TestProcessValidationPolicyControlsEffectiveLevelsAndSuppression(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
 	eventPath := filepath.Join(dir, "event.json")
-	enrichPath := filepath.Join(dir, "enriched.json")
-	validationPath := filepath.Join(dir, "event.validation.json")
 	event := validCLIEvent()
 	delete(event, "activity_id")
-	event["class_name"] = "Alpha"
 	writeJSONFile(assert, eventPath, event)
 
-	exitCode, stdout, stderr := runCLI(
+	warningReportPath := filepath.Join(dir, "warning-report.json")
+	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
 		"--event", eventPath,
-		"--unenrich",
-		"--event-output", enrichPath,
 		"--validate",
-		"--report-output", validationPath,
-		"--skip-invalid-output",
+		"--report-output", warningReportPath,
+		"--validation-errors-as-warnings",
+		"--fail-on-validation-errors",
+	)
+	assert.Equal(0, exitCode, stderr)
+	warningReport := readEventReport(assert, warningReportPath)
+	assert.Empty(findingsAtLevel(warningReport.Validation.Findings, validation.LevelError))
+	assert.NotEmpty(findingsAtLevel(warningReport.Validation.Findings, validation.LevelWarning))
+
+	suppressedReportPath := filepath.Join(dir, "suppressed-report.json")
+	exitCode, _, stderr = runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", suppressedReportPath,
+		"--suppress-validations="+validation.AttributeRequiredMissing.String(),
+		"--fail-on-validation-errors",
+	)
+	assert.Equal(0, exitCode, stderr)
+	suppressedReport := readEventReport(assert, suppressedReportPath)
+	assert.Empty(suppressedReport.Validation.Findings)
+	assert.Equal(1, suppressedReport.Validation.SuppressedErrorCount)
+}
+
+func TestProcessRejectsConflictingValidationPolicy(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	writeJSONFile(assert, eventPath, validCLIEvent())
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--validate",
+		"--report-output", filepath.Join(dir, "report.json"),
+		"--suppress-validations",
+		"--validation-errors-as-warnings="+validation.AttributeRequiredMissing.String(),
 	)
 
-	assert.Equal(0, exitCode, stderr)
-	assert.Empty(stdout)
-	assert.Empty(stderr)
-	assert.NoFileExists(enrichPath)
-	report := readEventReport(assert, validationPath)
-	assert.NotEmpty(report.Validation.Errors)
-	assert.Empty(report.EventDestination)
-	assert.Nil(report.EnrichmentRemoval)
+	assert.Equal(2, exitCode)
+	assert.Contains(stderr, "validation policy has conflicting actions for validation_attribute_required_missing")
 }
 
 func TestProcessRejectsReportOutputOverwritingEventFile(t *testing.T) {
@@ -297,7 +549,7 @@ func TestProcessEventOutputWithoutExtensionIsOrdinaryFilePath(t *testing.T) {
 	assert.NotContains(originalEvent, "class_name")
 }
 
-func TestProcessCanDisableDefaultEnrichmentOptions(t *testing.T) {
+func TestProcessCanSelectObservableEnrichment(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
@@ -309,8 +561,7 @@ func TestProcessCanDisableDefaultEnrichmentOptions(t *testing.T) {
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
 		"--event", eventPath,
-		"--enrich",
-		"--no-enum-siblings",
+		"--observables",
 		"--event-output", outputPath,
 		"--report-output", reportPath,
 	)
@@ -348,8 +599,8 @@ func TestProcessSingleEventOutputDirWritesBothOutputs(t *testing.T) {
 	eventPath := filepath.Join(dir, "event.json")
 	outputDir := filepath.Join(dir, "output")
 	writeJSONFile(assert, eventPath, validCLIEvent())
-	assert.NoError(os.MkdirAll(outputDir, 0o755))
-	assert.NoError(os.WriteFile(filepath.Join(outputDir, "existing.txt"), []byte("kept"), 0o644))
+	assert.NoError(os.MkdirAll(outputDir, 0o750))
+	assert.NoError(os.WriteFile(filepath.Join(outputDir, "existing.txt"), []byte("kept"), 0o600))
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
@@ -365,8 +616,8 @@ func TestProcessSingleEventOutputDirWritesBothOutputs(t *testing.T) {
 	assert.NoError(err)
 	assert.Equal("Alpha", enrichedEvent["class_name"])
 
-	report := readEventReport(assert, filepath.Join(outputDir, "reports", "event.json"))
-	assert.Empty(report.Validation.Errors)
+	report := readEventReport(assert, filepath.Join(outputDir, "reports", "event.report.json"))
+	assert.Empty(findingsAtLevel(report.Validation.Findings, validation.LevelError))
 	assert.FileExists(filepath.Join(outputDir, "existing.txt"))
 }
 
@@ -378,8 +629,8 @@ func TestProcessDirectoryReportsFilesProcessedBeforeError(t *testing.T) {
 	outputDir := filepath.Join(dir, "out")
 	writeJSONFile(assert, filepath.Join(eventsDir, "a.json"), validCLIEvent())
 	writeJSONFile(assert, filepath.Join(eventsDir, "b.json"), validCLIEvent())
-	assert.NoError(os.MkdirAll(outputDir, 0o755))
-	assert.NoError(os.MkdirAll(filepath.Join(outputDir, "events", "a.json"), 0o755))
+	assert.NoError(os.MkdirAll(outputDir, 0o750))
+	assert.NoError(os.MkdirAll(filepath.Join(outputDir, "events", "a.json"), 0o750))
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
@@ -391,7 +642,7 @@ func TestProcessDirectoryReportsFilesProcessedBeforeError(t *testing.T) {
 
 	assert.Equal(1, exitCode)
 	assert.Empty(stdout)
-	assert.Contains(stderr, "a.json: event write error")
+	assert.Contains(stderr, "a.json\": event write error")
 	assert.Contains(stderr, "Event files processed before error: 1")
 	assert.NoFileExists(filepath.Join(outputDir, "events", "b.json"))
 }
@@ -407,9 +658,12 @@ func TestProcessDirectoryReportsFilesProcessedBeforeWalkError(t *testing.T) {
 	entries, err := os.ReadDir(eventsDir)
 	assert.NoError(err)
 	assert.Len(entries, 1)
+	rootInfo, err := os.Lstat(eventsDir)
+	assert.NoError(err)
 
 	originalWalk := walkEventDirectory
 	walkEventDirectory = func(_ string, walk fs.WalkDirFunc) error {
+		assert.NoError(walk(eventsDir, fs.FileInfoToDirEntry(rootInfo), nil))
 		assert.NoError(walk(eventPath, entries[0], nil))
 		return fs.ErrPermission
 	}
@@ -428,7 +682,38 @@ func TestProcessDirectoryReportsFilesProcessedBeforeWalkError(t *testing.T) {
 	assert.Contains(stderr, "failed to walk events directory")
 	assert.Contains(stderr, "permission denied")
 	assert.Contains(stderr, "Event files processed before error: 1")
-	assert.FileExists(filepath.Join(outputDir, "reports", "event.json"))
+	assert.FileExists(filepath.Join(outputDir, "reports", "event.report.json"))
+}
+
+func TestProcessDirectoryToleratesInputRootBecomingAFileBeforeWalk(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "events.json")
+	replacementPath := filepath.Join(dir, "replacement.json")
+	outputDir := filepath.Join(dir, "output")
+	assert.NoError(os.Mkdir(eventsDir, 0o750))
+	writeJSONFile(assert, replacementPath, validCLIEvent())
+	replacementInfo, err := os.Lstat(replacementPath)
+	assert.NoError(err)
+
+	originalWalk := walkEventDirectory
+	walkEventDirectory = func(_ string, walk fs.WalkDirFunc) error {
+		return walk(eventsDir, fs.FileInfoToDirEntry(replacementInfo), nil)
+	}
+	t.Cleanup(func() { walkEventDirectory = originalWalk })
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--validate",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	assert.Contains(stdout, "Event files processed: 0")
+	assert.Empty(stderr)
+	assert.NoDirExists(outputDir)
 }
 
 func TestProcessReadsSingleEventFromStdin(t *testing.T) {
@@ -453,7 +738,7 @@ func TestProcessReadsSingleEventFromStdin(t *testing.T) {
 	enrichedEvent, err := jsonio.ReadObject(filepath.Join(outputDir, "events", "event.json"))
 	assert.NoError(err)
 	assert.Equal("Alpha", enrichedEvent["class_name"])
-	report := readEventReport(assert, filepath.Join(outputDir, "reports", "event.json"))
+	report := readEventReport(assert, filepath.Join(outputDir, "reports", "event.report.json"))
 	assert.Equal("-", report.EventSource)
 }
 
@@ -499,8 +784,69 @@ func TestProcessSingleEventSafelyRemovesEnrichmentAndWritesIssues(t *testing.T) 
 	assert.Equal(1, report.EnrichmentRemoval.EnumSiblingsRetained)
 	assert.Equal(1, report.EnrichmentRemoval.ObservablesRemoved)
 	assert.Equal(1, report.EnrichmentRemoval.ObservablesRetained)
-	assert.Len(report.Issues, 1)
-	assert.Equal("observable_value_not_found", report.Issues[0].Code)
+	assert.Len(report.Issues, 2)
+	assert.ElementsMatch(
+		[]issue.IssueCode{issue.ObservableValueNotFound, issue.EnrichmentRemovalEnumSiblingNotRemoved},
+		[]issue.IssueCode{report.Issues[0].Code, report.Issues[1].Code},
+	)
+}
+
+func TestProcessBareForceRemoveSelectsAllComponents(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	outputDir := filepath.Join(dir, "output")
+	event := validCLIEvent()
+	event["class_name"] = "source-specific"
+	event["activity_name"] = "source-specific"
+	event["observables"] = "malformed"
+	writeJSONFile(assert, eventPath, event)
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--force-remove",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	processed, err := jsonio.ReadObject(filepath.Join(outputDir, "events", "event.json"))
+	assert.NoError(err)
+	assert.NotContains(processed, "class_name")
+	assert.NotContains(processed, "activity_name")
+	assert.NotContains(processed, "observables")
+	report := readEventReport(assert, filepath.Join(outputDir, "reports", "event.report.json"))
+	assert.Equal(2, report.EnrichmentRemoval.EnumSiblingsRemoved)
+	assert.Empty(report.Issues)
+}
+
+func TestProcessAllowsIndependentSafeAndForcedRemovalActions(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	outputDir := filepath.Join(dir, "output")
+	event := validCLIEvent()
+	event["class_name"] = "Alpha"
+	event["activity_name"] = "source-specific"
+	event["observables"] = "malformed"
+	writeJSONFile(assert, eventPath, event)
+
+	exitCode, _, stderr := runCLI(
+		"--schema", schemaPath,
+		"--event", eventPath,
+		"--enum-siblings=remove",
+		"--observables=force-remove",
+		"--output-dir", outputDir,
+	)
+
+	assert.Equal(0, exitCode, stderr)
+	processed, err := jsonio.ReadObject(filepath.Join(outputDir, "events", "event.json"))
+	assert.NoError(err)
+	assert.NotContains(processed, "class_name")
+	assert.Equal("source-specific", processed["activity_name"])
+	assert.NotContains(processed, "observables")
 }
 
 func TestProcessAllowsIndependentAddAndRemoveActions(t *testing.T) {
@@ -519,8 +865,8 @@ func TestProcessAllowsIndependentAddAndRemoveActions(t *testing.T) {
 	exitCode, _, stderr := runCLI(
 		"--schema", schemaPath,
 		"--event", eventPath,
-		"--enrich", "--no-observables",
-		"--unenrich", "--retain-enum-siblings",
+		"--enum-siblings=add",
+		"--observables=remove",
 		"--output-dir", outputDir,
 	)
 
@@ -530,5 +876,5 @@ func TestProcessAllowsIndependentAddAndRemoveActions(t *testing.T) {
 	assert.Equal("Alpha", processed["class_name"])
 	assert.Equal("Do", processed["activity_name"])
 	assert.NotContains(processed, "observables")
-	assert.FileExists(filepath.Join(outputDir, "reports", "event.json"))
+	assert.FileExists(filepath.Join(outputDir, "reports", "event.report.json"))
 }

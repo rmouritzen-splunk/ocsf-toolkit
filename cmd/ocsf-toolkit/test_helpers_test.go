@@ -102,9 +102,142 @@ func writeTestSchema(assert *require.Assertions, dir string) string {
 			"observable": jsonish.Map{
 				"name": "observable",
 				"attributes": jsonish.Map{
-					"name":    jsonish.Map{"type": "string_t"},
-					"value":   jsonish.Map{"type": "string_t"},
-					"type_id": jsonish.Map{"type": "integer_t"},
+					"name":  jsonish.Map{"type": "string_t"},
+					"value": jsonish.Map{"type": "string_t"},
+					"type_id": jsonish.Map{
+						"type": "integer_t",
+						"enum": jsonish.Map{
+							"0":    jsonish.Map{"caption": "Unknown"},
+							"1000": jsonish.Map{"caption": "Selected type"},
+							"2000": jsonish.Map{"caption": "Other type"},
+						},
+					},
+				},
+			},
+		},
+		"dictionary": jsonish.Map{
+			"attributes": jsonish.Map{},
+			"types": jsonish.Map{
+				"attributes": jsonish.Map{
+					"integer_t": jsonish.Map{"caption": "Integer"},
+					"long_t":    jsonish.Map{"caption": "Long"},
+					"string_t":  jsonish.Map{"caption": "String"},
+					"object_t":  jsonish.Map{"caption": "Object"},
+				},
+			},
+		},
+		"profiles": jsonish.Map{},
+	})
+	return schemaPath
+}
+
+func writeInitializationIssueTestSchema(assert *require.Assertions, dir string) string {
+	path := writeTestSchema(assert, dir)
+	data, err := os.ReadFile(path)
+	assert.NoError(err)
+	var definition jsonish.Map
+	assert.NoError(json.Unmarshal(data, &definition))
+	classes, ok := definition["classes"].(map[string]any)
+	assert.True(ok)
+	alpha, ok := classes["alpha"].(map[string]any)
+	assert.True(ok)
+	attributes, ok := alpha["attributes"].(map[string]any)
+	assert.True(ok)
+	attributes["status_code"] = map[string]any{
+		"type":    "integer_t",
+		"sibling": "status_message",
+		"enum": map[string]any{
+			"1": map[string]any{"caption": "Entabulator has jammed"},
+		},
+	}
+	attributes["status_message"] = map[string]any{"type": "string_t", "is_array": true}
+	writeJSONFile(assert, path, definition)
+	return path
+}
+
+// writeSuppressionTestSchema writes a schema like writeTestSchema, but additionally maps "ball.green" to
+// observable type ID 1000 at the class level, so a pre-existing duplicate observable entry can be detected
+// during enrichment.
+func writeSuppressionTestSchema(assert *require.Assertions, dir string) string {
+	schemaPath := filepath.Join(dir, "schema.json")
+	writeJSONFile(assert, schemaPath, jsonish.Map{
+		"compile_version": 1,
+		"version":         "1.0.0",
+		"classes": jsonish.Map{
+			"alpha": jsonish.Map{
+				"name":        "alpha",
+				"uid":         1,
+				"category":    "test",
+				"observables": jsonish.Map{"ball.green": 1000},
+				"attributes": jsonish.Map{
+					"class_uid": jsonish.Map{
+						"type":        "integer_t",
+						"requirement": "required",
+						"sibling":     "class_name",
+						"enum": jsonish.Map{
+							"1": jsonish.Map{"caption": "Alpha"},
+						},
+					},
+					"class_name": jsonish.Map{"type": "string_t"},
+					"activity_id": jsonish.Map{
+						"type":        "integer_t",
+						"requirement": "required",
+						"sibling":     "activity_name",
+						"enum": jsonish.Map{
+							"1": jsonish.Map{"caption": "Do"},
+						},
+					},
+					"activity_name": jsonish.Map{"type": "string_t"},
+					"type_uid": jsonish.Map{
+						"type":        "long_t",
+						"requirement": "required",
+					},
+					"metadata": jsonish.Map{
+						"type":        "object_t",
+						"object_type": "metadata",
+						"requirement": "required",
+					},
+					"ball": jsonish.Map{
+						"type":        "object_t",
+						"object_type": "ball",
+					},
+					"observables": jsonish.Map{
+						"type":        "object_t",
+						"object_type": "observable",
+						"is_array":    true,
+					},
+				},
+			},
+		},
+		"objects": jsonish.Map{
+			"metadata": jsonish.Map{
+				"name": "metadata",
+				"attributes": jsonish.Map{
+					"version": jsonish.Map{
+						"type":        "string_t",
+						"requirement": "required",
+					},
+				},
+			},
+			"ball": jsonish.Map{
+				"name": "ball",
+				"attributes": jsonish.Map{
+					"green": jsonish.Map{"type": "string_t"},
+				},
+			},
+			"observable": jsonish.Map{
+				"name": "observable",
+				"attributes": jsonish.Map{
+					"name":  jsonish.Map{"type": "string_t"},
+					"value": jsonish.Map{"type": "string_t"},
+					"type_id": jsonish.Map{
+						"type": "integer_t",
+						"enum": jsonish.Map{
+							"0":    jsonish.Map{"caption": "Unknown"},
+							"1000": jsonish.Map{"caption": "Selected type"},
+							"2000": jsonish.Map{"caption": "Other type"},
+						},
+					},
 				},
 			},
 		},
@@ -136,11 +269,11 @@ func validCLIEvent() jsonish.Map {
 }
 
 func writeJSONFile(assert *require.Assertions, path string, value any) {
-	assert.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	assert.NoError(os.MkdirAll(filepath.Dir(path), 0o750))
 	data, err := json.MarshalIndent(value, "", "  ")
 	assert.NoError(err)
 	data = append(data, '\n')
-	assert.NoError(os.WriteFile(path, data, 0o644))
+	assert.NoError(os.WriteFile(path, data, 0o600))
 }
 
 func makeTestSymlink(t *testing.T, target, link string) {
