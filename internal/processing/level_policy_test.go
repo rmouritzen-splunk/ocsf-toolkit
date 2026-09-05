@@ -251,6 +251,7 @@ var validationMasksByCode = map[validation.Code]uint64{
 	validation.ObservableNamePathNotation:              validationObservableNamePathNotationMask,
 	validation.ClassUIDMissing:                         validationClassUIDMissingMask,
 	validation.ClassUIDWrongType:                       validationClassUIDWrongTypeMask,
+	validation.ObservableDuplicate:                     validationObservableDuplicateMask,
 }
 
 var issueMasksByCode = map[issue.Code]uint64{
@@ -260,7 +261,7 @@ var issueMasksByCode = map[issue.Code]uint64{
 	issue.EnrichmentEnumSiblingNotAdded:            issueEnrichmentEnumSiblingNotAddedMask,
 	issue.EnrichmentEnumSiblingOtherAdded:          issueEnrichmentEnumSiblingOtherAddedMask,
 	issue.EnrichmentObservablesNotAddedWrongType:   issueEnrichmentObservablesNotAddedWrongTypeMask,
-	issue.EnrichmentObservableDuplicateSkipped:     issueEnrichmentObservableDuplicateSkippedMask,
+	issue.ObservableDuplicate:                      issueObservableDuplicateMask,
 	issue.EnrichmentRemovalEnumSiblingNotRemoved:   issueEnrichmentRemovalEnumSiblingNotRemovedMask,
 	issue.ObservableArrayWrongType:                 issueObservableArrayWrongTypeMask,
 	issue.ObservableElementWrongType:               issueObservableElementWrongTypeMask,

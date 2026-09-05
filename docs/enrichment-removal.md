@@ -21,12 +21,11 @@ Removal applies to direct `integer_t` and `long_t` enums whose declared sibling 
 
 For each active supported enum attribute:
 
-1. If the sibling is absent, do nothing.
-2. If the sibling is null, remove it because null and missing are equivalent.
-3. If the enum value or sibling has the wrong type, retain the sibling and report that requested removal could not be performed.
-4. If an integral enum value is 99, always retain the sibling without a processing issue because OCSF requires a source-specific sibling for `Other`; string enum key `"99"` follows ordinary caption rules.
-5. In safe mode, remove the sibling only when its string value exactly equals the schema caption for the enum value; remove an array sibling only when the arrays have equal lengths and every value matches the caption at the same index.
-6. In forced mode, remove the sibling without comparing it to the caption.
+1. If the sibling has no logical value, ensure it is absent without counting a value as removed.
+2. If the enum value or sibling has the wrong type, retain the sibling and report that requested removal could not be performed.
+3. If an integral enum value is 99, always retain the sibling without a processing issue because OCSF requires a source-specific sibling for `Other`; string enum key `"99"` follows ordinary caption rules.
+4. In safe mode, remove the sibling only when its string value exactly equals the schema caption for the enum value; remove an array sibling only when the arrays have equal lengths and every value matches the caption at the same index.
+5. In forced mode, remove the sibling without comparing it to the caption.
 
 The safe equality rule preserves non-standard source text attached to ordinary enum values. When an enum value is unknown or the sibling differs from the schema caption, safe removal retains the sibling and reports why it could not prove the content redundant. Validation may independently report the invalid final enum or sibling when validation is enabled.
 
@@ -44,9 +43,7 @@ Arrays can be nested inside other arrays of objects, and different array convent
 
 A scalar observable has a `value`, which is always a string in a valid OCSF event. Resolve every candidate value selected by `name` and compare it using the same stable scalar-to-string conversion used by enrichment. Remove the observable when at least one selected event value produces exactly the observable string.
 
-Because OCSF treats missing and null as equivalent, an explicit null observable value matches an explicit null or a missing branch at a schema-valid path. A branch that cannot be followed because an encountered value has the wrong structural type is not equivalent to missing.
-
-An object observable omits `value`. It is removable when `name` resolves to an object. The object's individual contents do not need to be compared.
+An object observable has no logical `value`. An omitted or nil-valued map entry therefore has the same object-observable semantics. It is removable when `name` resolves to an object. The object's individual contents do not need to be compared.
 
 Retain and report entries whose names are missing, malformed, undefined by the active schema, unresolved, or inconsistent with the event value. Structural validation may report the same underlying malformed shape when validation is also enabled.
 
@@ -56,7 +53,7 @@ Enum-sibling work always completes before observable analysis, with no exception
 
 - delete the `observables` attribute when every entry is removable;
 - otherwise, construct the retained array in original order and omit marked entries;
-- delete a null or empty `observables` attribute without further analysis;
+- ensure an `observables` attribute with no logical value or an empty array is absent without counting a logical entry as removed;
 - leave a malformed non-array value intact in safe mode and report it.
 
 This mark-then-filter approach avoids index changes during removal analysis. A later validation stage independently analyzes the filtered final array and reports paths using its final indexes.
@@ -70,7 +67,7 @@ walk active class and nested object attributes:
 
 if forced observable removal is enabled:
     delete observables
-if observables is null or an empty array:
+if observables has no logical value or is an empty array:
     delete it
 else if observables is a valid array:
     analyze each original entry against the schema and event

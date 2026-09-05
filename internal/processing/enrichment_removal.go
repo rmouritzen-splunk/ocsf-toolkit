@@ -153,7 +153,6 @@ func removeEnumSiblingPair(
 	}
 	if siblingValue == nil {
 		delete(item, siblingAttributeName)
-		context.result.EnrichmentRemoval.EnumSiblingsRemoved++
 		return nil
 	}
 	if enumAttrDef.IsArray != nil && *enumAttrDef.IsArray {
@@ -166,8 +165,8 @@ func removeEnumSiblingPair(
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
 			enumSiblingRetentionReasonSiblingValueWrongType, "")
 	}
-	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
-	if !enumPresent {
+	enumValue := item[enumAttributeName]
+	if enumValue == nil {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
 			enumSiblingRetentionReasonEnumValueMissing, "")
 	}
@@ -221,8 +220,8 @@ func removeEnumArraySiblingPair(
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
 			enumSiblingRetentionReasonSiblingValueWrongType, "")
 	}
-	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
-	if !enumPresent {
+	enumValue := item[enumAttributeName]
+	if enumValue == nil {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
 			enumSiblingRetentionReasonEnumValueMissing, "")
 	}
@@ -302,7 +301,6 @@ func retainUnsupportedEnumSibling(
 	}
 	if siblingValue == nil {
 		delete(item, siblingName)
-		context.result.EnrichmentRemoval.EnumSiblingsRemoved++
 		return
 	}
 	context.result.EnrichmentRemoval.EnumSiblingsRetained++

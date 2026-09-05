@@ -13,7 +13,7 @@ const (
 	issueEnrichmentEnumSiblingNotAddedMask            uint64 = 1 << issue.EnrichmentEnumSiblingNotAdded
 	issueEnrichmentEnumSiblingOtherAddedMask          uint64 = 1 << issue.EnrichmentEnumSiblingOtherAdded
 	issueEnrichmentObservablesNotAddedWrongTypeMask   uint64 = 1 << issue.EnrichmentObservablesNotAddedWrongType
-	issueEnrichmentObservableDuplicateSkippedMask     uint64 = 1 << issue.EnrichmentObservableDuplicateSkipped
+	issueObservableDuplicateMask                      uint64 = 1 << issue.ObservableDuplicate
 	issueEnrichmentRemovalEnumSiblingNotRemovedMask   uint64 = 1 << issue.EnrichmentRemovalEnumSiblingNotRemoved
 	issueObservableArrayWrongTypeMask                 uint64 = 1 << issue.ObservableArrayWrongType
 	issueObservableElementWrongTypeMask               uint64 = 1 << issue.ObservableElementWrongType
@@ -71,7 +71,10 @@ func compileIssuePolicy(rules []IssueLevelRule) (levelPolicy, error) {
 }
 
 func defaultIssuePolicy() levelPolicy {
-	return levelPolicy{warning: allIssueCodesMask}
+	return levelPolicy{
+		ignored: issueObservableDuplicateMask,
+		warning: allIssueCodesMask &^ issueObservableDuplicateMask,
+	}
 }
 
 func setIssuePolicyLevel(policy *levelPolicy, code issue.Code, level issue.Level) {

@@ -24,8 +24,8 @@ const (
 	EnrichmentEnumSiblingOtherAdded
 	// EnrichmentObservablesNotAddedWrongType reports an invalid top-level observables value.
 	EnrichmentObservablesNotAddedWrongType
-	// EnrichmentObservableDuplicateSkipped reports a generated observable duplicate.
-	EnrichmentObservableDuplicateSkipped
+	// ObservableDuplicate reports an observable whose semantic identity duplicates an earlier observable.
+	ObservableDuplicate
 	// EnrichmentRemovalEnumSiblingNotRemoved reports an enum sibling retained because safe removal failed.
 	EnrichmentRemovalEnumSiblingNotRemoved
 	// ObservableArrayWrongType reports that observables is not an array.
@@ -91,9 +91,9 @@ var issueCodeInfos = [issueCodeCount]coderegistry.Info{
 		Name:        "issue_enrichment_observables_not_added_wrong_type",
 		Description: "The top-level observables attribute has an invalid value.",
 	},
-	EnrichmentObservableDuplicateSkipped: {
-		Name:        "issue_enrichment_observable_duplicate_skipped",
-		Description: "The generated observable duplicates one already present.",
+	ObservableDuplicate: {
+		Name:        "issue_observable_duplicate",
+		Description: "An observable has the same semantic identity as an earlier observable.",
 	},
 	EnrichmentRemovalEnumSiblingNotRemoved: {
 		Name:        "issue_enrichment_removal_enum_sibling_not_removed",
@@ -184,11 +184,13 @@ func (code Code) Valid() bool {
 	return issueCodeRegistry.Valid(code)
 }
 
-// DefaultLevel returns the toolkit's default handling level for code, or an invalid level for an invalid code. Every
-// issue code currently defaults to Warning.
+// DefaultLevel returns the toolkit's default handling level for code, or an invalid level for an invalid code.
 func (code Code) DefaultLevel() Level {
 	if !code.Valid() {
 		return Level(0)
+	}
+	if code == ObservableDuplicate {
+		return LevelIgnored
 	}
 	return LevelWarning
 }

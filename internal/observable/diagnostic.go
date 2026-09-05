@@ -80,7 +80,7 @@ func EntryToDiagnostic(entry Entry, index int, diagnosticPath *eventpath.Path) (
 		return newIndexedDiagnostic(
 			details(attributePath, "value"),
 			index,
-			" value is not a string or null.",
+			" value is not a string.",
 		)
 	case ProblemValueNotFound:
 		attributePath := diagnosticPath.ChildString("value", pathstyle.ArrayIndexed)

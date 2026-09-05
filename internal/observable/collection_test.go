@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDeduplicateGeneratedUsesSemanticObservableIdentity(t *testing.T) {
+func TestAnalyzeDuplicatesSeparatesDetectionFromGeneratedDeduplication(t *testing.T) {
 	existingValue := []jsonish.Map{
 		{"name": "red", "type_id": json.Number("1"), "value": "go"},
 		{"name": "ball", "type_id": json.Number("2")},
@@ -23,15 +23,32 @@ func TestDeduplicateGeneratedUsesSemanticObservableIdentity(t *testing.T) {
 		{"name": "nullable", "type_id": int64(3)},
 	}
 
-	result := DeduplicateGenerated(&existing, generated)
-	require.Equal(t, []jsonish.Map{generated[1], generated[3]}, result.Accepted)
+	result := AnalyzeDuplicates(&existing, generated, true)
+	require.Equal(t, []jsonish.Map{generated[0], generated[1], generated[3]}, result.AcceptedGenerated)
 	require.Equal(t, []Duplicate{
-		{Observable: generated[0], Name: "red", Source: DuplicateExisting, GeneratedIndex: 0},
-		{Observable: generated[2], Name: "red", Source: DuplicateGenerated, GeneratedIndex: 2},
+		{
+			Name:       "red",
+			Occurrence: DuplicateOccurrence{Origin: ObservableOriginGenerated, Index: 0},
+			First:      DuplicateOccurrence{Origin: ObservableOriginExisting, Index: 0},
+		},
+		{
+			Name:       "red",
+			Occurrence: DuplicateOccurrence{Origin: ObservableOriginGenerated, Index: 2},
+			First:      DuplicateOccurrence{Origin: ObservableOriginGenerated, Index: 1},
+		},
+		{
+			Name:       "nullable",
+			Occurrence: DuplicateOccurrence{Origin: ObservableOriginGenerated, Index: 3},
+			First:      DuplicateOccurrence{Origin: ObservableOriginExisting, Index: 2},
+		},
 	}, result.Duplicates)
+
+	withoutGeneratedDeduplication := AnalyzeDuplicates(&existing, generated, false)
+	require.Equal(t, generated, withoutGeneratedDeduplication.AcceptedGenerated)
+	require.Equal(t, result.Duplicates, withoutGeneratedDeduplication.Duplicates)
 }
 
-func TestDeduplicateGeneratedDoesNotLetMalformedExistingObservableSuppressValidGeneratedObservable(t *testing.T) {
+func TestAnalyzeDuplicatesIgnoresMalformedObservableIdentities(t *testing.T) {
 	existing, ok := NewCollection([]jsonish.Map{
 		{"name": "red", "value": "go"},
 		{"name": "red", "type_id": "malformed", "value": "go"},
@@ -39,8 +56,8 @@ func TestDeduplicateGeneratedDoesNotLetMalformedExistingObservableSuppressValidG
 	require.True(t, ok)
 	generated := []jsonish.Map{{"name": "red", "type_id": int64(1), "value": "go"}}
 
-	result := DeduplicateGenerated(&existing, generated)
-	require.Equal(t, generated, result.Accepted)
+	result := AnalyzeDuplicates(&existing, generated, true)
+	require.Equal(t, generated, result.AcceptedGenerated)
 	require.Empty(t, result.Duplicates)
 }
 

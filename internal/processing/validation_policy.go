@@ -59,10 +59,12 @@ const (
 	validationObservableNamePathNotationMask    uint64 = 1 << validation.ObservableNamePathNotation
 	validationClassUIDMissingMask               uint64 = 1 << validation.ClassUIDMissing
 	validationClassUIDWrongTypeMask             uint64 = 1 << validation.ClassUIDWrongType
+	validationObservableDuplicateMask           uint64 = 1 << validation.ObservableDuplicate
 
 	// All masks except 0 set to true.
 	allValidationCodesMask       uint64 = ^uint64(0) &^ 1
-	defaultValidationIgnoredMask uint64 = validationAttributeRecommendedMissingMask
+	defaultValidationIgnoredMask uint64 = validationAttributeRecommendedMissingMask |
+		validationObservableDuplicateMask
 	defaultValidationWarningMask uint64 = validationClassDeprecatedMask |
 		validationAttributeDeprecatedMask |
 		validationAttributeTypeDeprecatedMask |
@@ -114,7 +116,8 @@ const (
 		validationObservablePathNotFoundMask |
 		validationObservablePathNotObjectMask |
 		validationObservableValueNotFoundMask |
-		validationObservableNamePathNotationMask
+		validationObservableNamePathNotationMask |
+		validationObservableDuplicateMask
 	eventWalkValidationMask uint64 = validationAttributeRequiresProfileMask |
 		validationAttributeUnknownMask |
 		requirementValidationMask |

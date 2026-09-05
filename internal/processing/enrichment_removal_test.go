@@ -232,9 +232,9 @@ func TestEnrichmentRemovalRemovesNullEnumSiblingRegardlessOfSupport(t *testing.T
 	assert.NoError(err)
 	assert.NotContains(event, "statuses", "a null sibling is equivalent to a missing one and is always removed")
 	assert.Equal(
-		3,
+		2,
 		result.EnrichmentRemoval.EnumSiblingsRemoved,
-		"class_name, activity_name, and the null (unsupported array) statuses are all removed",
+		"class_name and activity_name are removed; the logically absent statuses value is not counted",
 	)
 	assert.Zero(result.EnrichmentRemoval.EnumSiblingsRetained)
 	assert.Empty(result.Issues, "removing a null sibling is unconditional and does not need an issue")
@@ -411,7 +411,7 @@ func TestEnrichmentRemovalTreatsNullAttributesAsMissing(t *testing.T) {
 
 		assert.NoError(err)
 		assert.NotContains(event, "mode")
-		assert.Equal(1, result.EnrichmentRemoval.EnumSiblingsRemoved)
+		assert.Zero(result.EnrichmentRemoval.EnumSiblingsRemoved)
 		assert.Zero(result.EnrichmentRemoval.EnumSiblingsRetained)
 	})
 
@@ -567,12 +567,13 @@ func TestEnrichmentRemovalMatchesObservableValuesAfterScalarStringConversion(t *
 	assert.Equal(1, result.EnrichmentRemoval.ObservablesRemoved)
 }
 
-func TestEnrichmentRemovalTreatsMissingObservablePathAsNull(t *testing.T) {
+func TestEnrichmentRemovalTreatsNullObservableValueAsOmitted(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
 	event["observables"] = []any{
-		jsonish.Map{"name": "ball.green", "type_id": 1000, "value": nil},
+		jsonish.Map{"name": "ball", "type_id": 1000, "value": nil},
 	}
 
 	result, err := mustNewEventProcessorPipeline(
@@ -587,7 +588,7 @@ func TestEnrichmentRemovalTreatsMissingObservablePathAsNull(t *testing.T) {
 	assert.Empty(result.Issues)
 }
 
-func TestEnrichmentRemovalOmitsExplicitNullFromObservableIssueDetails(t *testing.T) {
+func TestEnrichmentRemovalTreatsNullObservableValueAtScalarPathAsValueless(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	event := validValidationEvent()
@@ -605,9 +606,9 @@ func TestEnrichmentRemovalOmitsExplicitNullFromObservableIssueDetails(t *testing
 	assert.NoError(err)
 	assert.Contains(event, "observables")
 	assert.Equal(1, result.EnrichmentRemoval.ObservablesRetained)
-	issues := issuesWithCode(result.Issues, "issue_observable_value_not_found")
+	issues := issuesWithCode(result.Issues, "issue_observable_path_not_object")
 	assert.Len(issues, 1)
-	assert.Equal("observables[0].value", issues[0].Details["attribute_path"])
+	assert.Equal("observables[0].name", issues[0].Details["attribute_path"])
 	assert.NotContains(issues[0].Details, "value")
 }
 
@@ -645,10 +646,11 @@ func TestSafeEnrichmentRemovalStopsWithoutResolvedClass(t *testing.T) {
 	}
 }
 
-func TestValidationTreatsMissingObservablePathAsNull(t *testing.T) {
+func TestValidationTreatsNullObservableValueAsOmitted(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	event := validValidationEvent()
+	event["ball"] = jsonish.Map{"green": "go"}
 	event["observables"] = []any{
 		jsonish.Map{"name": "ball.green", "type_id": json.Number("1000"), "value": nil},
 	}
@@ -656,17 +658,13 @@ func TestValidationTreatsMissingObservablePathAsNull(t *testing.T) {
 	result, err := mustNewEventProcessorPipeline(assert, schema, NewValidation()).ProcessEvent(event)
 
 	assert.NoError(err)
-	assert.NotContains(
+	assert.Contains(
 		issueCodes(findingsAtLevel(result.Validation.Findings, validation.LevelError)),
-		"validation_observable_path_not_found",
-	)
-	assert.NotContains(
-		issueCodes(findingsAtLevel(result.Validation.Findings, validation.LevelError)),
-		"validation_observable_value_not_found",
+		"validation_observable_path_not_object",
 	)
 }
 
-func TestEnrichmentRemovalTreatsMissingArrayBranchesAsNull(t *testing.T) {
+func TestEnrichmentRemovalTreatsNullObservableValuesAsValuelessAcrossArrayBranches(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	addObservableArrayTestAttributes(schema)
@@ -687,9 +685,11 @@ func TestEnrichmentRemovalTreatsMissingArrayBranchesAsNull(t *testing.T) {
 	).ProcessEvent(event)
 
 	assert.NoError(err)
-	assert.NotContains(event, "observables")
-	assert.Equal(2, result.EnrichmentRemoval.ObservablesRemoved)
-	assert.Empty(result.Issues)
+	assert.Contains(event, "observables")
+	assert.Zero(result.EnrichmentRemoval.ObservablesRemoved)
+	assert.Equal(2, result.EnrichmentRemoval.ObservablesRetained)
+	assert.Len(issuesWithCode(result.Issues, "issue_observable_path_not_object"), 1)
+	assert.Len(issuesWithCode(result.Issues, "issue_observable_path_not_found"), 1)
 }
 
 func TestEnrichmentRemovalDoesNotTreatWrongTypeObservablePathAsNull(t *testing.T) {

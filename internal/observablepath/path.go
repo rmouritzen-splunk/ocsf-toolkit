@@ -249,11 +249,6 @@ func (p *Path) ResolveObject(event jsonish.Map) Resolution {
 	return p.resolve(event, objectValueMatches)
 }
 
-// ResolveNull reports whether the path selects an explicit null value.
-func (p *Path) ResolveNull(event jsonish.Map) Resolution {
-	return p.resolve(event, nullValueMatches)
-}
-
 // ResolveString reports whether the path selects a scalar with expected's JSON-compatible string representation.
 func (p *Path) ResolveString(event jsonish.Map, expected string) Resolution {
 	return p.resolve(event, func(value any) bool {
@@ -301,8 +296,8 @@ func (p *Path) resolveSingle(event jsonish.Map) (value any, resolution Resolutio
 		if !ok {
 			return nil, Resolution{}, true
 		}
-		next, present := item[segment.attribute]
-		if !present {
+		next := item[segment.attribute]
+		if next == nil {
 			return nil, Resolution{Missing: true}, true
 		}
 		current = next
@@ -346,8 +341,8 @@ func resolveSegmentCandidates(values []any, segment segment, missing *bool) []an
 		if !ok {
 			continue
 		}
-		value, present := item[segment.attribute]
-		if !present {
+		value = item[segment.attribute]
+		if value == nil {
 			*missing = true
 			continue
 		}
@@ -500,10 +495,6 @@ func identityOfArray(value any) (arrayIdentity, bool) {
 func objectValueMatches(value any) bool {
 	_, ok := value.(jsonish.Map)
 	return ok
-}
-
-func nullValueMatches(value any) bool {
-	return value == nil
 }
 
 func scalarStringMatches(value any, expected string) bool {

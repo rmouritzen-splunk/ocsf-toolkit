@@ -34,7 +34,7 @@ const (
 	ProblemPathNotFound
 	// ProblemPathNotObject indicates that a valueless observable does not resolve to an object.
 	ProblemPathNotObject
-	// ProblemValueWrongType indicates that an observable value is neither a string nor null.
+	// ProblemValueWrongType indicates that an observable value is not a string.
 	ProblemValueWrongType
 	// ProblemValueNotFound indicates that an observable value is not present at its path.
 	ProblemValueNotFound
@@ -79,8 +79,8 @@ func NewAnalyzer(
 	objects map[string]*schema.ObjectDefinition,
 	activeProfiles schema.ProfileSet,
 ) (Analyzer, bool) {
-	value, present := eventvalue.Attribute(event, "observables")
-	if !present {
+	value := event["observables"]
+	if value == nil {
 		return Analyzer{}, false
 	}
 	observables, ok := NewCollection(value)
@@ -95,9 +95,9 @@ func NewAnalyzer(
 	}, true
 }
 
-// LimitEntries restricts analysis to the first count observable entries. It is used when a processor has appended a
-// suffix whose semantic validity is already established by construction.
-func (a *Analyzer) LimitEntries(count int) {
+// UpperBound restricts analysis to entries before the exclusive bound. It is used to skip entries added by another
+// processor when their semantic validity is guaranteed by that processor.
+func (a *Analyzer) UpperBound(count int) {
 	if count < 0 || count >= a.limit {
 		return
 	}
@@ -165,8 +165,8 @@ func analyzeEntry(
 	}
 	result.Observable = observable
 
-	nameValue, namePresent := eventvalue.Attribute(observable, "name")
-	if !namePresent {
+	nameValue := observable["name"]
+	if nameValue == nil {
 		result.Problem = ProblemNameMissing
 		return result, nil
 	}
@@ -199,8 +199,8 @@ func analyzeEntry(
 	result.Path = path
 	result.PathDefined = true
 
-	observableValue, valuePresent := observable["value"]
-	if !valuePresent {
+	observableValue := observable["value"]
+	if observableValue == nil {
 		pathResolution := path.ResolveObject(event)
 		if pathResolution.Matched {
 			result.Removable = true
@@ -211,19 +211,6 @@ func analyzeEntry(
 			return result, nil
 		}
 		result.Problem = ProblemPathNotObject
-		return result, nil
-	}
-	if observableValue == nil {
-		pathResolution := path.ResolveNull(event)
-		if pathResolution.Missing || pathResolution.Matched {
-			result.Removable = true
-			return result, nil
-		}
-		if !pathResolution.Found {
-			result.Problem = ProblemPathNotFound
-			return result, nil
-		}
-		result.Problem = ProblemValueNotFound
 		return result, nil
 	}
 	valueString, ok := eventvalue.AsString(observableValue)

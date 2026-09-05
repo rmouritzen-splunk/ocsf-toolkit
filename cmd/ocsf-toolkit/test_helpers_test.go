@@ -168,7 +168,7 @@ func writeIgnoredIssueTestSchema(assert *require.Assertions, dir string) string 
 				"name":        "alpha",
 				"uid":         1,
 				"category":    "test",
-				"observables": jsonish.Map{"ball.green": 1000},
+				"observables": jsonish.Map{"ball.green": 1000, "balls.green": 1000},
 				"attributes": jsonish.Map{
 					"class_uid": jsonish.Map{
 						"type":        "integer_t",
@@ -200,6 +200,11 @@ func writeIgnoredIssueTestSchema(assert *require.Assertions, dir string) string 
 					"ball": jsonish.Map{
 						"type":        "object_t",
 						"object_type": "ball",
+					},
+					"balls": jsonish.Map{
+						"type":        "object_t",
+						"object_type": "ball",
+						"is_array":    true,
 					},
 					"observables": jsonish.Map{
 						"type":        "object_t",

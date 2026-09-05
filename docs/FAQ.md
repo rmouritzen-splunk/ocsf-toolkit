@@ -10,6 +10,14 @@ Processing-result messages preserve ordinary graphic Unicode but render control 
 
 `metadata.uid` is the one event-supplied value that may be used for correlation in a returned Go error. OCSF defines it as the event's unique identifier, and producers should treat it as an opaque identifier rather than placing sensitive content in it. Attribute paths and attribute names are also diagnostic identifiers and may appear in results. If either behavior is unsuitable for an environment, apply the appropriate logging controls or open an issue to discuss the use case.
 
+## How does the toolkit represent an attribute with no value?
+
+OCSF has no logical null value or null type, although carrier representations such as JSON and `jsonish.Map` can represent one. At an object-attribute boundary, the toolkit deliberately treats a carrier-level null as an absent OCSF attribute. In JSON input, an omitted property and a property whose value is `null` therefore have the same OCSF meaning. This representation punning is an encoding convenience for JSON, other encodings, and programmatic event producers for which explicitly representing an attribute without a value is easier than omitting it.
+
+The Go implementation represents events with `jsonish.Map`. Processing reads an absent map key and a key whose value is `nil` identically, using a direct map lookup followed by a `value == nil` check. This is an implementation decision rather than a requirement for implementations using another in-memory representation. Removal processors may delete a physically present nil-valued map entry within their configured scope, but do not count it as a removed logical value; other processors do not normalize the representation merely because the value is nil.
+
+An array position is different. A carrier representation can contain `[null]`, and `jsonish.Map` values can contain an array with a `nil` element, but that element has no type in the OCSF type system. It is an illegal OCSF element type rather than an omitted element, so validation reports `validation_attribute_wrong_type` at its indexed path.
+
 ## How do issue and validation error levels differ?
 
 All processing issues default to `warning`. Warning-level issues are collected in the successful processing result. An ignorable issue may instead be omitted, while elevating an issue to `error` stops processing at the first matching issue and returns a `ProcessingIssueError`. As with any non-nil `ProcessEvent` error, the accompanying result is the zero value, although earlier in-place event mutations are not rolled back.

@@ -23,6 +23,10 @@ func warningCode(code validation.Code, name string) validationCodeContract {
 	return validationCodeContract{code: code, name: name, defaultLevel: validation.LevelWarning}
 }
 
+func ignoredCode(code validation.Code, name string) validationCodeContract {
+	return validationCodeContract{code: code, name: name, defaultLevel: validation.LevelIgnored}
+}
+
 var validationCodeContracts = []validationCodeContract{
 	errorCode(validation.ClassUIDUnknown, "validation_class_uid_unknown"),
 	errorCode(validation.ProfileUnknown, "validation_profile_unknown"),
@@ -114,6 +118,7 @@ var validationCodeContracts = []validationCodeContract{
 	),
 	errorCode(validation.ClassUIDMissing, "validation_class_uid_missing"),
 	errorCode(validation.ClassUIDWrongType, "validation_class_uid_wrong_type"),
+	ignoredCode(validation.ObservableDuplicate, "validation_observable_duplicate"),
 }
 
 func TestInvariantValidationCodeContract(t *testing.T) {

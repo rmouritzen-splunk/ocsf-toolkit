@@ -10,19 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAttributeTreatsNullAsAbsent(t *testing.T) {
-	item := jsonish.Map{"present": "value", "null": nil}
-
-	value, present := Attribute(item, "present")
-	require.True(t, present)
-	require.Equal(t, "value", value)
-
-	_, present = Attribute(item, "null")
-	require.False(t, present)
-	_, present = Attribute(item, "missing")
-	require.False(t, present)
-}
-
 func TestHasPathOrKeySupportsLiteralAndNestedKeys(t *testing.T) {
 	item := jsonish.Map{
 		"literal.value": "present",

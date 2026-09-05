@@ -38,8 +38,8 @@ const (
 
 // ResolveEventClass resolves an event's class_uid against the compiled schema.
 func (s *Compiled) ResolveEventClass(event jsonish.Map) (*ClassDefinition, int64, ClassResolution) {
-	value, present := eventvalue.Attribute(event, "class_uid")
-	if !present {
+	value := event["class_uid"]
+	if value == nil {
 		return nil, 0, ClassUIDMissing
 	}
 	classUID, valid := eventvalue.AsInteger(value)

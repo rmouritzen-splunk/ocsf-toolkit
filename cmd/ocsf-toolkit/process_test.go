@@ -200,19 +200,15 @@ func TestProcessIssueLevelsIgnoreNoneOneMultipleAndAllCodes(t *testing.T) {
 	}
 
 	assert.ElementsMatch(
-		[]issue.Code{issue.EnrichmentEnumSiblingNotAdded, issue.EnrichmentObservableDuplicateSkipped},
+		[]issue.Code{issue.EnrichmentEnumSiblingNotAdded},
 		issueCodes(reportFor()),
-		"ignoring none reports every ignorable issue",
+		"default-ignored duplicate diagnostics are omitted",
 	)
 	oneIgnored := reportFor("--issue-level", issue.EnrichmentEnumSiblingNotAdded.String()+"=ignored")
-	assert.ElementsMatch(
-		[]issue.Code{issue.EnrichmentObservableDuplicateSkipped},
-		issueCodes(oneIgnored),
-		"ignoring one code leaves the other reported",
-	)
+	assert.Empty(issueCodes(oneIgnored), "ignoring the default warning omits both conditions")
 	multipleIgnored := reportFor(
 		"--issue-level", issue.EnrichmentEnumSiblingNotAdded.String()+"=ignored",
-		"--issue-level", issue.EnrichmentObservableDuplicateSkipped.String()+"=ignored",
+		"--issue-level", issue.ObservableDuplicate.String()+"=ignored",
 	)
 	assert.Empty(issueCodes(multipleIgnored), "ignoring multiple selected codes ignores each of them")
 	allIgnored := reportFor("--issue-level", "all=ignored")
@@ -220,6 +216,40 @@ func TestProcessIssueLevelsIgnoreNoneOneMultipleAndAllCodes(t *testing.T) {
 		issueCodes(allIgnored),
 		"all=ignored omits every ignorable issue",
 	)
+}
+
+// Invariant test: the CLI defaults observable deduplication to disabled and enables it only for explicit generated
+// mode.
+func TestInvariantCLIGeneratedObservableDeduplicationIsOptIn(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeIgnoredIssueTestSchema(assert, dir)
+	eventPath := filepath.Join(dir, "event.json")
+	event := validCLIEvent()
+	event["balls"] = []any{jsonish.Map{"green": "same"}, jsonish.Map{"green": "same"}}
+	writeJSONFile(assert, eventPath, event)
+
+	process := func(name string, extraArgs ...string) jsonish.Map {
+		outputPath := filepath.Join(dir, name+".json")
+		reportPath := filepath.Join(dir, name+"-report.json")
+		args := append([]string{
+			"--schema", schemaPath,
+			"--event", eventPath,
+			"--observables", "add",
+			"--event-output", outputPath,
+			"--report-output", reportPath,
+		}, extraArgs...)
+		exitCode, stdout, stderr := runCLI(args...)
+		assert.Equal(0, exitCode, stderr)
+		assert.Empty(stdout)
+		assert.Empty(stderr)
+		processed, err := jsonio.ReadObject(outputPath)
+		assert.NoError(err)
+		return processed
+	}
+
+	assert.Len(process("disabled")["observables"], 2)
+	assert.Len(process("generated", "--deduplicate-observables", "generated")["observables"], 1)
 }
 
 func TestProcessIssueLevelErrorStopsPipeline(t *testing.T) {

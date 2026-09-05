@@ -37,11 +37,12 @@ type EventProcessor = PipelineConfig
 type ValidationOption func(*ValidationConfig)
 
 type enrichmentHelperConfig struct {
-	enumSiblingsAction     enrichment.Action
-	observablesAction      enrichment.Action
-	observableTypeIDs      []int64
-	pathNotation           pathstyle.Style
-	pathNotationConfigured bool
+	enumSiblingsAction      enrichment.Action
+	observablesAction       enrichment.Action
+	observableTypeIDs       []int64
+	observableDeduplication enrichment.ObservableDeduplication
+	pathNotation            pathstyle.Style
+	pathNotationConfigured  bool
 }
 
 type EnrichmentOption func(*enrichmentHelperConfig)
@@ -91,9 +92,16 @@ func NewEnrichment(options ...EnrichmentOption) EventProcessor {
 		ObservablesAction:  config.observablesAction,
 		Observables: ObservablesConfig{
 			TypeIDs:                config.observableTypeIDs,
+			Deduplication:          config.observableDeduplication,
 			PathNotation:           config.pathNotation,
 			PathNotationConfigured: config.pathNotationConfigured,
 		},
+	}
+}
+
+func WithObservableDeduplication(mode enrichment.ObservableDeduplication) EnrichmentOption {
+	return func(config *enrichmentHelperConfig) {
+		config.observableDeduplication = mode
 	}
 }
 

@@ -78,7 +78,7 @@ func TestResolveTraversesAllSupportedArraySelectors(t *testing.T) {
 	}
 }
 
-func TestResolutionMatchesObjectsNullsAndScalarStrings(t *testing.T) {
+func TestResolutionMatchesObjectsAndScalarStrings(t *testing.T) {
 	event := jsonish.Map{
 		"values": []any{jsonish.Map{"name": "actor"}, nil, json.Number("443")},
 	}
@@ -86,9 +86,23 @@ func TestResolutionMatchesObjectsNullsAndScalarStrings(t *testing.T) {
 	require.NoError(t, err)
 
 	require.True(t, path.ResolveObject(event).Matched)
-	require.True(t, path.ResolveNull(event).Matched)
 	require.True(t, path.ResolveString(event, "443").Matched)
 	require.False(t, path.ResolveString(event, "80").Matched)
+}
+
+// Invariant test: path resolution treats a nil-valued event-map attribute as missing.
+func TestInvariantResolutionTreatsNilMapValueAsMissing(t *testing.T) {
+	path, err := Parse("value")
+	require.NoError(t, err)
+
+	for _, resolution := range []Resolution{
+		path.ResolveObject(jsonish.Map{"value": nil}),
+		path.ResolveString(jsonish.Map{"value": nil}, ""),
+	} {
+		require.False(t, resolution.Found)
+		require.False(t, resolution.Matched)
+		require.True(t, resolution.Missing)
+	}
 }
 
 func TestResolveHandlesCyclicAndDeeplyNestedArrays(t *testing.T) {

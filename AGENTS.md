@@ -56,6 +56,8 @@ Keep the public API small and intentional. Public packages and exported identifi
 
 Use `jsonish.Map` for JSON objects in event-processing APIs. For JSON input, preserve numbers as `json.Number` when possible; the `jsonio` package provides the preferred decoding behavior. OCSF `integer_t` and `long_t` values are signed 64-bit integers.
 
+For event attributes stored in `jsonish.Map`, treat `item[key] == nil` as logically absent and prefer a direct lookup followed by a nil check. This does not apply to array elements: a nil array element is present and has an illegal OCSF type. Use comma-`ok` only when physical map membership matters, such as deleting a present nil-valued attribute during removal.
+
 Event enrichment intentionally mutates event maps in place and is not transactional. Preserve and document this behavior unless a change is explicitly requested. Validation must run after enrichment and any future event-mutating processors.
 
 Treat `Pipeline.ProcessEvent` and the schema-guided visitor callbacks as a hot loop that may process tens of thousands of events per second. Construct pipelines once and keep schema data, processor configuration, compiled constraints, and other reusable metadata immutable and pipeline-owned. Per-event contexts should contain only event-specific mutable state and references to shared immutable data; do not copy processor collections or rebuild reusable metadata for each event. Avoid unnecessary heap allocations, temporary maps, slices, strings, reflection, and repeated parsing in the traversal path. Use representative benchmarks, allocation counts, and profiles to guide non-obvious optimizations, and preserve correctness, deterministic results, concurrency safety, and useful diagnostics.

@@ -15,6 +15,7 @@ const (
 	PipelineOptionEnumSiblings                     PipelineOptionName = "enum_siblings"
 	PipelineOptionObservables                      PipelineOptionName = "observables"
 	PipelineOptionEnrichmentObservablePathNotation PipelineOptionName = "enrichment_observable_path_notation"
+	PipelineOptionObservableDeduplication          PipelineOptionName = "observable_deduplication"
 	PipelineOptionValidation                       PipelineOptionName = "validation"
 	PipelineOptionValidationObservablePathNotation PipelineOptionName = "validation_observable_path_notation"
 	PipelineOptionIssueLevel                       PipelineOptionName = "issue_level"

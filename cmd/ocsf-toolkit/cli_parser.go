@@ -50,6 +50,7 @@ const (
 
 func newParser() (*cliParser, *cliOptions) {
 	options := &cliOptions{}
+	options.Mutation.ObservableDeduplication.mode = enrichment.ObservableDeduplicationIgnored
 	parser := &cliParser{flags: pflag.NewFlagSet("ocsf-toolkit", pflag.ContinueOnError)}
 	parser.flags.SetOutput(io.Discard)
 	parser.flags.SortFlags = false
@@ -117,6 +118,13 @@ func newParser() (*cliParser, *cliOptions) {
 		"observable-id",
 		"ID",
 		"Add only the observable type ID; may be repeated",
+	)
+	mutation.varValue(
+		&options.Mutation.ObservableDeduplication,
+		"deduplicate-observables",
+		"MODE",
+		"Deduplicate observables: disabled or generated; defaults to disabled."+
+			" Generated mode compares generated candidates only; existing observables do not suppress generation",
 	)
 	mutation.boolVar(
 		&options.Mutation.Enrich,

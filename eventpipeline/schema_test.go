@@ -1913,7 +1913,8 @@ func TestProcessEventValidationConstraintEdgeCases(t *testing.T) {
 	assert.Contains(issueCodes(resultErrorFindings23), "validation_constraint_failed")
 }
 
-func TestProcessEventTreatsNullAttributesAsMissing(t *testing.T) {
+func TestInvariantProcessEventTreatsNilMapValuesAsMissing(t *testing.T) {
+	// Invariant test: a nil-valued map attribute has the same logical OCSF meaning as an omitted attribute.
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 
@@ -1970,20 +1971,23 @@ func TestProcessEventTreatsNullAttributesAsMissing(t *testing.T) {
 		assert.Empty(findingsAtLevel(result.Validation().Findings, validation.LevelError))
 	})
 
-	t.Run("null array element", func(t *testing.T) {
-		assert := require.New(t)
-		event := validValidationEvent()
-		event["statuses"] = []any{nil}
+}
 
-		result, err := mustNewPipeline(assert, schema, WithValidation()).ProcessEvent(event)
+func TestInvariantProcessEventRejectsNilArrayElements(t *testing.T) {
+	// Invariant test: a nil array position is an illegal OCSF value, not an omitted element.
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	event := validValidationEvent()
+	event["statuses"] = []any{nil}
 
-		assert.NoError(err)
-		resultErrorFindings25 := findingsAtLevel(result.Validation().Findings, validation.LevelError)
-		assert.Contains(
-			issueAttributePaths(issuesWithCode(resultErrorFindings25, "validation_attribute_wrong_type")),
-			"statuses[0]",
-		)
-	})
+	result, err := mustNewPipeline(assert, schema, WithValidation()).ProcessEvent(event)
+
+	assert.NoError(err)
+	resultErrorFindings := findingsAtLevel(result.Validation().Findings, validation.LevelError)
+	assert.Contains(
+		issueAttributePaths(issuesWithCode(resultErrorFindings, "validation_attribute_wrong_type")),
+		"statuses[0]",
+	)
 }
 
 func TestProcessEventSupportsTypedSlicesAndArrays(t *testing.T) {

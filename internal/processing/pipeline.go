@@ -211,6 +211,7 @@ func NewPipelineImpl(compiled *schema.Compiled, config PipelineConfig) (*Pipelin
 			config.ObservablesAction == enrichment.Add ||
 			config.ValidationEnabled && validationRequiresEventWalk(policies.validation),
 	}
+	reportObservableDuplicates := !policies.issues.isIgnored(issueObservableDuplicateMask)
 
 	// Only an observables-only safe-removal dispatcher uses this pipeline-wide deferral; see the note above.
 	deferObservablesRemoval := config.EnumSiblingsAction != enrichment.None
@@ -223,6 +224,7 @@ func NewPipelineImpl(compiled *schema.Compiled, config PipelineConfig) (*Pipelin
 				true,
 				true,
 				false,
+				reportObservableDuplicates,
 				config.Observables,
 			)
 			if err != nil {
@@ -239,6 +241,7 @@ func NewPipelineImpl(compiled *schema.Compiled, config PipelineConfig) (*Pipelin
 				true,
 				false,
 				false,
+				reportObservableDuplicates,
 				config.Observables,
 			)
 			if err != nil {
@@ -253,6 +256,7 @@ func NewPipelineImpl(compiled *schema.Compiled, config PipelineConfig) (*Pipelin
 				false,
 				true,
 				deferObservablesRemoval,
+				reportObservableDuplicates,
 				config.Observables,
 			)
 			if err != nil {
@@ -269,9 +273,12 @@ func NewPipelineImpl(compiled *schema.Compiled, config PipelineConfig) (*Pipelin
 
 	if config.ValidationEnabled {
 		impl.validation = &validationProcessor{
-			config: config.Validation,
-			cache:  validationCache,
-			policy: policies.validation,
+			config:                           config.Validation,
+			cache:                            validationCache,
+			policy:                           policies.validation,
+			generatedObservablesPathNotation: config.Observables.PathNotation,
+			duplicateIssueOwnsDiagnostics: config.ObservablesAction == enrichment.Add &&
+				reportObservableDuplicates,
 		}
 	}
 
@@ -300,6 +307,7 @@ func newMutationDispatcher(
 	compiled *schema.Compiled,
 	action enrichment.Action,
 	enumSiblingsEnabled, observablesEnabled, deferObservablesRemoval bool,
+	reportObservableDuplicates bool,
 	observables ObservablesConfig,
 ) (dispatcher *mutationDispatcher, err error) {
 	defer func() {
@@ -322,12 +330,14 @@ func newMutationDispatcher(
 			objectObservability = observable.CompileObjectObservability(compiled, observableTypes.allows)
 		}
 		return &mutationDispatcher{add: &enrichmentProcessor{
-			enumSiblingsEnabled:  enumSiblingsEnabled,
-			observablesEnabled:   observablesEnabled,
-			pathNotation:         observables.PathNotation,
-			observableTypes:      observableTypes,
-			classObservableTries: classObservableTries,
-			objectObservability:  objectObservability,
+			enumSiblingsEnabled:        enumSiblingsEnabled,
+			observablesEnabled:         observablesEnabled,
+			deduplicateGenerated:       observables.Deduplication == enrichment.ObservableDeduplicationGenerated,
+			reportObservableDuplicates: reportObservableDuplicates,
+			pathNotation:               observables.PathNotation,
+			observableTypes:            observableTypes,
+			classObservableTries:       classObservableTries,
+			objectObservability:        objectObservability,
 		}}, nil
 	case enrichment.Remove:
 		return &mutationDispatcher{safeRemove: &enrichmentSafeRemovalProcessor{

@@ -303,6 +303,16 @@ func TestProcessRejectsInvalidProcessorOptions(t *testing.T) {
 			wantError: `invalid --observable-path-notation value "invalid"`,
 		},
 		{
+			name:      "generated observable deduplication without observable enrichment",
+			options:   []string{"--validate", "--deduplicate-observables", "generated"},
+			wantError: "--deduplicate-observables=generated requires observable enrichment",
+		},
+		{
+			name:      "reserved observable deduplication mode",
+			options:   []string{"--observables", "--deduplicate-observables", "all"},
+			wantError: `invalid value "all" for --deduplicate-observables: expected disabled or generated`,
+		},
+		{
 			name:      "invalid enum siblings action",
 			options:   []string{"--enum-siblings=bogus"},
 			wantError: `invalid value "bogus" for --enum-siblings: expected add, remove, or force-remove`,
@@ -983,6 +993,8 @@ func TestHelp(t *testing.T) {
 	assert.Contains(stdout, helpLongOption("fail-on-validation-errors", ""))
 	assert.Contains(stdout, "--issue-level ISSUE_CODE=LEVEL")
 	assert.Contains(stdout, "--validation-level VALIDATION_CODE=LEVEL")
+	assert.Contains(stdout, "Generated mode compares generated")
+	assert.Contains(stdout, "observables do not suppress")
 	descriptionIndent := strings.Repeat(" ", helpDescriptionColumn(defaultHelpWidth))
 	assert.NotContains(stdout, "--issue-level=ISSUE_CODE=LEVEL")
 	assert.Contains(stdout, "Set an issue level to ignored")

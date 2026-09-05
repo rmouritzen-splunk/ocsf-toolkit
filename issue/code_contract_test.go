@@ -22,7 +22,7 @@ var issueCodeContracts = []issueCodeContract{
 	{issue.EnrichmentEnumSiblingNotAdded, "issue_enrichment_enum_sibling_not_added", false},
 	{issue.EnrichmentEnumSiblingOtherAdded, "issue_enrichment_enum_sibling_other_added", false},
 	{issue.EnrichmentObservablesNotAddedWrongType, "issue_enrichment_observables_not_added_wrong_type", false},
-	{issue.EnrichmentObservableDuplicateSkipped, "issue_enrichment_observable_duplicate_skipped", false},
+	{issue.ObservableDuplicate, "issue_observable_duplicate", false},
 	{issue.EnrichmentRemovalEnumSiblingNotRemoved, "issue_enrichment_removal_enum_sibling_not_removed", false},
 	{issue.ObservableArrayWrongType, "issue_observable_array_wrong_type", false},
 	{issue.ObservableElementWrongType, "issue_observable_element_wrong_type", false},
@@ -69,7 +69,11 @@ func TestInvariantIssueCodeContract(t *testing.T) {
 			require.Equal(t, index+1, int(contract.code))
 			require.True(t, contract.code.Valid())
 			require.Equal(t, contract.name, contract.code.String())
-			require.Equal(t, issue.LevelWarning, contract.code.DefaultLevel())
+			defaultLevel := issue.LevelWarning
+			if contract.code == issue.ObservableDuplicate {
+				defaultLevel = issue.LevelIgnored
+			}
+			require.Equal(t, defaultLevel, contract.code.DefaultLevel())
 			require.Equal(t, !contract.mandatory, contract.code.Ignorable())
 			require.NotEmpty(t, contract.code.Description())
 

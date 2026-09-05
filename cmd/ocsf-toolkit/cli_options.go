@@ -47,12 +47,13 @@ type issueOptions struct {
 }
 
 type mutationOptions struct {
-	Enrich        bool
-	Unenrich      bool
-	ForceRemove   bool
-	EnumSiblings  enrichmentActionOption
-	Observables   enrichmentActionOption
-	ObservableIDs observableTypeIDsOption
+	Enrich                  bool
+	Unenrich                bool
+	ForceRemove             bool
+	EnumSiblings            enrichmentActionOption
+	Observables             enrichmentActionOption
+	ObservableIDs           observableTypeIDsOption
+	ObservableDeduplication observableDeduplicationOption
 }
 
 type issueLevelsOption struct {
@@ -193,6 +194,37 @@ func (o *enrichmentActionOption) String() string {
 
 func (*enrichmentActionOption) Type() string {
 	return "action"
+}
+
+type observableDeduplicationOption struct {
+	setOnceOption
+	mode enrichment.ObservableDeduplication
+}
+
+func (o *observableDeduplicationOption) Set(value string) error {
+	if err := o.markConfigured(); err != nil {
+		return err
+	}
+	switch value {
+	case "disabled":
+		o.mode = enrichment.ObservableDeduplicationIgnored
+	case "generated":
+		o.mode = enrichment.ObservableDeduplicationGenerated
+	default:
+		return fmt.Errorf("invalid value %q for %s: expected disabled or generated", value, o.optionName)
+	}
+	return nil
+}
+
+func (o *observableDeduplicationOption) String() string {
+	if o.mode == enrichment.ObservableDeduplicationIgnored {
+		return "disabled"
+	}
+	return string(o.mode)
+}
+
+func (*observableDeduplicationOption) Type() string {
+	return "observable deduplication"
 }
 
 type observableTypeIDsOption struct {

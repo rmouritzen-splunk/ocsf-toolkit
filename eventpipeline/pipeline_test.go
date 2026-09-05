@@ -136,6 +136,22 @@ func TestNewPipelineRejectsInvalidConfigurations(t *testing.T) {
 			wantErr: `invalid observable path notation "invalid"`,
 		},
 		{
+			name: "generated deduplication without observable enrichment",
+			options: []PipelineOption{
+				WithEnumSiblings(enrichment.Add),
+				WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
+			},
+			wantErr: "generated observable deduplication is configured without adding observables",
+		},
+		{
+			name: "unsupported observable deduplication mode",
+			options: []PipelineOption{
+				WithObservables(enrichment.Add),
+				WithObservableDeduplication(enrichment.ObservableDeduplication("all")),
+			},
+			wantErr: `invalid observable deduplication mode "all"`,
+		},
+		{
 			name:    "invalid validation path notation",
 			options: []PipelineOption{WithValidation(WithValidationObservablePathNotation(pathstyle.Style("invalid")))},
 			wantErr: `validation has invalid observable path notation "invalid"`,
@@ -332,21 +348,20 @@ func TestIssueLevelsIgnoreNoneOneMultipleAndAllCodes(t *testing.T) {
 	}
 
 	assert.ElementsMatch(
-		[]issue.Code{issue.EnrichmentEnumSiblingNotAdded, issue.EnrichmentObservableDuplicateSkipped},
+		[]issue.Code{issue.EnrichmentEnumSiblingNotAdded},
 		issueCodesFor(),
-		"ignoring none reports every ignorable issue",
-	)
-	assert.ElementsMatch(
-		[]issue.Code{issue.EnrichmentObservableDuplicateSkipped},
-		issueCodesFor(WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored)),
-		"ignoring one code leaves the other reported",
+		"default-ignored duplicate diagnostics are omitted",
 	)
 	assert.Empty(
+		issueCodesFor(WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored)),
+		"ignoring the default warning omits both conditions",
+	)
+	assert.ElementsMatch(
+		[]issue.Code{issue.EnrichmentEnumSiblingNotAdded, issue.ObservableDuplicate},
 		issueCodesFor(
-			WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored),
-			WithIssueLevel(issue.EnrichmentObservableDuplicateSkipped, issue.LevelIgnored),
+			WithIssueLevel(issue.ObservableDuplicate, issue.LevelWarning),
 		),
-		"ignoring multiple selected codes ignores each of them",
+		"promoting duplicate diagnostics reports both conditions",
 	)
 	assert.Empty(
 		issueCodesFor(WithAllIssueLevels(issue.LevelIgnored)),
@@ -381,6 +396,41 @@ func TestWithObservablesCopiesIDs(t *testing.T) {
 	result, err := pipeline.ProcessEvent(event)
 	assert.NoError(err)
 	assert.Equal(1, result.Enrichment().ObservablesAdded)
+}
+
+// Invariant test: generated observable deduplication is disabled by default and removes only later generated
+// candidates when explicitly enabled.
+func TestInvariantObservableDeduplicationRequiresExplicitGeneratedMode(t *testing.T) {
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	addObservableArrayTestAttributes(schema)
+	schema.compiledForTest().Classes[int64(1)].Observables["balls.green"] = 1000
+	newEvent := func() jsonish.Map {
+		event := validValidationEvent()
+		event["balls"] = []any{
+			jsonish.Map{"green": "same"},
+			jsonish.Map{"green": "same"},
+		}
+		return event
+	}
+
+	defaultEvent := newEvent()
+	defaultResult, err := mustNewPipeline(assert, schema, WithObservables(enrichment.Add)).ProcessEvent(defaultEvent)
+	assert.NoError(err)
+	assert.Equal(2, defaultResult.Enrichment().ObservablesAdded)
+	assert.Len(defaultEvent["observables"], 2)
+
+	generatedEvent := newEvent()
+	generatedResult, err := mustNewPipeline(
+		assert,
+		schema,
+		WithObservables(enrichment.Add),
+		WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
+	).ProcessEvent(generatedEvent)
+	assert.NoError(err)
+	assert.Equal(1, generatedResult.Enrichment().ObservablesAdded)
+	assert.Len(generatedEvent["observables"], 1)
+	assert.Empty(generatedResult.Issues())
 }
 
 func TestSchemaZeroValueCannotBuildPipeline(t *testing.T) {
@@ -461,6 +511,16 @@ func TestPipelineOptionsRejectDuplicateSingletons(t *testing.T) {
 				WithEnrichmentObservablePathNotation(pathstyle.ArrayIndexed),
 			},
 			option: PipelineOptionEnrichmentObservablePathNotation,
+		},
+		{
+			name: "observable deduplication",
+			options: []PipelineOption{
+				WithSchema(valid),
+				WithObservables(enrichment.Add),
+				WithObservableDeduplication(enrichment.ObservableDeduplicationIgnored),
+				WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
+			},
+			option: PipelineOptionObservableDeduplication,
 		},
 		{
 			name:    "validation",
@@ -633,6 +693,7 @@ func TestPipelineStopsAfterRepeatedObjectAttribute(t *testing.T) {
 	pipeline := mustNewPipeline(assert, compiledSchema,
 		WithEnumSiblings(enrichment.Add),
 		WithObservables(enrichment.Add),
+		WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
 		WithAllIssueLevels(issue.LevelIgnored),
 		WithValidation(),
 	)

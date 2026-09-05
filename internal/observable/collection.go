@@ -10,17 +10,35 @@ import (
 )
 
 type identity struct {
-	name      string
-	typeID    int64
-	valueKind uint8
-	value     string
+	name     string
+	typeID   int64
+	value    string
+	hasValue bool
 }
 
-const (
-	objectValue uint8 = iota
-	nullValue
-	stringValue
-)
+// GeneratedIdentitySet tracks semantic identities produced during one enrichment pass. Its zero value is ready for
+// use and allocates storage only when the first identity is added.
+type GeneratedIdentitySet struct {
+	identities map[identity]struct{}
+}
+
+// Add records a generated identity. It returns true if the identity was newly added and false if it was already
+// present.
+func (s *GeneratedIdentitySet) Add(name string, typeID int64, value *string) bool {
+	key := identity{name: name, typeID: typeID}
+	if value != nil {
+		key.value = *value
+		key.hasValue = true
+	}
+	if _, present := s.identities[key]; present {
+		return false
+	}
+	if s.identities == nil {
+		s.identities = make(map[identity]struct{})
+	}
+	s.identities[key] = struct{}{}
+	return true
+}
 
 // Collection retains an observable array's source representation and indexed view so read analysis and
 // representation-preserving mutation operate on one array classification.
@@ -61,62 +79,111 @@ func (c *Collection) at(index int) any {
 	}
 }
 
-// DuplicateSource identifies the collection containing an observable duplicated by generated enrichment.
-type DuplicateSource string
+// ObservableOrigin identifies whether an observable was present before enrichment or generated during it.
+type ObservableOrigin string
 
 const (
-	// DuplicateExisting identifies an observable already present in the event.
-	DuplicateExisting DuplicateSource = "existing"
-	// DuplicateGenerated identifies an observable generated earlier in the same enrichment pass.
-	DuplicateGenerated DuplicateSource = "generated"
+	// ObservableOriginExisting identifies an observable present before enrichment.
+	ObservableOriginExisting ObservableOrigin = "existing"
+	// ObservableOriginGenerated identifies an observable generated during enrichment.
+	ObservableOriginGenerated ObservableOrigin = "generated"
 )
 
-// Duplicate describes one generated observable excluded as a semantic duplicate.
+// DuplicateOccurrence identifies one observable within its origin collection.
+type DuplicateOccurrence struct {
+	Origin ObservableOrigin
+	Index  int
+}
+
+// Duplicate describes a semantic duplicate and the first occurrence of its identity.
 type Duplicate struct {
-	Observable jsonish.Map
 	Name       string
-	Source     DuplicateSource
-	// GeneratedIndex identifies the duplicate in the generated input slice.
-	GeneratedIndex int
+	Occurrence DuplicateOccurrence
+	First      DuplicateOccurrence
 }
 
-// Deduplication contains generated observables accepted for append and duplicates that were excluded.
-type Deduplication struct {
-	Accepted   []jsonish.Map
-	Duplicates []Duplicate
+// DuplicateAnalysis contains all duplicate relationships and the generated candidates retained after optional
+// generated-to-generated deduplication.
+type DuplicateAnalysis struct {
+	AcceptedGenerated []jsonish.Map
+	Duplicates        []Duplicate
 }
 
-// DeduplicateGenerated excludes generated observables that duplicate existing or earlier generated entries. Malformed
-// observables without a complete semantic identity do not participate in deduplication; validation reports them, and
-// they must not suppress a valid generated observable.
-func DeduplicateGenerated(existing *Collection, generated []jsonish.Map) Deduplication {
-	existingLength := 0
+type duplicateIdentityState struct {
+	first        DuplicateOccurrence
+	hasGenerated bool
+}
+
+// AnalyzeDuplicates detects duplicate identities across existing and generated observables. When
+// deduplicateGenerated is true, only a generated candidate that duplicates an earlier generated candidate is omitted;
+// existing observables and generated candidates that duplicate only existing observables are retained. Malformed
+// observables without a complete semantic identity do not participate.
+func AnalyzeDuplicates(
+	existing *Collection,
+	generated []jsonish.Map,
+	deduplicateGenerated bool,
+) DuplicateAnalysis {
+	capacity := len(generated)
 	if existing != nil {
-		existingLength = existing.Len()
+		capacity += existing.Len()
 	}
-	seen := make(map[identity]DuplicateSource, existingLength+len(generated))
-	for index := range existingLength {
-		if key, ok := identify(existing.at(index)); ok {
-			seen[key] = DuplicateExisting
-		}
-	}
-
-	result := Deduplication{Accepted: make([]jsonish.Map, 0, len(generated))}
-	for generatedIndex, observable := range generated {
-		key, ok := identify(observable)
-		if ok {
-			if source, duplicate := seen[key]; duplicate {
+	identities := make(map[identity]duplicateIdentityState, capacity)
+	result := DuplicateAnalysis{AcceptedGenerated: generated}
+	if existing != nil {
+		for index := range existing.Len() {
+			key, ok := identify(existing.at(index))
+			if !ok {
+				continue
+			}
+			occurrence := DuplicateOccurrence{Origin: ObservableOriginExisting, Index: index}
+			state, present := identities[key]
+			if present {
 				result.Duplicates = append(result.Duplicates, Duplicate{
-					Observable:     observable,
-					Name:           key.name,
-					Source:         source,
-					GeneratedIndex: generatedIndex,
+					Name: key.name, Occurrence: occurrence, First: state.first,
 				})
 				continue
 			}
-			seen[key] = DuplicateGenerated
+			identities[key] = duplicateIdentityState{first: occurrence}
 		}
-		result.Accepted = append(result.Accepted, observable)
+	}
+
+	var accepted []jsonish.Map
+	for index, candidate := range generated {
+		key, ok := identify(candidate)
+		if !ok {
+			if accepted != nil {
+				accepted = append(accepted, candidate)
+			}
+			continue
+		}
+		occurrence := DuplicateOccurrence{Origin: ObservableOriginGenerated, Index: index}
+		state, present := identities[key]
+		if present {
+			result.Duplicates = append(result.Duplicates, Duplicate{
+				Name: key.name, Occurrence: occurrence, First: state.first,
+			})
+		}
+		remove := deduplicateGenerated && state.hasGenerated
+		if !state.hasGenerated {
+			state.hasGenerated = true
+			if !present {
+				state.first = occurrence
+			}
+			identities[key] = state
+		}
+		if remove {
+			if accepted == nil {
+				accepted = make([]jsonish.Map, index, len(generated)-1)
+				copy(accepted, generated[:index])
+			}
+			continue
+		}
+		if accepted != nil {
+			accepted = append(accepted, candidate)
+		}
+	}
+	if accepted != nil {
+		result.AcceptedGenerated = accepted
 	}
 	return result
 }
@@ -134,21 +201,17 @@ func identify(value any) (identity, bool) {
 	if !ok {
 		return identity{}, false
 	}
-	result := identity{name: name, typeID: typeID, valueKind: objectValue}
-	value, present := observable["value"]
-	if !present {
+	result := identity{name: name, typeID: typeID}
+	observableValue := observable["value"]
+	if observableValue == nil {
 		return result, true
 	}
-	if value == nil {
-		result.valueKind = nullValue
-		return result, true
-	}
-	valueString, ok := eventvalue.AsString(value)
+	valueString, ok := eventvalue.AsString(observableValue)
 	if !ok {
 		return identity{}, false
 	}
-	result.valueKind = stringValue
 	result.value = valueString
+	result.hasValue = true
 	return result, true
 }
 

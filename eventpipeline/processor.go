@@ -140,15 +140,17 @@ type pipelineConfig struct {
 	schemaConfigured bool
 	schemaCount      int
 
-	enumSiblingsAction     enrichment.Action
-	enumSiblingsCount      int
-	observablesAction      enrichment.Action
-	observablesCount       int
-	observableTypeIDs      []int64
-	pathNotation           pathstyle.Style
-	pathNotationConfigured bool
-	pathNotationCount      int
-	issuePolicy            issuePolicyConfig
+	enumSiblingsAction           enrichment.Action
+	enumSiblingsCount            int
+	observablesAction            enrichment.Action
+	observablesCount             int
+	observableTypeIDs            []int64
+	pathNotation                 pathstyle.Style
+	pathNotationConfigured       bool
+	pathNotationCount            int
+	observableDeduplication      enrichment.ObservableDeduplication
+	observableDeduplicationCount int
+	issuePolicy                  issuePolicyConfig
 
 	validationEnabled bool
 	validationCount   int
@@ -189,5 +191,15 @@ func WithEnrichmentObservablePathNotation(style pathstyle.Style) PipelineOption 
 		config.pathNotationCount++
 		config.pathNotation = style
 		config.pathNotationConfigured = true
+	})
+}
+
+// WithObservableDeduplication selects which generated observables are deduplicated. The default ignored mode does no
+// deduplication. The generated mode compares generated candidates only with earlier generated candidates and has no
+// effect unless observables are added.
+func WithObservableDeduplication(mode enrichment.ObservableDeduplication) PipelineOption {
+	return pipelineOptionFunc(func(config *pipelineConfig) {
+		config.observableDeduplicationCount++
+		config.observableDeduplication = mode
 	})
 }

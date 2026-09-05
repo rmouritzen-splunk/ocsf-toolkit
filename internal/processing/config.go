@@ -42,6 +42,7 @@ type ObservablesConfig struct {
 	TypeIDs                []int64
 	PathNotation           pathstyle.Style
 	PathNotationConfigured bool
+	Deduplication          enrichment.ObservableDeduplication
 }
 
 // PipelineConfig is the fully resolved configuration for one eventpipeline.NewPipeline call. The public facade collects
@@ -90,6 +91,12 @@ func (config PipelineConfig) validateAndCompileLevelPolicies() (compiledLevelPol
 	}
 	if len(config.Observables.TypeIDs) > 0 && !addingObservables {
 		return policies, errors.New("observable type IDs are configured without adding observables")
+	}
+	if config.Observables.Deduplication != "" && !config.Observables.Deduplication.Valid() {
+		return policies, fmt.Errorf("invalid observable deduplication mode %q", config.Observables.Deduplication)
+	}
+	if config.Observables.Deduplication == enrichment.ObservableDeduplicationGenerated && !addingObservables {
+		return policies, errors.New("generated observable deduplication is configured without adding observables")
 	}
 	if addingObservables && !config.Observables.PathNotation.Valid() {
 		return policies, fmt.Errorf("invalid observable path notation %q", config.Observables.PathNotation)

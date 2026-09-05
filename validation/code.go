@@ -114,6 +114,8 @@ const (
 	ClassUIDMissing
 	// ClassUIDWrongType reports a class_uid whose type prevents class resolution.
 	ClassUIDWrongType
+	// ObservableDuplicate reports an observable whose semantic identity duplicates an earlier observable.
+	ObservableDuplicate
 
 	codeCount
 )
@@ -375,6 +377,11 @@ var codeInfos = [codeCount]codeInfo{
 		"validation_class_uid_wrong_type",
 		"The class_uid has the wrong type.",
 		LevelError,
+	},
+	ObservableDuplicate: {
+		"validation_observable_duplicate",
+		"An observable has the same semantic identity as an earlier observable.",
+		LevelIgnored,
 	},
 }
 

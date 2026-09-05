@@ -7,7 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ocsf/ocsf-toolkit/enrichment"
+	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
+	"github.com/ocsf/ocsf-toolkit/pathstyle"
+	"github.com/ocsf/ocsf-toolkit/validation"
 )
 
 // The benchmarks in this file exercise enrichment against the released OCSF
@@ -350,4 +353,155 @@ func BenchmarkProcessEventEnrichmentDetectionFindingParallel(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkProcessEventObservableDeduplicationWithoutExisting(b *testing.B) {
+	modes := []struct {
+		name    string
+		options []PipelineOption
+	}{
+		{name: "disabled"},
+		{
+			name: "generated",
+			options: []PipelineOption{
+				WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
+			},
+		},
+		{name: "issue", options: []PipelineOption{WithIssueLevel(issue.ObservableDuplicate, issue.LevelWarning)}},
+		{
+			name: "validation",
+			options: []PipelineOption{
+				WithValidation(WithValidationLevel(validation.ObservableDuplicate, validation.LevelWarning)),
+			},
+		},
+		{
+			name: "issue_and_validation",
+			options: []PipelineOption{
+				WithIssueLevel(issue.ObservableDuplicate, issue.LevelWarning),
+				WithValidation(WithValidationLevel(validation.ObservableDuplicate, validation.LevelWarning)),
+			},
+		},
+	}
+	for _, mode := range modes {
+		for _, style := range []pathstyle.Style{pathstyle.Simple, pathstyle.ArrayIndexed} {
+			b.Run(mode.name+"/"+string(style), func(b *testing.B) {
+				assert := require.New(b)
+				schema := makeRealSchema(assert)
+				options := append([]PipelineOption{
+					WithEnumSiblings(enrichment.Add),
+					WithObservables(enrichment.Add),
+					WithEnrichmentObservablePathNotation(style),
+				}, mode.options...)
+				pipeline := mustNewPipeline(assert, schema, options...)
+				event := benchmarkDetectionFinding()
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					resetBenchmarkEvent(event)
+					if _, err := pipeline.ProcessEvent(event); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkProcessEventOneGeneratedObservableWithExisting(b *testing.B) {
+	for _, mode := range observableDuplicateBenchmarkModes() {
+		for _, existingCount := range []int{8, 1024} {
+			for _, match := range []bool{false, true} {
+				name := mode.name + "/existing_" + strconv.Itoa(existingCount) + "_no_match"
+				if match {
+					name = mode.name + "/existing_" + strconv.Itoa(existingCount) + "_match_at_end"
+				}
+				b.Run(name, func(b *testing.B) {
+					assert := require.New(b)
+					schema := makeValidationTestSchema(assert)
+					options := append([]PipelineOption{
+						WithEnumSiblings(enrichment.None),
+						WithObservables(enrichment.Add),
+					}, mode.options...)
+					pipeline := mustNewPipeline(assert, schema, options...)
+					event := validValidationEvent()
+					event["ball"] = jsonish.Map{"green": "go"}
+					existing := benchmarkExistingObservables(existingCount)
+					if match {
+						existing[existingCount-1] = jsonish.Map{
+							"name": "ball.green", "type_id": int64(1000), "value": "go",
+						}
+					}
+
+					b.ReportAllocs()
+					b.ResetTimer()
+					for b.Loop() {
+						event["observables"] = existing
+						if _, err := pipeline.ProcessEvent(event); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func BenchmarkProcessEventManyGeneratedObservablesWithExisting(b *testing.B) {
+	for _, mode := range observableDuplicateBenchmarkModes() {
+		for _, existingCount := range []int{8, 1024} {
+			b.Run(mode.name+"/existing_"+strconv.Itoa(existingCount), func(b *testing.B) {
+				assert := require.New(b)
+				schema := makeRealSchema(assert)
+				options := append([]PipelineOption{
+					WithEnumSiblings(enrichment.Add),
+					WithObservables(enrichment.Add),
+				}, mode.options...)
+				pipeline := mustNewPipeline(assert, schema, options...)
+				event := benchmarkDetectionFinding()
+				existing := benchmarkExistingObservables(existingCount)
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					resetBenchmarkEvent(event)
+					event["observables"] = existing
+					if _, err := pipeline.ProcessEvent(event); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func observableDuplicateBenchmarkModes() []struct {
+	name    string
+	options []PipelineOption
+} {
+	return []struct {
+		name    string
+		options []PipelineOption
+	}{
+		{name: "disabled"},
+		{
+			name: "generated",
+			options: []PipelineOption{
+				WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
+			},
+		},
+		{name: "issue", options: []PipelineOption{WithIssueLevel(issue.ObservableDuplicate, issue.LevelWarning)}},
+	}
+}
+
+func benchmarkExistingObservables(count int) []any {
+	existing := make([]any, count)
+	for index := range existing {
+		existing[index] = jsonish.Map{
+			"name":    "existing." + strconv.Itoa(index),
+			"type_id": int64(1000),
+			"value":   "value-" + strconv.Itoa(index),
+		}
+	}
+	return existing
 }

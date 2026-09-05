@@ -53,6 +53,26 @@ func TestAnalyzeDistinguishesAbsentAndMalformedObservables(t *testing.T) {
 	require.Equal(t, "not an array", analysis.Entries[0].Raw)
 }
 
+// Invariant test: a nil-valued event-map attribute is logically absent, including an observable value.
+func TestInvariantAnalyzeTreatsNilObservableValueAsOmitted(t *testing.T) {
+	class, objects := observableTestSchema()
+	event := jsonish.Map{
+		"ball": jsonish.Map{"green": "go"},
+		"observables": []jsonish.Map{
+			{"name": "ball", "type_id": json.Number("2")},
+			{"name": "ball", "type_id": json.Number("2"), "value": nil},
+		},
+	}
+
+	analysis, _, isArray, err := Analyze(event, class, objects, nil)
+
+	require.NoError(t, err)
+	require.True(t, isArray)
+	require.Len(t, analysis.Entries, 2)
+	require.True(t, analysis.Entries[0].Removable)
+	require.True(t, analysis.Entries[1].Removable)
+}
+
 func TestProblemForDefinitionStatusRejectsUnexpectedStatus(t *testing.T) {
 	problem, err := problemForDefinitionStatus(255)
 	require.ErrorContains(t, err, "unexpected observable path definition status 255")

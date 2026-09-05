@@ -22,12 +22,13 @@ type processConfig struct {
 	failOnValidationErrors bool
 	validationLevels       validationLevelConfig
 
-	enrich             bool
-	enrichmentRemoval  bool
-	enumSiblingsAction enrichment.Action
-	observablesAction  enrichment.Action
-	observableTypeIDs  []int64
-	issueLevels        issueLevelConfig
+	enrich                  bool
+	enrichmentRemoval       bool
+	enumSiblingsAction      enrichment.Action
+	observablesAction       enrichment.Action
+	observableTypeIDs       []int64
+	observableDeduplication enrichment.ObservableDeduplication
+	issueLevels             issueLevelConfig
 
 	outputDir       string
 	eventOutput     string
@@ -100,27 +101,28 @@ func (options cliOptions) processConfig(
 	observablesAction enrichment.Action,
 ) processConfig {
 	return processConfig{
-		schemaPath:             options.General.Schema,
-		eventPath:              options.General.Event,
-		eventsDir:              options.General.EventsDir,
-		validate:               options.Validation.Validate,
-		failOnValidationErrors: options.Validation.FailOnValidationErrors,
-		validationLevels:       copyValidationLevels(options.Validation.Levels),
-		enrich:                 enumSiblingsAction == enrichment.Add || observablesAction == enrichment.Add,
-		enrichmentRemoval:      enumSiblingsAction.IsRemoval() || observablesAction.IsRemoval(),
-		enumSiblingsAction:     enumSiblingsAction,
-		observablesAction:      observablesAction,
-		observableTypeIDs:      append([]int64(nil), options.Mutation.ObservableIDs.values...),
-		issueLevels:            copyIssueLevels(options.Issues.Levels),
-		outputDir:              options.General.OutputDir,
-		eventOutput:            options.General.EventOutput,
-		reportOutput:           options.General.ReportOutput,
-		summaryFile:            options.General.SummaryFile,
-		summaryJSONFile:        options.General.SummaryJSONFile,
-		overwrite:              options.General.Overwrite,
-		prettyJSON:             options.General.PrettyJSON,
-		quiet:                  options.General.Quiet,
-		observablePathNotation: options.General.ObservablePathNotation,
+		schemaPath:              options.General.Schema,
+		eventPath:               options.General.Event,
+		eventsDir:               options.General.EventsDir,
+		validate:                options.Validation.Validate,
+		failOnValidationErrors:  options.Validation.FailOnValidationErrors,
+		validationLevels:        copyValidationLevels(options.Validation.Levels),
+		enrich:                  enumSiblingsAction == enrichment.Add || observablesAction == enrichment.Add,
+		enrichmentRemoval:       enumSiblingsAction.IsRemoval() || observablesAction.IsRemoval(),
+		enumSiblingsAction:      enumSiblingsAction,
+		observablesAction:       observablesAction,
+		observableTypeIDs:       append([]int64(nil), options.Mutation.ObservableIDs.values...),
+		observableDeduplication: options.Mutation.ObservableDeduplication.mode,
+		issueLevels:             copyIssueLevels(options.Issues.Levels),
+		outputDir:               options.General.OutputDir,
+		eventOutput:             options.General.EventOutput,
+		reportOutput:            options.General.ReportOutput,
+		summaryFile:             options.General.SummaryFile,
+		summaryJSONFile:         options.General.SummaryJSONFile,
+		overwrite:               options.General.Overwrite,
+		prettyJSON:              options.General.PrettyJSON,
+		quiet:                   options.General.Quiet,
+		observablePathNotation:  options.General.ObservablePathNotation,
 	}
 }
 

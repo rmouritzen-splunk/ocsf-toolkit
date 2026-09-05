@@ -20,9 +20,11 @@ import (
 )
 
 type validationProcessor struct {
-	config ValidationConfig
-	cache  *schema.ValidationCache
-	policy levelPolicy
+	config                           ValidationConfig
+	cache                            *schema.ValidationCache
+	policy                           levelPolicy
+	generatedObservablesPathNotation pathstyle.Style
+	duplicateIssueOwnsDiagnostics    bool
 }
 
 func (p *validationProcessor) onClassUIDMissing(context *processContext) {
@@ -532,7 +534,8 @@ func (p *validationProcessor) onEnumSiblingPairAttributes(
 		return p.validateEnumPairArrayAttribute(c, item, siblingAttributeName, siblingAttrDef)
 	}
 
-	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
+	enumValue := item[enumAttributeName]
+	enumPresent := enumValue != nil
 	c.path.PushAttribute(enumAttributeName)
 	if !enumPresent {
 		p.validateRequirement(c, &c.path, enumAttributeName, enumAttrDef)
@@ -543,9 +546,10 @@ func (p *validationProcessor) onEnumSiblingPairAttributes(
 	}
 	c.path.Pop()
 
-	siblingValue, siblingPresent := eventvalue.Attribute(item, siblingAttributeName)
-	siblingPath := c.path.ChildString(siblingAttributeName, pathstyle.ArrayIndexed)
+	siblingValue := item[siblingAttributeName]
+	siblingPresent := siblingValue != nil
 	if !p.policy.isIgnored(validationAttributeEnumSiblingWithoutEnumMask) && siblingPresent && !enumPresent {
+		siblingPath := c.path.ChildString(siblingAttributeName, pathstyle.ArrayIndexed)
 		enumPath := c.path.ChildString(enumAttributeName, pathstyle.ArrayIndexed)
 		p.addFindingQuote2(
 			c,
@@ -568,6 +572,7 @@ func (p *validationProcessor) onEnumSiblingPairAttributes(
 	defer c.path.Pop()
 	if !siblingPresent {
 		if enumPresent && attributeIsOtherEnumValue(enumValue) {
+			siblingPath := c.path.String(pathstyle.ArrayIndexed)
 			p.addRequiredAttributeMissing(c, siblingPath, siblingAttributeName)
 		} else if enumPresent {
 			p.validateRequirement(c, &c.path, siblingAttributeName, siblingAttrDef)
@@ -588,8 +593,10 @@ func (p *validationProcessor) validateEnumArraySiblingLengths(
 	if p.policy.isIgnored(validationAttributeEnumArraySiblingLengthMismatchMask) {
 		return
 	}
-	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
-	siblingValue, siblingPresent := eventvalue.Attribute(item, siblingAttributeName)
+	enumValue := item[enumAttributeName]
+	siblingValue := item[siblingAttributeName]
+	enumPresent := enumValue != nil
+	siblingPresent := siblingValue != nil
 	if !enumPresent || !siblingPresent {
 		return
 	}
@@ -611,10 +618,10 @@ func (p *validationProcessor) validateEnumPairArrayAttribute(
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
 ) error {
-	value, present := eventvalue.Attribute(item, attributeName)
+	value := item[attributeName]
 	c.path.PushAttribute(attributeName)
 	defer c.path.Pop()
-	if !present {
+	if value == nil {
 		p.onAttribute(c, item, nil, attributeName, attrDef, -1, attributeMissing)
 		return nil
 	}
@@ -851,8 +858,8 @@ func (p *validationProcessor) validateEnumSibling(
 		return
 	}
 	siblingName := *attrDef.Sibling
-	siblingValue, siblingPresent := eventvalue.Attribute(item, siblingName)
-	if !siblingPresent {
+	siblingValue := item[siblingName]
+	if siblingValue == nil {
 		return
 	}
 
@@ -926,8 +933,8 @@ func (p *validationProcessor) validateEnumArraySibling(
 	}
 
 	siblingName := *attrDef.Sibling
-	siblingArrayValue, siblingPresent := eventvalue.Attribute(item, siblingName)
-	if !siblingPresent {
+	siblingArrayValue := item[siblingName]
+	if siblingArrayValue == nil {
 		if other {
 			p.addEnumArraySiblingMissing(c, path, siblingName, enumDetail.Caption)
 		}
@@ -1665,8 +1672,8 @@ func (p *validationProcessor) validateVersion(c *processContext, event jsonish.M
 	if !ok {
 		return
 	}
-	versionValue, present := eventvalue.Attribute(metadata, "version")
-	if !present {
+	versionValue := metadata["version"]
+	if versionValue == nil {
 		return
 	}
 	version, ok := eventvalue.AsString(versionValue)
@@ -1941,9 +1948,8 @@ func (p *validationProcessor) validateObservables(c *processContext, event jsoni
 	if !present {
 		return nil
 	}
-	if c.generatedObservablesStart >= 0 {
-		analyzer.LimitEntries(c.generatedObservablesStart)
-	}
+	p.validateObservableDuplicates(c, event)
+	analyzer.UpperBound(c.generatedObservablesFirstIndex)
 	var observablePath eventpath.Path
 	observablePath.PushAttribute("observables")
 	for {
@@ -1979,11 +1985,37 @@ func (p *validationProcessor) validateObservables(c *processContext, event jsoni
 		}
 		observablePath.Pop()
 	}
-	if c.generatedObservablesStart >= 0 && p.config.PathNotationConfigured &&
-		p.config.PathNotation != c.generatedObservablesPathNotation {
+	if c.generatedObservablesFirstIndex >= 0 && p.config.PathNotationConfigured &&
+		p.config.PathNotation != p.generatedObservablesPathNotation {
 		p.validateGeneratedObservablePathNotation(c, event, &observablePath, p.config.PathNotation)
 	}
 	return nil
+}
+
+func (p *validationProcessor) validateObservableDuplicates(c *processContext, event jsonish.Map) {
+	if p.duplicateIssueOwnsDiagnostics || p.policy.isIgnored(validationObservableDuplicateMask) {
+		return
+	}
+	observables, ok := observable.NewCollection(event["observables"])
+	if !ok {
+		return
+	}
+	analysis := observable.AnalyzeDuplicates(&observables, nil, false)
+	for _, duplicate := range analysis.Duplicates {
+		index := duplicate.Occurrence.Index
+		firstIndex := duplicate.First.Index
+		p.addFinding(
+			c,
+			validation.ObservableDuplicate,
+			jsonish.Map{
+				"attribute_path":     "observables[" + strconv.Itoa(index) + "]",
+				"attribute":          "observables",
+				"observable_index":   index,
+				"duplicate_of_index": firstIndex,
+			},
+			"Observable "+strconv.Itoa(index)+" duplicates observable "+strconv.Itoa(firstIndex)+".",
+		)
+	}
 }
 
 func nonStructuralObservableValidationCode(problem observable.Problem) (validation.Code, uint64, bool) {
@@ -2013,7 +2045,7 @@ func (p *validationProcessor) validateGeneratedObservablePathNotation(
 	if !ok {
 		return
 	}
-	for index := c.generatedObservablesStart; index < observables.Len(); index++ {
+	for index := c.generatedObservablesFirstIndex; index < observables.Len(); index++ {
 		entry, ok := observables.At(index).(jsonish.Map)
 		if !ok {
 			continue

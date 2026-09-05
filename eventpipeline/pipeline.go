@@ -134,9 +134,10 @@ func WithSchema(schema *Schema, options ...SchemaPipelineOption) PipelineOption 
 // WithSchema. Validation runs after mutating processors regardless of the supplied option order.
 func NewPipeline(options ...PipelineOption) (*Pipeline, error) {
 	config := pipelineConfig{
-		enumSiblingsAction: enrichment.None,
-		observablesAction:  enrichment.None,
-		pathNotation:       pathstyle.Simple,
+		enumSiblingsAction:      enrichment.None,
+		observablesAction:       enrichment.None,
+		pathNotation:            pathstyle.Simple,
+		observableDeduplication: enrichment.ObservableDeduplicationIgnored,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -160,6 +161,7 @@ func NewPipeline(options ...PipelineOption) (*Pipeline, error) {
 			TypeIDs:                config.observableTypeIDs,
 			PathNotation:           config.pathNotation,
 			PathNotationConfigured: config.pathNotationConfigured,
+			Deduplication:          config.observableDeduplication,
 		},
 		IssuePolicy: processing.IssuePolicyConfig{
 			LevelRules: make([]processing.IssueLevelRule, len(config.issuePolicy.levelRules)),
@@ -202,6 +204,7 @@ func validatePipelineOptionConfiguration(config pipelineConfig) error {
 		{config.schemaCount, PipelineOptionSchema}, {config.enumSiblingsCount, PipelineOptionEnumSiblings},
 		{config.observablesCount, PipelineOptionObservables},
 		{config.pathNotationCount, PipelineOptionEnrichmentObservablePathNotation},
+		{config.observableDeduplicationCount, PipelineOptionObservableDeduplication},
 		{config.validationCount, PipelineOptionValidation},
 	} {
 		if singleton.count > 1 {

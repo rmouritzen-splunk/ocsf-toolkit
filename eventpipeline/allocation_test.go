@@ -2,6 +2,7 @@ package eventpipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,40 @@ func TestProcessEventAllocationCeilings(t *testing.T) {
 				"allocations per event exceeded the regression ceiling")
 		})
 	}
+}
+
+func TestEngineeringInvariantValidationDoesNotAllocateUnusedEnumSiblingPaths(t *testing.T) {
+	// Engineering invariant test: validating valid enum-sibling pairs does not render diagnostic paths unless a
+	// finding needs them.
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	objectDefinition := schema.compiledForTest().Objects["ball"]
+	event := validValidationEvent()
+	object := jsonish.Map{"green": "go"}
+	event["ball"] = object
+	for index := range 100 {
+		enumAttributeName := fmt.Sprintf("extra_enum_%d_id", index)
+		siblingAttributeName := fmt.Sprintf("extra_enum_%d", index)
+		objectDefinition.Attributes[enumAttributeName] = &itemAttributeDefinition{
+			CommonAttributeDefinition: commonAttributeDefinition{
+				Type:    "integer_t",
+				Sibling: &siblingAttributeName,
+				Enum:    map[string]*enumDefinition{"1": {Caption: "Known"}},
+			},
+		}
+		objectDefinition.Attributes[siblingAttributeName] = &itemAttributeDefinition{
+			CommonAttributeDefinition: commonAttributeDefinition{Type: "string_t"},
+		}
+		object[enumAttributeName] = int64(1)
+		object[siblingAttributeName] = "Known"
+	}
+	pipeline := mustNewPipeline(assert, schema, WithValidation())
+	allocations := testing.AllocsPerRun(100, func() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			panic(err)
+		}
+	})
+	assert.LessOrEqual(allocations, float64(10), "unused enum-sibling paths exceeded the allocation budget")
 }
 
 func allocationSelectedObservableCase(assert *require.Assertions) (*Pipeline, jsonish.Map, func(jsonish.Map)) {

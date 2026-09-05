@@ -23,6 +23,15 @@ func TestIssuePolicyResolvesConfiguredTolerableCodeLevels(t *testing.T) {
 	require.Equal(t, issue.LevelIgnored, effectiveIssueLevel(policy, issue.EnrichmentEnumSiblingNotAdded))
 }
 
+// Invariant test: duplicate detection is optional and does no work under the toolkit's default issue policy.
+func TestInvariantObservableDuplicateIssueDefaultsToIgnored(t *testing.T) {
+	require.Equal(
+		t,
+		issue.LevelIgnored,
+		effectiveIssueLevel(defaultIssuePolicy(), issue.ObservableDuplicate),
+	)
+}
+
 func TestIssuePolicyUsesExplicitLevelsOverAllLevel(t *testing.T) {
 	policy, err := compileIssuePolicy([]IssueLevelRule{
 		{All: true, Level: issue.LevelIgnored},
@@ -31,5 +40,5 @@ func TestIssuePolicyUsesExplicitLevelsOverAllLevel(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, issue.LevelWarning, effectiveIssueLevel(policy, issue.EnrichmentEnumSiblingNotAdded))
-	require.Equal(t, issue.LevelIgnored, effectiveIssueLevel(policy, issue.EnrichmentObservableDuplicateSkipped))
+	require.Equal(t, issue.LevelIgnored, effectiveIssueLevel(policy, issue.ObservableDuplicate))
 }

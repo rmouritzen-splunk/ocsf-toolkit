@@ -110,5 +110,5 @@ For parity with OCSF Toolkit's documented interpretation, `max_len` is measured 
 - Support bare array names, `[]`, `[*]`, and zero-based indexes, including arrays nested inside arrays of objects.
 - For a scalar observable with a `value`, require at least one resolved event value to have the same best-effort string representation.
 - For an object observable without a `value`, require the resolved event value to be an object.
-- Treat a missing path and an explicit null value as equivalent when the observable value is null.
+- Treat an omitted or nil-valued observable `value` as absent and require its name to resolve to an object.
 - Report malformed path syntax, an inactive or undefined schema reference, an unresolved event path, a wrong observable value type, and a value mismatch without raising.

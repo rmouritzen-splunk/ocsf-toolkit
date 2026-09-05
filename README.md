@@ -165,6 +165,8 @@ ocsf-toolkit \
 
 Omitting `--observable-id` adds every schema-declared observable type. Repeat the option to select multiple types. Each selected ID, including `0`, must exist in the loaded schema; duplicate IDs are accepted and pipeline construction deduplicates them, while reporting all unknown IDs together.
 
+Generated observables are not deduplicated by default. Use `--deduplicate-observables generated` with observable enrichment to retain only the first newly generated observable of each identity. This optimization compares generated candidates only with earlier generated candidates; it never removes a generated observable because the same identity was already present in the event. The only other accepted value is `disabled`, which is the default.
+
 Set the handling level for a processing issue code, or use `all` to set the level for every issue:
 
 ```sh
@@ -172,11 +174,11 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.9.0.json \
   --events-dir events \
   --enrich \
-  --issue-level issue_enrichment_observable_duplicate_skipped=ignored \
+  --issue-level issue_observable_duplicate=warning \
   --output-dir out
 ```
 
-Repeat `--issue-level ISSUE_CODE=LEVEL` to configure multiple codes. Every issue code defaults to `warning`, as reported by `issue.Code.DefaultLevel()`. Levels are `ignored`, `warning`, and `error`; `error` stops at the first matching issue. Use `all=LEVEL` once before specific codes; each specific code occurs once. Mandatory diagnostics reporting class-resolution failure or limited event traversal cannot be ignored. The same policy applies to schema initialization issues in the CLI. `ocsf-toolkit --list-issue-codes` prints every issue code and exits, noting which codes are mandatory.
+Repeat `--issue-level ISSUE_CODE=LEVEL` to configure multiple codes. Issue codes default to `warning` except `issue_observable_duplicate`, which defaults to `ignored`, as reported by `issue.Code.DefaultLevel()`. Promoting that code detects duplicate identities among existing and generated observables independently of the deduplication option. Levels are `ignored`, `warning`, and `error`; `error` stops at the first matching issue. Use `all=LEVEL` once before specific codes; each specific code occurs once. Mandatory diagnostics reporting class-resolution failure or limited event traversal cannot be ignored. The same policy applies to schema initialization issues in the CLI. `ocsf-toolkit --list-issue-codes` prints every issue code and exits, noting which codes are mandatory.
 
 Validation finding levels use the same repeated key-value form:
 
@@ -194,7 +196,7 @@ Repeat `--validation-level VALIDATION_CODE=LEVEL` to configure multiple codes; i
 
 CLI help canonically displays flag values with a space, such as `--event my_event.json`. The parser also accepts an attached flag value, such as `--event=my_event.json`.
 
-The `validation_attribute_recommended_missing` code defaults to `ignored`. Set it to `warning` or `error` with `--validation-level` when missing recommended attributes should produce findings.
+The `validation_attribute_recommended_missing` and `validation_observable_duplicate` codes default to `ignored`. Set either to `warning` or `error` with `--validation-level` to enable that check. If observable enrichment also enables `issue_observable_duplicate`, the issue owns duplicate reporting and the validation finding is omitted so the event is not scanned and reported twice.
 
 Directory outputs preserve input-relative paths. For example:
 
@@ -309,11 +311,11 @@ Event output is the processed event JSON. For example, if the schema defines `ac
 }
 ```
 
-In single-event mode, either `--event-output -` or `--report-output -` writes its selected JSON document to stdout. At most one output option among `--event-output`, `--report-output`, `--summary`, and `--summary-json` may use `-` in one invocation. Send every other selected output to a file or `--output-dir`; stdout therefore contains one output representation rather than a heterogeneous stream.
+In single-event mode, either `--event-output -` or `--report-output -` writes its selected JSON document to stdout. At most one output option among `--event-output`, `--report-output`, and `--summary` may use `-` in one invocation. Send every other selected output to a file or `--output-dir`; stdout therefore contains one output representation rather than a heterogeneous stream.
 
 `--pretty-json` pretty-prints every selected JSON destination, including stdout. It does not affect human-readable summaries.
 
-Successfully completed directory processing writes a human-readable summary with tool metadata to stdout by default. Use `--quiet` to suppress this default. `--summary` and `--summary-json` add explicit human-readable and JSON summary destinations; they may be used together, with or without `--quiet`, subject to the one-output-on-stdout rule. Summary options apply only to directory processing. JSON processing reports carry `report_version: 1`; JSON directory summaries carry `summary_version: 1` and group initialization issues, per-file results, and aggregate validation, enrichment, enrichment-removal, issue, and output counts. If directory processing stops on a fatal error, normal summaries are not written; stderr reports the failure and, when at least one event completed, only the number of event files processed before the error.
+Directory processing is quiet by default. Use `--summary FILE` to write a summary, with `-` selecting stdout. Summaries use text by default; `--summary-format json` selects JSON and requires `--summary`. Summary options apply only to directory processing. JSON processing reports carry `report_version: 1`; JSON directory summaries carry `summary_version: 1` and group initialization issues with aggregate validation, enrichment, enrichment-removal, issue, and output counts. Validation counts events with warnings but no errors separately from events with errors, including those that also have warnings. If directory processing stops on a fatal error, normal summaries are not written and stderr reports the failure.
 
 stderr is reserved for errors, failure diagnostics, and nonfatal schema initialization issues. When successfully parsed command-line options contain multiple independent configuration problems, each problem is printed on its own `error: ...` line followed by terse usage once. Parsing, filesystem operations, schema loading, and processing remain fail-fast. Before processing, output paths selected for different command-wide artifacts are checked and must identify different files, including when existing filesystem aliases make differently written paths refer to the same file.
 
@@ -419,11 +421,11 @@ GOEXPERIMENT=jsonv2 go build ./...
 GOEXPERIMENT=jsonv2 go test ./...
 ```
 
-Schema loading is dominated by JSON decoding. With the OCSF 1.9 test schema, JSON v2 reduced median loading time by approximately 45% and allocation count by approximately 35%. It requires no newer toolchain than the module's existing Go 1.25 baseline. The default decoder remains appropriate when schema initialization is not performance-sensitive. The setting applies to the complete build, so test with it as well; the resulting binary does not need the environment variable at runtime. JSON v2 remains experimental and outside the Go 1 compatibility guarantee. See the [Go 1.25 release notes](https://go.dev/doc/go1.25).
+Schema loading is dominated by JSON decoding. With the OCSF 1.9 test schema, JSON v2 reduced median loading time and allocation count by approximately one-third. It requires no newer toolchain than the module's existing Go 1.25 baseline. The default decoder remains appropriate when schema initialization is not performance-sensitive. The setting applies to the complete build, so test with it as well; the resulting binary does not need the environment variable at runtime. JSON v2 remains experimental and outside the Go 1 compatibility guarantee. See the [Go 1.25 release notes](https://go.dev/doc/go1.25).
 
 `ProcessEvent` mutates the event in place when enrichment or enrichment removal is enabled. Processing is not transactional: if `ProcessEvent` returns an error, the event may already be partially modified. Callers that need to preserve the original event should deep-copy it before processing.
 
-Validation failures are reported in `eventpipeline.ProcessingResult`; they do not normally return a Go `error`. The `error` return is for tooling failures or unusable input.
+Validation failures are reported in `eventpipeline.ProcessingResult`; warning-level and error-level validation findings do not make `ProcessEvent` return a Go `error`. The error return is reserved for an uninitialized pipeline, processing failures, unusable caller input, and processing issues configured at `issue.LevelError`. An error-level processing issue is returned as an `*eventpipeline.ProcessingIssueError` and is accompanied by the zero `ProcessingResult`.
 
 For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` file and object helpers do this automatically. Use `jsonio.NewDecoder` when decoding another JSON shape, such as a typed structure, with the same number-preserving behavior. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
 
@@ -433,7 +435,7 @@ Array attributes may use JSON-native `[]any` values or typed Go slices such as `
 
 ### Pipeline Options
 
-`eventpipeline.NewPipeline` takes a list of `eventpipeline.PipelineOption` values. Configure its schema with `eventpipeline.WithSchema`. Each single-valued option, including `WithSchema`, `WithEnumSiblings`, `WithObservables`, `WithEnrichmentObservablePathNotation`, and `WithValidation`, may be passed once; repeating one is a configuration error rather than an override. The same rule applies to `WithValidationObservablePathNotation` within `WithValidation`.
+`eventpipeline.NewPipeline` takes a list of `eventpipeline.PipelineOption` values. Configure its schema with `eventpipeline.WithSchema`. Each single-valued option, including `WithSchema`, `WithEnumSiblings`, `WithObservables`, `WithObservableDeduplication`, `WithEnrichmentObservablePathNotation`, and `WithValidation`, may be passed once; repeating one is a configuration error rather than an override. The same rule applies to `WithValidationObservablePathNotation` within `WithValidation`.
 
 Add enum siblings and observables:
 
@@ -442,6 +444,7 @@ pipeline, err := eventpipeline.NewPipeline(
 	eventpipeline.WithSchema(schema),
 	eventpipeline.WithEnumSiblings(enrichment.Add),
 	eventpipeline.WithObservables(enrichment.Add),
+	eventpipeline.WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
 )
 ```
 
@@ -503,15 +506,15 @@ pipeline, err := eventpipeline.NewPipeline(
 )
 ```
 
-`WithEnumSiblings` takes an `enrichment.Action`: `enrichment.Add` adds enum siblings, `enrichment.Remove` or `enrichment.ForceRemove` removes them, and `enrichment.None` (the default when the option is omitted) leaves them alone. `WithObservables` works the same way for observables, and when its action is `enrichment.Add`, an optional list of observable type IDs restricts generation to those types; an empty list means all types, duplicate IDs are harmless, and pipeline construction reports every selected ID absent from the schema. Supplying IDs when the action is not `enrichment.Add` is invalid. Use `WithEnrichmentObservablePathNotation` with a `pathstyle.Style` value to select generated observable name notation; it has no effect unless observables are added. Generated enum sibling arrays are parallel to their enum arrays, with one caption at each matching index. When integral enum ID 99 has no sibling value, including at an integral enum-array position, enrichment adds the schema caption, typically `Other`, and reports that synthesized value as an enrichment issue so a corresponding validation warning has clear provenance. String enum key `"99"` has no special meaning.
+`WithEnumSiblings` takes an `enrichment.Action`: `enrichment.Add` adds enum siblings, `enrichment.Remove` or `enrichment.ForceRemove` removes them, and `enrichment.None` (the default when the option is omitted) leaves them alone. `WithObservables` works the same way for observables, and when its action is `enrichment.Add`, an optional list of observable type IDs restricts generation to those types; an empty list means all types, duplicate IDs are harmless, and pipeline construction reports every selected ID absent from the schema. Supplying IDs when the action is not `enrichment.Add` is invalid. `WithObservableDeduplication` accepts `enrichment.ObservableDeduplicationIgnored` (the default) or `enrichment.ObservableDeduplicationGenerated`; generated mode requires observable addition and removes only later generated candidates that duplicate earlier generated candidates. It never compares generated candidates with existing observable entries. Use `WithEnrichmentObservablePathNotation` with a `pathstyle.Style` value to select generated observable name notation; it has no effect unless observables are added. Generated enum sibling arrays are parallel to their enum arrays, with one caption at each matching index. When integral enum ID 99 has no sibling value, including at an integral enum-array position, enrichment adds the schema caption, typically `Other`, and reports that synthesized value as an enrichment issue so a corresponding validation warning has clear provenance. String enum key `"99"` has no special meaning.
 
 `eventpipeline.NewPipeline` returns the first detected problem in deterministic validation order. It first checks structural option errors such as repeated single-valued options and invalid level-rule ordering, then requires an initialized schema selected through exactly one `WithSchema`, and finally validates the resolved processing configuration, including empty or no-op configurations, invalid actions, observable path notation or type IDs configured without adding observables, invalid path notation, and invalid issue or validation level rules. CLI flag validation reports equivalent conflicts using the relevant flag names.
 
 Across event processing, an object attribute whose value is null is treated as missing. Null array elements remain invalid because no OCSF array element type permits null.
 
-Enrichment preserves existing observable entries and appends generated entries that are not duplicates. Scalar values, including empty strings, produce a string `value`; object observables omit `value`. Structured content found where the schema declares an observable scalar is skipped and reported as a nonfatal enrichment issue. Duplicate identity uses the exact `name`, the integral `type_id`, and whether `value` is omitted, null, or an exact string; the derived `type` caption and unrelated fields do not affect identity. Each skipped generated duplicate is reported as a nonfatal enrichment issue and is not included in `ObservablesAdded`. After the event class resolves and observable enrichment or removal runs, an empty `observables` array is removed. Other malformed structure that prevents requested enrichment is also reported by `eventpipeline.ProcessingResult.Issues()`; enrichment does not attempt to duplicate general validation.
+Enrichment preserves existing observable entries and appends generated entries in traversal order. Scalar values, including empty strings, produce a string `value`; object observables omit `value`. Structured content found where the schema declares an observable scalar is skipped and reported as an enrichment issue. Duplicate identity uses the exact `name`, the integral `type_id`, and an optional exact string `value`; omitted and nil-valued map entries both represent no logical value. The derived `type` caption and unrelated fields do not affect identity. Generated-only deduplication is a silent, opt-in optimization and excluded candidates are not included in `ObservablesAdded`. The independent `issue.ObservableDuplicate` diagnostic detects existing-existing, generated-existing, and generated-generated duplicates during observable addition; `validation.ObservableDuplicate` detects duplicates in the final observable array. Both default to ignored. When both are enabled during observable addition, only the issue is produced. After the event class resolves and observable enrichment or removal runs, an empty `observables` array is removed. Other malformed structure that prevents requested enrichment is also reported through issue policy; enrichment does not attempt to duplicate general validation. Warning-level issues appear in `eventpipeline.ProcessingResult.Issues()`, ignored issues are omitted, and error-level issues stop processing with an `*eventpipeline.ProcessingIssueError`.
 
-Safe removal (`enrichment.Remove`) removes supported scalar and array enum siblings whose source has direct type `integer_t` or `long_t` and whose same-shaped target has direct type `string_t`, plus redundant observables that can be proven safe. Enum and sibling arrays must have equal lengths, and safe removal compares every value with the caption at the same index before removing the sibling array. Validation reports unequal enum/sibling array lengths with `validation_attribute_enum_array_sibling_length_mismatch`. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using the toolkit's stable scalar-to-string formatting, and an explicit null value matches either null or missing event content. Object observables without values are removed only when their path resolves to a JSON object.
+Safe removal (`enrichment.Remove`) removes supported scalar and array enum siblings whose source has direct type `integer_t` or `long_t` and whose same-shaped target has direct type `string_t`, plus redundant observables that can be proven safe. Enum and sibling arrays must have equal lengths, and safe removal compares every value with the caption at the same index before removing the sibling array. Validation reports unequal enum/sibling array lengths with `validation_attribute_enum_array_sibling_length_mismatch`. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using the toolkit's stable scalar-to-string formatting. An omitted or nil-valued observable `value` denotes an object observable, which is removed only when its path resolves to an object.
 
 `WithValidation` reports findings at each code's toolkit default level. Missing recommended attributes are not checked while their code remains at its `validation.LevelIgnored` default; configure `validation.AttributeRecommendedMissing` as warning or error to enable that validation. Use `WithValidationObservablePathNotation` to report when a valid observable name does not use the preferred notation; this preference never prevents resolution of another supported notation.
 
@@ -534,7 +537,7 @@ pipeline, err := eventpipeline.NewPipeline(
 	eventpipeline.WithSchema(schema),
 	eventpipeline.WithEnumSiblings(enrichment.Add),
 	eventpipeline.WithObservables(enrichment.Add),
-	eventpipeline.WithIssueLevel(issue.EnrichmentObservableDuplicateSkipped, issue.LevelIgnored),
+	eventpipeline.WithIssueLevel(issue.ObservableDuplicate, issue.LevelWarning),
 )
 ```
 
@@ -549,7 +552,7 @@ result.EnrichmentRemoval()
 result.Issues()
 ```
 
-The private value representation lets future toolkit releases add processor families through new accessor methods without changing the public structure. Compiler diagnostics confirm that the supported Go toolchain inlines every simple accessor across package boundaries, reducing calls to direct private-state access and making the abstraction zero-cost without interface boxing or an inherently necessary allocation. The zero value is a valid empty result. `ProcessingResult` preserves its processor-section JSON representation when marshaled and can be unmarshaled from the same representation. The processor-specific structs in `eventresult` remain field-oriented and support keyed literals, but intentionally reject positional literals so future releases can add fields compatibly.
+The private value representation lets future toolkit releases add processor families through new accessor methods without changing the public structure. Compiler diagnostics confirm that the supported Go toolchain inlines every simple accessor across package boundaries, reducing calls to direct private-state access and making the abstraction zero-cost without interface boxing or an inherently necessary allocation. The zero value is a valid empty result. `ProcessingResult` preserves its processor-section JSON representation when marshaled but does not support JSON unmarshalling. The processor-specific structs in `eventresult` remain field-oriented and support keyed literals, but intentionally reject positional literals so future releases can add fields compatibly.
 
 Validation findings have a severity-neutral stable `validation.Code`, an explicit effective `validation.Level`, a human-readable message, and code-specific structured details. Codes use the `validation_` prefix. `Code.Description()` returns a short description and `Code.DefaultLevel()` reports the toolkit's default level independently of the effective level recorded on a finding. Findings remain in reporting order in one slice:
 

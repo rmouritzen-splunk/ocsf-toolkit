@@ -78,7 +78,7 @@ Reconsider the nested option name before 1.0 if the first association-level opti
 
 Decision: configure processing issues and validation findings through family-specific ignored, warning, and error levels rather than separate suppression and severity-remapping options. `WithIssueLevel` and `WithValidationLevel` set one typed code; `WithAllIssueLevels` and `WithAllValidationLevels` set the level for every code. The `all` setting may occur once and must precede specific code settings; each specific code may occur once. Mandatory processing issue codes may be warning or error but cannot be ignored; an `all=ignored` setting retains their toolkit defaults. Every validation code may be ignored, but enabling validation with every code resolved to ignored is a configuration error.
 
-`validation_attribute_recommended_missing` defaults to ignored. Environments enable that validation through the same level policy used by every other validation code. The validator skips the missing-recommended check while its effective level is ignored.
+`validation_attribute_recommended_missing`, `validation_observable_duplicate`, and `issue_observable_duplicate` default to ignored. Environments enable those diagnostics through the same level policy used by every other code. Processors skip the corresponding separable work while its effective level is ignored.
 
 For validation, warning and error are effective finding levels and both remain successful `ProcessEvent` results. For processing issues, warning adds the issue to the result, ignored omits it, and error stops at the first matching issue and returns a `ProcessingIssueError`. Every non-nil `ProcessEvent` error is accompanied by the zero `ProcessingResult`; prior in-place event mutations are not rolled back.
 
@@ -95,6 +95,25 @@ Derived requirements and test implications:
 - CLI level flags are repeatable; `all` occurs at most once before specific code settings, each specific code occurs at most once, and help displays value-taking flags consistently as `--flag VALUE`.
 
 Reconsider only if a demonstrated use case requires an additional informational level or a policy dimension that cannot be represented as one handling level.
+
+### DECISION-OBS-001: generated deduplication and duplicate diagnostics are independent
+
+Decision: observable generation defaults to appending every generated candidate. `WithObservableDeduplication` accepts ignored or generated mode; the CLI exposes the same selection as `--deduplicate-observables disabled|generated`. Generated mode silently removes only later generated candidates that duplicate earlier generated candidates. It does not inspect existing observables, remove existing duplicates, or remove a generated candidate that matches only an existing entry. No all-observables mode is currently supported.
+
+Duplicate diagnostics are separate opt-in work. The issue detects existing-existing, generated-existing, and generated-generated duplicates during observable addition. The validation detects duplicate identities in the final observable array. Both codes default to ignored because each requires an identity scan that is unnecessary for ordinary processing. When both codes are enabled during observable addition, the issue owns the condition and validation omits its duplicate scan and findings.
+
+Rationale: generated-to-generated deduplication is a mutation optimization, not evidence that the event is invalid or that a processing operation failed. Separating it from diagnostics makes mutation predictable, allows the common path to avoid identity hashing and existing-array scans, and leaves room for a future explicitly designed all-observables mutation mode. One shared duplicate analyzer prevents semantic drift between issue and validation behavior, while single diagnostic ownership avoids duplicate work when both policies are enabled.
+
+Derived requirements and test implications:
+
+- Ignored or omitted deduplication appends all generated candidates and performs no identity bookkeeping unless duplicate diagnostics independently require it.
+- Generated mode requires observable addition and rejects unsupported values, including a prospective all mode.
+- Generated mode never changes existing entries and never compares a candidate with the existing prefix.
+- Duplicate diagnostics use the same semantic identity across all origin pairs and include indexes; the issue additionally identifies existing or generated origin.
+- Error-level duplicate issues are evaluated after traversal but before the generated suffix is appended. Earlier in-place mutations remain.
+- Enabling both issue and validation duplicate codes during observable addition produces only issue diagnostics and performs one duplicate analysis.
+
+Reconsider an all-observables mutation mode only with a separate contract for existing-entry ownership, ordering, counts, and diagnostics.
 
 ### DECISION-API-006: library pipeline construction fails fast
 

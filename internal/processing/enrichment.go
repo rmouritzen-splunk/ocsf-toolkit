@@ -14,17 +14,22 @@ import (
 )
 
 type enrichmentProcessor struct {
-	enumSiblingsEnabled  bool
-	observablesEnabled   bool
-	pathNotation         pathstyle.Style
-	observableTypes      observableTypeSelector
-	classObservableTries map[int64]*classObservableTrie
-	objectObservability  observable.ObjectObservability
+	enumSiblingsEnabled        bool
+	observablesEnabled         bool
+	deduplicateGenerated       bool
+	reportObservableDuplicates bool
+	pathNotation               pathstyle.Style
+	observableTypes            observableTypeSelector
+	classObservableTries       map[int64]*classObservableTrie
+	objectObservability        observable.ObjectObservability
 }
 
 func (p *enrichmentProcessor) onClass(context *processContext) {
 	if p.classObservableTries != nil {
 		context.classObservableTrie = p.classObservableTries[context.class.Uid]
+	}
+	if !p.observablesEnabled {
+		return
 	}
 }
 
@@ -41,10 +46,14 @@ func (p *enrichmentProcessor) onObject(
 		if p.observableTypes.allows(*objectDef.Observable) {
 			context.addObservable(
 				&context.path, *objectDef.Observable, nil, p.pathNotation, p.enumSiblingsEnabled,
+				p.deduplicateGenerated, p.reportObservableDuplicates,
 			)
 		}
 	} else if typeID, present := p.observableTypeID(context, attributeName, attrDef); present {
-		context.addObservable(&context.path, typeID, nil, p.pathNotation, p.enumSiblingsEnabled)
+		context.addObservable(
+			&context.path, typeID, nil, p.pathNotation, p.enumSiblingsEnabled,
+			p.deduplicateGenerated, p.reportObservableDuplicates,
+		)
 	}
 }
 
@@ -132,8 +141,8 @@ func (p *enrichmentProcessor) onEnumSiblingPairAttributes(
 	siblingAttributeName string,
 	siblingAttrDef *schema.ItemAttributeDefinition,
 ) error {
-	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
-	if enumPresent {
+	enumValue := item[enumAttributeName]
+	if enumValue != nil {
 		context.path.PushAttribute(enumAttributeName)
 		var err error
 		if enumAttrDef.IsArray != nil && *enumAttrDef.IsArray {
@@ -151,8 +160,8 @@ func (p *enrichmentProcessor) onEnumSiblingPairAttributes(
 	if !p.observablesEnabled {
 		return nil
 	}
-	siblingValue, siblingPresent := eventvalue.Attribute(item, siblingAttributeName)
-	if !siblingPresent {
+	siblingValue := item[siblingAttributeName]
+	if siblingValue == nil {
 		return nil
 	}
 	context.path.PushAttribute(siblingAttributeName)
@@ -177,7 +186,7 @@ func (p *enrichmentProcessor) addEnumArraySibling(
 	if !p.enumSiblingsEnabled {
 		return nil
 	}
-	if _, present := eventvalue.Attribute(item, siblingName); present {
+	if item[siblingName] != nil {
 		return nil
 	}
 	values, ok := eventvalue.NewArrayView(value)
@@ -334,7 +343,10 @@ func (p *enrichmentProcessor) addScalarValueObservable(
 		}
 		return nil
 	}
-	context.addObservable(&context.path, typeID, &valueString, p.pathNotation, p.enumSiblingsEnabled)
+	context.addObservable(
+		&context.path, typeID, &valueString, p.pathNotation, p.enumSiblingsEnabled,
+		p.deduplicateGenerated, p.reportObservableDuplicates,
+	)
 	return nil
 }
 
@@ -383,11 +395,11 @@ func (p *enrichmentProcessor) addEnumSibling(
 	siblingName := ""
 	if attrDef.Sibling != nil {
 		siblingName = *attrDef.Sibling
-		_, siblingPresent := eventvalue.Attribute(item, siblingName)
-		reportOtherAddition = !siblingPresent &&
+		siblingMissing := item[siblingName] == nil
+		reportOtherAddition = siblingMissing &&
 			attributeIsOtherEnumValue(value) &&
 			enumDetail != nil && enumDetail.Caption != ""
-		if !siblingPresent &&
+		if siblingMissing &&
 			(lookupStatus != enumLookupFound || enumDetail.Caption == "") &&
 			!context.ignoresIssue(issueEnrichmentEnumSiblingNotAddedMask) {
 			attributePath := context.path.String(pathstyle.ArrayIndexed)
@@ -434,12 +446,8 @@ func (p *enrichmentProcessor) onEventDone(context *processContext, event jsonish
 		return nil
 	}
 
-	existing, present := event["observables"]
-	if present && existing == nil {
-		delete(event, "observables")
-		present = false
-	}
-	if !present {
+	existing := event["observables"]
+	if existing == nil {
 		return p.addGeneratedObservables(context, event, nil)
 	}
 
@@ -474,45 +482,32 @@ func (p *enrichmentProcessor) addGeneratedObservables(
 	event jsonish.Map,
 	existing *observable.Collection,
 ) error {
-	if len(context.observables) == 0 {
+	if len(context.observables) == 0 && !p.reportObservableDuplicates {
 		return nil
 	}
-	if existing == nil && len(context.observables) == 1 {
-		event["observables"] = context.observables
-		context.result.Enrichment.ObservablesAdded = 1
-		context.generatedObservablesStart = 0
-		context.generatedObservablesPathNotation = p.pathNotation
-		return nil
+	generated := context.observables
+	if p.reportObservableDuplicates {
+		analysis := observable.AnalyzeDuplicates(existing, generated, p.deduplicateGenerated)
+		for _, duplicate := range analysis.Duplicates {
+			if err := p.reportObservableDuplicate(context, duplicate); err != nil {
+				return err
+			}
+		}
+		generated = analysis.AcceptedGenerated
 	}
-	deduplication := observable.DeduplicateGenerated(existing, context.observables)
-	for _, duplicate := range deduplication.Duplicates {
-		if context.ignoresIssue(issueEnrichmentObservableDuplicateSkippedMask) {
-			continue
-		}
-		duplicateDescription := string(duplicate.Source)
-		if duplicate.Source == observable.DuplicateGenerated {
-			duplicateDescription = "earlier generated"
-		}
-		attributePath := context.observableDiagnosticPath(duplicate.GeneratedIndex, duplicate.Name, p.pathNotation)
-		if err := context.addProcessorIssue(
-			issue.SourceEnrichment,
-			issue.EnrichmentObservableDuplicateSkipped,
-			jsonish.Map{
-				"attribute_path": attributePath,
-				"attribute":      terminalObservableAttribute(attributePath),
-				"duplicate_of":   string(duplicate.Source),
-			},
-			"Generated observable for path "+strconv.Quote(attributePath)+
-				" was skipped because it duplicates an "+duplicateDescription+" observable.",
-		); err != nil {
-			return err
-		}
-	}
-	generated := deduplication.Accepted
+	return p.appendGeneratedObservables(context, event, existing, generated)
+}
 
+func (p *enrichmentProcessor) appendGeneratedObservables(
+	context *processContext,
+	event jsonish.Map,
+	existing *observable.Collection,
+	generated []jsonish.Map,
+) error {
 	if len(generated) == 0 {
 		return nil
 	}
+	generatedObservablesFirstIndex := 0
 	if existing == nil {
 		event["observables"] = generated
 	} else {
@@ -521,13 +516,39 @@ func (p *enrichmentProcessor) addGeneratedObservables(
 			return err
 		}
 		event["observables"] = appended
+		generatedObservablesFirstIndex = existing.Len()
 	}
 	context.result.Enrichment.ObservablesAdded += len(generated)
-	if existing != nil {
-		context.generatedObservablesStart = existing.Len()
-	}
-	context.generatedObservablesPathNotation = p.pathNotation
+	context.generatedObservablesFirstIndex = generatedObservablesFirstIndex
 	return nil
+}
+
+func (p *enrichmentProcessor) reportObservableDuplicate(
+	context *processContext,
+	duplicate observable.Duplicate,
+) error {
+	attributePath := "observables[" + strconv.Itoa(duplicate.Occurrence.Index) + "]"
+	attribute := "observables"
+	description := "Existing observable " + strconv.Itoa(duplicate.Occurrence.Index)
+	if duplicate.Occurrence.Origin == observable.ObservableOriginGenerated {
+		attributePath = context.observableDiagnosticPath(duplicate.Occurrence.Index, duplicate.Name, p.pathNotation)
+		attribute = terminalObservableAttribute(attributePath)
+		description = "Generated observable for path " + strconv.Quote(attributePath)
+	}
+	return context.addProcessorIssue(
+		issue.SourceEnrichment,
+		issue.ObservableDuplicate,
+		jsonish.Map{
+			"attribute_path":      attributePath,
+			"attribute":           attribute,
+			"observable_origin":   string(duplicate.Occurrence.Origin),
+			"observable_index":    duplicate.Occurrence.Index,
+			"duplicate_of_origin": string(duplicate.First.Origin),
+			"duplicate_of_index":  duplicate.First.Index,
+		},
+		description+" duplicates "+string(duplicate.First.Origin)+" observable "+
+			strconv.Itoa(duplicate.First.Index)+".",
+	)
 }
 
 // terminalObservableAttribute extracts the final attribute from a rendered observable path. It is used only while
@@ -552,7 +573,7 @@ func (c *processContext) addEnumSibling(
 		return
 	}
 	sibling := *attrDef.Sibling
-	if _, siblingPresent := eventvalue.Attribute(item, sibling); siblingPresent {
+	if item[sibling] != nil {
 		return
 	}
 	item[sibling] = enumDetail.CaptionValue()
@@ -567,12 +588,18 @@ func (c *processContext) addObservable(
 	value *string,
 	pathNotation pathstyle.Style,
 	enumSiblingsEnabled bool,
+	deduplicateGenerated bool,
+	reportObservableDuplicates bool,
 ) {
+	name := path.String(pathNotation)
+	if deduplicateGenerated && !reportObservableDuplicates &&
+		!c.generatedObservableIdentities.Add(name, observableTypeID, value) {
+		return
+	}
 	typeIDValue, present := c.compiled.ObservableTypeIDValue(observableTypeID)
 	if !present {
 		typeIDValue = observableTypeID
 	}
-	name := path.String(pathNotation)
 	observable := jsonish.Map{
 		"name":    name,
 		"type_id": typeIDValue,
@@ -585,31 +612,43 @@ func (c *processContext) addObservable(
 			observable["type"] = typeValue
 		}
 	}
-	c.addGeneratedObservable(path, observable, pathNotation)
+	c.addGeneratedObservable(path, observable, pathNotation, reportObservableDuplicates)
 }
 
 func (c *processContext) addGeneratedObservable(
 	path *eventpath.Path,
 	observable jsonish.Map,
 	style pathstyle.Style,
+	reportObservableDuplicates bool,
 ) {
 	index := len(c.observables)
 	c.observables = append(c.observables, observable)
+	if !reportObservableDuplicates {
+		return
+	}
 	if style == pathstyle.ArrayIndexed || style == pathstyle.JSONPath || !path.HasArrayIndex() {
-		if c.observableDiagnosticPaths != nil {
-			c.observableDiagnosticPaths = append(c.observableDiagnosticPaths, "")
+		if c.observableDiagnostics != nil {
+			c.observableDiagnostics.generatedIndexedPaths = append(
+				c.observableDiagnostics.generatedIndexedPaths, "",
+			)
 		}
 		return
 	}
-	if c.observableDiagnosticPaths == nil {
-		c.observableDiagnosticPaths = make([]string, index, index+1)
+	if c.observableDiagnostics == nil {
+		c.observableDiagnostics = &observableDiagnosticState{
+			generatedIndexedPaths: make([]string, index, index+1),
+		}
 	}
-	c.observableDiagnosticPaths = append(c.observableDiagnosticPaths, path.String(pathstyle.ArrayIndexed))
+	c.observableDiagnostics.generatedIndexedPaths = append(
+		c.observableDiagnostics.generatedIndexedPaths,
+		path.String(pathstyle.ArrayIndexed),
+	)
 }
 
 func (c *processContext) observableDiagnosticPath(index int, name string, style pathstyle.Style) string {
-	if index < len(c.observableDiagnosticPaths) && c.observableDiagnosticPaths[index] != "" {
-		return c.observableDiagnosticPaths[index]
+	if c.observableDiagnostics != nil && index < len(c.observableDiagnostics.generatedIndexedPaths) &&
+		c.observableDiagnostics.generatedIndexedPaths[index] != "" {
+		return c.observableDiagnostics.generatedIndexedPaths[index]
 	}
 	if style == pathstyle.JSONPath {
 		return strings.TrimPrefix(name, "$.")

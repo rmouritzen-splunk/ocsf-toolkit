@@ -11,6 +11,7 @@ import (
 	"github.com/ocsf/ocsf-toolkit/eventresult"
 	"github.com/ocsf/ocsf-toolkit/internal/eventpath"
 	"github.com/ocsf/ocsf-toolkit/internal/eventvalue"
+	"github.com/ocsf/ocsf-toolkit/internal/observable"
 	"github.com/ocsf/ocsf-toolkit/internal/schema"
 	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
@@ -42,14 +43,13 @@ type processContext struct {
 	activeProfiles      schema.ProfileSet
 	classObservableTrie *classObservableTrie
 	observables         []jsonish.Map
-	// observableDiagnosticPaths is allocated only when the configured observable notation omits concrete array
-	// indexes. Non-empty entries retain the canonical indexed source path for diagnostics.
-	observableDiagnosticPaths []string
-	// generatedObservablesStart identifies a suffix appended by this processing pass and therefore semantically
-	// valid by construction. A negative value means no trusted suffix exists. Existing observables retain their
-	// original order.
-	generatedObservablesStart        int
-	generatedObservablesPathNotation pathstyle.Style
+	// generatedObservableIdentities is used only for generated-only deduplication without duplicate diagnostics. It
+	// lets generation reject duplicates before constructing their maps.
+	generatedObservableIdentities observable.GeneratedIdentitySet
+	observableDiagnostics         *observableDiagnosticState
+	// generatedObservablesFirstIndex is the array index of the first trusted generated observable in the final
+	// observable array. A negative value means no trusted generated suffix exists.
+	generatedObservablesFirstIndex   int
 	processingTraversalLimitReported bool
 	path                             eventpath.Path
 	// jsonNumberStyleKnown and jsonNumberUsesFloatSyntax record whether the first numeric enum json.Number seen in
@@ -57,6 +57,12 @@ type processContext struct {
 	// normalization; misses always normalize, so mixed encodings remain correct.
 	jsonNumberStyleKnown      bool
 	jsonNumberUsesFloatSyntax bool
+}
+
+type observableDiagnosticState struct {
+	// generatedIndexedPaths is a sparse cache of concrete indexed paths for generated candidates whose configured
+	// names omit array indexes. Duplicate issues use it after traversal has moved the mutable path cursor.
+	generatedIndexedPaths []string
 }
 
 // Result is the internal mutable result accumulated while processing an event. The public eventpipeline result wraps
@@ -220,9 +226,9 @@ func (p *PipelineImpl) ProcessEvent(event jsonish.Map) (Result, error) {
 		return Result{}, errNilEvent
 	}
 	context := processContext{
-		compiled:                  p.compiled,
-		pipelineImpl:              p,
-		generatedObservablesStart: -1,
+		compiled:                       p.compiled,
+		pipelineImpl:                   p,
+		generatedObservablesFirstIndex: -1,
 	}
 
 	classResolved, err := context.resolveClass(event)
@@ -386,8 +392,8 @@ func (c *processContext) visitItem(
 		attributeName := attribute.Name
 		attrDef := attribute.Definition
 		if !schema.AttributeActive(attrDef, c.activeProfiles) {
-			value, present := eventvalue.Attribute(item, attributeName)
-			if present && c.pipelineImpl.validation != nil {
+			value := item[attributeName]
+			if value != nil && c.pipelineImpl.validation != nil {
 				if attrDef == nil {
 					c.pipelineImpl.validation.onUnknownAttribute(c, attributeName, itemDefinition)
 				} else {
@@ -412,10 +418,10 @@ func (c *processContext) visitItem(
 			}
 			continue
 		}
-		value, present := eventvalue.Attribute(item, attributeName)
+		value := item[attributeName]
 		c.path.PushAttribute(attributeName)
 
-		if !present {
+		if value == nil {
 			if err := c.visitAttribute(item, nil, attributeName, attrDef, -1, attributeMissing); err != nil {
 				return err
 			}

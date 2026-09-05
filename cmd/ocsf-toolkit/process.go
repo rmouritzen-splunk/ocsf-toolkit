@@ -159,6 +159,7 @@ func newPipeline(config processConfig) (*eventpipeline.Pipeline, []schemaresult.
 				pathstyle.Style(config.observablePathNotation),
 			))
 		}
+		options = append(options, eventpipeline.WithObservableDeduplication(config.observableDeduplication))
 	}
 	if config.validate {
 		validationOptions := make([]eventpipeline.ValidationOption, 0, 1+len(config.validationLevels.rules))
@@ -275,6 +276,8 @@ func cliPipelineOptionName(option eventpipeline.PipelineOptionName) string {
 	case eventpipeline.PipelineOptionEnrichmentObservablePathNotation,
 		eventpipeline.PipelineOptionValidationObservablePathNotation:
 		return "--observable-path-notation"
+	case eventpipeline.PipelineOptionObservableDeduplication:
+		return "--deduplicate-observables"
 	case eventpipeline.PipelineOptionValidation:
 		return "--validate"
 	case eventpipeline.PipelineOptionIssueLevel, eventpipeline.PipelineOptionAllIssueLevels:

@@ -40,7 +40,7 @@ Observable definitions can come from:
 
 Observable generation may be restricted to a selected set of observable type IDs. Validate the complete selection against the loaded schema before processing events and report all unknown IDs together. An omitted or empty selection means all observable types. Apply a nonempty selection consistently to class-level paths, object types, attributes, dictionary attributes, and dictionary types. Excluded declarations produce neither observables nor malformed-source enrichment issues. Selection affects only newly generated observables; it does not filter existing observables or alter enrichment removal and validation.
 
-As the active event structure is walked, collect generated observables rather than repeatedly modifying the top-level array. For array values, generate an observable for each qualifying element while using the appropriate observable name form. Add the collected entries after the event walk is complete.
+As the active event structure is walked, collect generated observables rather than repeatedly modifying the top-level array. For array values, generate an observable for each qualifying element while using the appropriate observable name form. Generated-observable deduplication is disabled by default. When generated mode is selected, retain only the first generated candidate of each identity. This optimization compares generated candidates only with earlier generated candidates and never compares them with existing observable entries. Add the retained entries only after the event walk is complete.
 
 Generated observable names may use simple array traversal (`resources.uid`), empty brackets (`resources[].uid`), a wildcard (`resources[*].uid`), concrete indexes (`resources[1].uid`), or root-relative JSONPath (`$.resources[1].uid`). The notation changes only the path spelling, not which values are observable.
 
@@ -50,15 +50,15 @@ Treat `json_t` values as opaque and do not generate observables from them, inclu
 
 ## Existing Observables And Duplicates
 
-If `observables` is absent, null, or an empty array, enrichment may start a new array. If it is a valid non-empty array, append generated entries while preserving existing entries.
+If `observables` has no logical value or is an empty array, enrichment may start a new array. If it is a valid non-empty array, append generated entries while preserving existing entries. When enrichment has nothing to add, it does not normalize a nil-valued map entry by deleting it.
 
 Generated entries form a suffix after any existing entries. When enrichment and validation run in one operation, an implementation may treat that suffix as semantically valid by construction and avoid resolving it again. Existing entries must still be validated, and preferred-notation warnings still apply to generated names. Independently test generated events with validation performed in a separate operation so this optimization cannot hide a generator defect.
 
-Do not append an exact duplicate of an existing or already-generated observable. Duplicate identity includes the observable name, type, and the presence and value of `value`. A valueless object observable is therefore different from a scalar observable whose value is null.
+Duplicate identity includes the observable name, type, and optional string `value`. A missing or nil-valued map entry has no logical value and identifies the same valueless object observable. With deduplication disabled, enrichment appends every generated candidate. With generated deduplication enabled, a later generated candidate that duplicates an earlier generated candidate is omitted and does not contribute to the added count. A generated candidate that duplicates an existing entry is still appended, and existing entries are never removed or deduplicated by this option.
 
 Observable names are compared as supplied. Do not treat path spelling variations such as a bare array name and an explicit `[]` form as duplicates merely because they can resolve to the same event value. Normalizing those forms could discard intentionally distinct source entries.
 
-Report each skipped duplicate as a non-fatal enrichment issue. If an existing `observables` value is malformed rather than an array, report the issue instead of replacing non-empty source content.
+Duplicate reporting is independent of generated-observable deduplication. When enabled, the duplicate issue detects existing-existing, generated-existing, and generated-generated identities and identifies the origin and index of both the duplicate and the first occurrence. It defaults to ignored. Generated deduplication itself is silent whether or not reporting is enabled. If duplicate reporting is elevated to error, report the first duplicate after event traversal and before appending any generated observables; earlier in-place mutations are not rolled back. If an existing `observables` value is malformed rather than an array, report the issue instead of replacing non-empty source content.
 
 After enrichment, remove the `observables` attribute if it would otherwise contain an empty array. This avoids retaining an attribute that carries no information.
 
@@ -68,17 +68,19 @@ After enrichment, remove the `observables` attribute if it would otherwise conta
 resolve the event class and active profiles
 if the class cannot be resolved, report the class problem and stop
 
-prepare a set of existing observable identities
+classify the existing observable destination without mutating it
 walk active class and nested object attributes:
     for a supported scalar or array enum with a string sibling:
         add its missing schema-caption sibling when possible
     for a schema-defined observable source selected for generation:
         derive one or more observable entries
-        retain entries whose identities have not already been seen
+        if generated deduplication is enabled, retain only the first generated occurrence of each identity
 
+if duplicate issue reporting is enabled, detect duplicates across existing and generated observables
+emit duplicate issues in observable order
 append retained generated observables to valid existing observables
 remove observables if the final array is empty
-return mutation counts and non-fatal issues
+return mutation counts and warning-level issues, or stop with the first error-level issue
 ```
 
 An implementation backed by structs, classes, or columnar data can perform the same steps through field metadata or nested-column access. It does not need to materialize the entire event as generic maps, provided its chosen destination representation can express added and removed fields and array entries.
