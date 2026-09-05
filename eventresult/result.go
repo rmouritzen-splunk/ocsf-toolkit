@@ -13,12 +13,6 @@ type ValidationResult struct {
 
 	// Findings contains validation findings with their effective reporting levels.
 	Findings []ValidationFinding `json:"findings,omitempty"`
-
-	// SuppressedErrorCount is the number of suppressed findings whose toolkit default level is error.
-	SuppressedErrorCount int `json:"suppressed_error_count,omitempty"`
-
-	// SuppressedWarningCount is the number of suppressed findings whose toolkit default level is warning.
-	SuppressedWarningCount int `json:"suppressed_warning_count,omitempty"`
 }
 
 // Count returns the number of findings at level.
@@ -82,10 +76,10 @@ type EnrichmentRemovalResult struct {
 	ObservablesRetained int `json:"observables_retained"`
 }
 
-// ProcessingIssue describes a non-fatal event-processing condition that does not cause ProcessEvent to return an
-// error. Some mandatory issues explain why processing stopped before completing all requested work. Messages and
-// details identify the affected location and processing condition without repeating event values so issues can be
-// logged more safely.
+// ProcessingIssue describes a structured event-processing condition. Warning-level issues appear in a processing
+// result; an issue promoted to an error is instead available through eventpipeline.ProcessingIssueError. Some
+// mandatory issues explain why processing stopped before completing all requested work. Messages and details identify
+// the affected location and processing condition without repeating event values so issues can be logged more safely.
 type ProcessingIssue struct {
 	// Prevent external positional literals so fields can be added compatibly; keyed literals remain supported.
 	_ struct{}
@@ -95,7 +89,7 @@ type ProcessingIssue struct {
 
 	// Code is a short machine-readable issue identifier suitable for searching, grouping,
 	// metrics, and structured logs.
-	Code issue.IssueCode `json:"code"`
+	Code issue.Code `json:"code"`
 
 	// Message is a human-readable issue description.
 	Message string `json:"message"`

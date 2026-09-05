@@ -10,7 +10,7 @@ import (
 )
 
 type observableProblemDisposition struct {
-	issueCode      issue.IssueCode
+	issueCode      issue.Code
 	validationCode validation.Code
 	structural     bool
 	traversalLimit bool
@@ -69,17 +69,25 @@ func TestEveryObservableResolutionProblemHasAnExplicitDisposition(t *testing.T) 
 		disposition, defined := expected[problem]
 		require.True(t, defined, "observable resolution problem %d has no explicit disposition", problem)
 
-		issueCode, hasIssueCode := observableIssueCode(problem)
+		issueCode, issueMask, hasIssueCode := observableIssueCode(problem)
 		require.Equal(
 			t, disposition.issueCode.Valid(), hasIssueCode, "unexpected issue disposition for problem %d", problem,
 		)
 		require.Equal(t, disposition.issueCode, issueCode, "incorrect issue code for problem %d", problem)
+		require.Equal(t, issueMasksByCode[issueCode], issueMask, "incorrect issue mask for problem %d", problem)
 
-		validationCode, hasValidationCode := nonStructuralObservableValidationCode(problem)
+		validationCode, validationMask, hasValidationCode := nonStructuralObservableValidationCode(problem)
 		require.Equal(t, disposition.validationCode.Valid(), hasValidationCode,
 			"unexpected validation disposition for problem %d", problem)
 		require.Equal(
 			t, disposition.validationCode, validationCode, "incorrect validation code for problem %d", problem,
+		)
+		require.Equal(
+			t,
+			validationMasksByCode[validationCode],
+			validationMask,
+			"incorrect validation mask for problem %d",
+			problem,
 		)
 
 		if disposition.structural {

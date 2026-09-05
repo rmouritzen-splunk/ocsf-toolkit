@@ -2,7 +2,7 @@ package issue
 
 import "github.com/ocsf/ocsf-toolkit/internal/coderegistry"
 
-// Source identifies the part of event processing that reported an IssueCode.
+// Source identifies the part of event processing that reported a Code.
 type Source uint8
 
 const (

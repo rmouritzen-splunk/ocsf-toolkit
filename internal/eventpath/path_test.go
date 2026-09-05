@@ -13,17 +13,36 @@ import (
 func TestEventPathRendersSupportedNotationStyles(t *testing.T) {
 	path := Path{}
 	path.PushAttribute("resources")
-	path.PushArrayIndex(1)
+	path.PushArrayIndex(12)
 	path.PushAttribute("uid")
 
 	assert := require.New(t)
 	assert.Equal("resources.uid", path.String(pathstyle.Simple))
 	assert.Equal("resources[].uid", path.String(pathstyle.ArrayBrackets))
 	assert.Equal("resources[*].uid", path.String(pathstyle.ArrayWildcard))
-	assert.Equal("resources[1].uid", path.String(pathstyle.ArrayIndexed))
-	assert.Equal("$.resources[1].uid", path.String(pathstyle.JSONPath))
-	assert.Equal("resources[1].type", path.SiblingString("type", pathstyle.ArrayIndexed))
-	assert.Equal("resources[1].uid.value", path.ChildString("value", pathstyle.ArrayIndexed))
+	assert.Equal("resources[12].uid", path.String(pathstyle.ArrayIndexed))
+	assert.Equal("$.resources[12].uid", path.String(pathstyle.JSONPath))
+	assert.Equal("resources[12].type", path.SiblingString("type", pathstyle.ArrayIndexed))
+	assert.Equal("resources[12].uid.value", path.ChildString("value", pathstyle.ArrayIndexed))
+}
+
+func TestAppendArrayNotation(t *testing.T) {
+	tests := []struct {
+		style pathstyle.Style
+		want  string
+	}{
+		{style: pathstyle.Simple},
+		{style: pathstyle.ArrayBrackets, want: "[]"},
+		{style: pathstyle.ArrayWildcard, want: "[*]"},
+		{style: pathstyle.ArrayIndexed, want: "[12]"},
+		{style: pathstyle.JSONPath, want: "[12]"},
+		{style: pathstyle.Style("invalid")},
+	}
+	for _, test := range tests {
+		var builder strings.Builder
+		appendArrayNotation(&builder, test.style, 12)
+		require.Equal(t, test.want, builder.String(), test.style)
+	}
 }
 
 func TestEventPathSupportsDepthBeyondInlineStorage(t *testing.T) {

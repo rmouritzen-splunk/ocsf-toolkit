@@ -18,6 +18,7 @@ import (
 	"github.com/ocsf/ocsf-toolkit/enrichment"
 	"github.com/ocsf/ocsf-toolkit/eventresult"
 	"github.com/ocsf/ocsf-toolkit/internal/schema"
+	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 	"github.com/ocsf/ocsf-toolkit/validation"
 )
@@ -357,20 +358,18 @@ func TestClassUIDResolutionFailuresReportMandatoryDiagnostics(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			assert := require.New(t)
 			result, err := mustNewPipeline(assert, schema, WithValidation(
-				WithSuppressValidation(),
-				WithValidationErrorsAsWarnings(test.code),
+				WithAllValidationLevels(validation.LevelIgnored),
+				WithValidationLevel(test.code, validation.LevelWarning),
 			)).ProcessEvent(test.event)
 			require.NoError(t, err)
 			require.Equal(t, []string{test.validationCode}, issueCodes(result.Validation().Findings))
 			require.Equal(t, validation.LevelWarning, result.Validation().Findings[0].Level)
-			require.Zero(t, result.Validation().SuppressedErrorCount)
-			require.Zero(t, result.Validation().SuppressedWarningCount)
 			require.Equal(t, []string{test.processingCode}, issueCodes(result.Issues()))
 			require.Equal(t, test.processingMessage, result.Issues()[0].Message)
 
 			result, err = mustNewPipeline(assert, schema,
 				WithEnumSiblings(enrichment.Add),
-				WithSuppressIssues(),
+				WithAllIssueLevels(issue.LevelIgnored),
 			).ProcessEvent(test.event)
 			require.NoError(t, err)
 			require.Empty(t, result.Validation().Findings)
@@ -1064,7 +1063,7 @@ func TestProcessEventValidationValidEvent(t *testing.T) {
 	}
 
 	pipeline := mustNewPipeline(assert, si,
-		WithValidation(WithWarnOnMissingRecommended()),
+		WithValidation(),
 		WithEnumSiblings(enrichment.Add), WithObservables(enrichment.Add),
 	)
 	result, err := pipeline.ProcessEvent(event)
@@ -1095,7 +1094,9 @@ func TestProcessEventValidationReportsExpectedIssues(t *testing.T) {
 		"surprise": true,
 	}
 
-	pipeline := mustNewPipeline(assert, si, WithValidation(WithWarnOnMissingRecommended()))
+	pipeline := mustNewPipeline(assert, si, WithValidation(
+		WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelWarning),
+	))
 	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
@@ -1302,7 +1303,7 @@ func TestProcessEventValidationUnknownClassUIDUsesInt64(t *testing.T) {
 	assert.NotContains(issueCodes(resultErrorFindings6), "validation_attribute_wrong_type")
 }
 
-func TestProcessEventValidationRecommendedWarningsAreOptional(t *testing.T) {
+func TestProcessEventValidationRecommendedMissingDefaultsToIgnored(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
 
@@ -1316,7 +1317,9 @@ func TestProcessEventValidationRecommendedWarningsAreOptional(t *testing.T) {
 
 	event = validValidationEvent()
 	delete(event, "red")
-	pipeline = mustNewPipeline(assert, si, WithValidation(WithWarnOnMissingRecommended()))
+	pipeline = mustNewPipeline(assert, si, WithValidation(
+		WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelWarning),
+	))
 	result, err = pipeline.ProcessEvent(event)
 	assert.NoError(err)
 	resultWarningFindings3 := findingsAtLevel(result.Validation().Findings, validation.LevelWarning)
@@ -1560,13 +1563,15 @@ func TestProcessEventValidationInactiveAttributeReportsSortedEnablingProfiles(t 
 	}
 }
 
-func TestProcessEventValidationInactiveValueCheckIgnoresFindingSuppression(t *testing.T) {
+func TestProcessEventValidationInactiveValueCheckUsesDefaultLevels(t *testing.T) {
 	assert := require.New(t)
 	si := makeValidationTestSchema(assert)
 	event := validValidationEvent()
 	event["profile_attr"] = json.Number("1")
 
-	pipeline := mustNewPipeline(assert, si, WithValidation(WithSuppressValidation(validation.AttributeWrongType)))
+	pipeline := mustNewPipeline(assert, si, WithValidation(
+		WithValidationLevel(validation.AttributeWrongType, validation.LevelIgnored),
+	))
 	result, err := pipeline.ProcessEvent(event)
 
 	assert.NoError(err)
@@ -1576,7 +1581,6 @@ func TestProcessEventValidationInactiveValueCheckIgnoresFindingSuppression(t *te
 		assert.Equal("invalid", findings[0].Details["value_validation"])
 		assert.Contains(findings[0].Details, "invalid_value")
 	}
-	assert.Zero(result.Validation().SuppressedErrorCount)
 }
 
 func TestProcessEventValidationGenericAndProfileFilteredObjects(t *testing.T) {

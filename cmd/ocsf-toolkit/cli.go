@@ -22,9 +22,22 @@ var version = "dev"
 
 func runWithIO(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	parser, options := newParser()
-	err := parser.flags.Parse(args)
+	if requestsHelp(args) {
+		writeHelp(stdout, parser)
+		return 0
+	}
+	err := parser.parse(args)
 	remaining := parser.flags.Args()
 	return handleParseResult(err, remaining, parser, options, stdin, stdout, stderr)
+}
+
+func requestsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
 }
 
 func handleParseResult(
@@ -42,7 +55,7 @@ func handleParseResult(
 		return 2
 	}
 	if len(remaining) != 0 {
-		writef(stderr, "error: unexpected argument %q\n", remaining[0])
+		writef(stderr, "error: %s\n", unexpectedArgumentMessage(remaining[0]))
 		writeErrorUsage(stderr, parser)
 		return 2
 	}
@@ -68,8 +81,15 @@ func handleParseResult(
 		return 0
 	}
 
-	config, err := options.toConfig()
-	if err != nil {
+	config, problems := options.toConfig()
+	if len(problems) != 0 {
+		for _, problem := range problems {
+			writef(stderr, "error: %s\n", problem)
+		}
+		writeErrorUsage(stderr, parser)
+		return 2
+	}
+	if err := preflightSchemaFile(config.schemaPath); err != nil {
 		writef(stderr, "error: %s\n", err)
 		writeErrorUsage(stderr, parser)
 		return 2
@@ -81,6 +101,10 @@ func handleParseResult(
 	return exitCode
 }
 
+func unexpectedArgumentMessage(arg string) string {
+	return fmt.Sprintf("unexpected positional argument %q: did you forget to repeat an option?", arg)
+}
+
 func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	destinations, err := buildProcessingDestinations(config)
 	if err != nil {
@@ -88,7 +112,7 @@ func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, 
 		return 1
 	}
 	outputs := newDestinationWriter(stdout, config.writeOptions())
-	pipeline, initializationIssues, suppressedInitializationIssues, err := newPipeline(config)
+	pipeline, initializationIssues, err := newPipeline(config)
 	if err != nil {
 		writef(stderr, "error: %s\n", err)
 		var configurationError *commandConfigurationError
@@ -103,7 +127,6 @@ func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, 
 		config,
 		pipeline,
 		initializationIssues,
-		suppressedInitializationIssues,
 		destinations,
 		stdin,
 		outputs,

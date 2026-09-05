@@ -62,9 +62,9 @@ func NewValidation(options ...ValidationOption) EventProcessor {
 	}
 }
 
-func WithWarnOnMissingRecommended() ValidationOption {
+func WithValidationLevel(code validation.Code, level validation.Level) ValidationOption {
 	return func(config *ValidationConfig) {
-		config.WarnOnMissingRecommended = true
+		config.PolicyRules = append(config.PolicyRules, ValidationPolicyRule{Code: code, Level: level})
 	}
 }
 
@@ -188,8 +188,8 @@ func mergeEventProcessors(processors []EventProcessor) PipelineConfig {
 			merged.ValidationEnabled = true
 			merged.Validation = processor.Validation
 		}
-		if processor.IssueSuppression.Configured {
-			merged.IssueSuppression = processor.IssueSuppression
+		if len(processor.IssuePolicy.LevelRules) != 0 {
+			merged.IssuePolicy = processor.IssuePolicy
 		}
 	}
 	return merged
@@ -199,8 +199,8 @@ func mustNewEventProcessorPipeline(
 	assert *require.Assertions,
 	compiled *schema.Compiled,
 	processors ...EventProcessor,
-) *Pipeline {
-	pipeline, err := NewPipeline(compiled, mergeEventProcessors(processors))
+) *PipelineImpl {
+	pipeline, err := NewPipelineImpl(compiled, mergeEventProcessors(processors))
 	assert.NoError(err)
 	return pipeline
 }

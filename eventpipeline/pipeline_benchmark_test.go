@@ -33,6 +33,82 @@ func BenchmarkProcessEventValidation(b *testing.B) {
 	}
 }
 
+func BenchmarkProcessEventValidationSelection(b *testing.B) {
+	suites := []struct {
+		name     string
+		baseline PipelineOption
+	}{
+		{name: "no_observables_force_remove", baseline: WithObservables(enrichment.ForceRemove)},
+		{name: "no_enum_siblings_safe_remove", baseline: WithEnumSiblings(enrichment.Remove)},
+	}
+	benchmarks := []struct {
+		name       string
+		validation PipelineOption
+	}{
+		{name: "default", validation: WithValidation()},
+		{
+			name: "one_nontriggering",
+			validation: WithValidation(
+				WithAllValidationLevels(validation.LevelIgnored),
+				WithValidationLevel(validation.AttributeDeprecated, validation.LevelWarning),
+			),
+		},
+		{name: "none"},
+	}
+	for _, suite := range suites {
+		b.Run(suite.name, func(b *testing.B) {
+			for _, benchmark := range benchmarks {
+				b.Run(benchmark.name, func(b *testing.B) {
+					assert := require.New(b)
+					schema := makeValidationTestSchema(assert)
+					options := []PipelineOption{suite.baseline}
+					if benchmark.validation != nil {
+						options = append(options, benchmark.validation)
+					}
+					pipeline := mustNewPipeline(assert, schema, options...)
+					event := validValidationEvent()
+					result, err := pipeline.ProcessEvent(event)
+					assert.NoError(err)
+					assert.Empty(result.Validation().Findings)
+					b.ReportAllocs()
+					b.ResetTimer()
+
+					for b.Loop() {
+						if _, err := pipeline.ProcessEvent(event); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkProcessEventValidationWrongTypeOnly(b *testing.B) {
+	assert := require.New(b)
+	schema := makeValidationTestSchema(assert)
+	pipeline := mustNewPipeline(assert, schema, WithValidation(
+		WithAllValidationLevels(validation.LevelIgnored),
+		WithValidationLevel(validation.AttributeWrongType, validation.LevelWarning),
+	))
+	event := validValidationEvent()
+	event["short_text"] = "abcd"
+	for index := range 64 {
+		event[fmt.Sprintf("unknown_%02d", index)] = "value"
+	}
+	result, err := pipeline.ProcessEvent(event)
+	assert.NoError(err)
+	assert.Empty(result.Validation().Findings)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		if _, err := pipeline.ProcessEvent(event); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkProcessEventInactiveProfileAttribute(b *testing.B) {
 	benchmarks := []struct {
 		name  string
@@ -62,21 +138,20 @@ func BenchmarkProcessEventInactiveProfileAttribute(b *testing.B) {
 
 func BenchmarkProcessEventValidationPolicy(b *testing.B) {
 	benchmarks := []struct {
-		name            string
-		policy          ValidationOption
-		wantLevel       validation.Level
-		wantSuppression bool
+		name      string
+		policy    ValidationOption
+		wantLevel validation.Level
 	}{
 		{name: "reported", wantLevel: validation.LevelError},
-		{name: "suppress_all", policy: WithSuppressValidation(), wantSuppression: true},
 		{
-			name:            "suppress_selected",
-			policy:          WithSuppressValidation(validation.AttributeWrongType),
-			wantSuppression: true,
+			name: "ignore_selected",
+			policy: WithValidationLevel(
+				validation.AttributeWrongType, validation.LevelIgnored,
+			),
 		},
 		{
 			name:      "error_as_warning",
-			policy:    WithValidationErrorsAsWarnings(validation.AttributeWrongType),
+			policy:    WithValidationLevel(validation.AttributeWrongType, validation.LevelWarning),
 			wantLevel: validation.LevelWarning,
 		},
 	}
@@ -94,9 +169,8 @@ func BenchmarkProcessEventValidationPolicy(b *testing.B) {
 			result, err := pipeline.ProcessEvent(event)
 			assert.NoError(err)
 			matching := issuesWithCode(result.Validation().Findings, validation.AttributeWrongType.String())
-			if benchmark.wantSuppression {
+			if benchmark.wantLevel == validation.LevelIgnored {
 				assert.Empty(matching)
-				assert.Equal(1, result.Validation().SuppressedErrorCount)
 			} else {
 				assert.Len(matching, 1)
 				assert.Equal(benchmark.wantLevel, matching[0].Level)
@@ -178,14 +252,14 @@ func BenchmarkProcessEventEnrichmentRemoval(b *testing.B) {
 
 func BenchmarkProcessEventIssueReporting(b *testing.B) {
 	benchmarks := []struct {
-		name        string
-		suppression PipelineOption
+		name   string
+		policy PipelineOption
 	}{
 		{name: "reported"},
-		{name: "suppress_all", suppression: WithSuppressIssues()},
+		{name: "ignore_all", policy: WithAllIssueLevels(issue.LevelIgnored)},
 		{
-			name:        "suppress_selected",
-			suppression: WithSuppressIssues(issue.EnrichmentEnumSiblingNotAdded),
+			name:   "ignore_selected",
+			policy: WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored),
 		},
 	}
 	for _, benchmark := range benchmarks {
@@ -193,8 +267,8 @@ func BenchmarkProcessEventIssueReporting(b *testing.B) {
 			assert := require.New(b)
 			schema := makeValidationTestSchema(assert)
 			options := []PipelineOption{WithEnumSiblings(enrichment.Add), WithObservables(enrichment.None)}
-			if benchmark.suppression != nil {
-				options = append(options, benchmark.suppression)
+			if benchmark.policy != nil {
+				options = append(options, benchmark.policy)
 			}
 			pipeline := mustNewPipeline(assert, schema, options...)
 			event := validValidationEvent()
@@ -212,16 +286,16 @@ func BenchmarkProcessEventIssueReporting(b *testing.B) {
 	}
 }
 
-func BenchmarkProcessEventIssueSuppressionCleanPath(b *testing.B) {
+func BenchmarkProcessEventIgnoredIssueCleanPath(b *testing.B) {
 	benchmarks := []struct {
 		name    string
 		options []PipelineOption
 	}{
 		{name: "collect_all"},
-		{name: "suppress_all", options: []PipelineOption{WithSuppressIssues()}},
+		{name: "ignore_all", options: []PipelineOption{WithAllIssueLevels(issue.LevelIgnored)}},
 		{
-			name:    "suppress_selected",
-			options: []PipelineOption{WithSuppressIssues(issue.EnrichmentEnumSiblingNotAdded)},
+			name:    "ignore_selected",
+			options: []PipelineOption{WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored)},
 		},
 	}
 	for _, benchmark := range benchmarks {
@@ -519,13 +593,13 @@ func BenchmarkProcessEventEnumSiblingRemovalFinding(b *testing.B) {
 	}
 }
 
-func BenchmarkProcessEventEnumSiblingRemovalFindingSuppressed(b *testing.B) {
+func BenchmarkProcessEventEnumSiblingRemovalFindingIgnored(b *testing.B) {
 	assert := require.New(b)
 	schema := makeValidationTestSchema(assert)
 	pipeline := mustNewPipeline(assert, schema,
 		WithEnumSiblings(enrichment.Remove),
 		WithObservables(enrichment.None),
-		WithSuppressIssues(issue.EnrichmentRemovalEnumSiblingNotRemoved),
+		WithIssueLevel(issue.EnrichmentRemovalEnumSiblingNotRemoved, issue.LevelIgnored),
 	)
 	event := validValidationEvent()
 	event["mode_id"] = json.Number("1")

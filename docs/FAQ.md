@@ -10,6 +10,12 @@ Processing-result messages preserve ordinary graphic Unicode but render control 
 
 `metadata.uid` is the one event-supplied value that may be used for correlation in a returned Go error. OCSF defines it as the event's unique identifier, and producers should treat it as an opaque identifier rather than placing sensitive content in it. Attribute paths and attribute names are also diagnostic identifiers and may appear in results. If either behavior is unsuitable for an environment, apply the appropriate logging controls or open an issue to discuss the use case.
 
+## How do issue and validation error levels differ?
+
+All processing issues default to `warning`. Warning-level issues are collected in the successful processing result. An ignorable issue may instead be omitted, while elevating an issue to `error` stops processing at the first matching issue and returns a `ProcessingIssueError`. As with any non-nil `ProcessEvent` error, the accompanying result is the zero value, although earlier in-place event mutations are not rolled back.
+
+Validation findings are different. Their toolkit defaults vary by validation code, and warning-level and error-level findings are both accumulated in the validation result. An error-level validation finding does not make `ProcessEvent` return a Go error or stop validation at the first finding. This lets one pass report every validation problem it encounters. Library callers decide how to handle the collected levels; the CLI exits nonzero for collected error-level findings only when `--fail-on-validation-errors` is selected.
+
 ## What does `issue_event_traversal_limited` mean?
 
 OCSF object definitions can be recursive, such as a file with a parent file or a person whose LDAP manager is another person. OCSF Toolkit permits useful recursive relationships, but stops descending when the current object attribute name already appears earlier on the active event path. The repeated object attribute is encountered and reported as the traversal boundary, but the object stored in that attribute is treated as opaque: none of its attributes are enriched, removed, or validated.
@@ -37,15 +43,40 @@ When an event reaches this boundary, the processing report contains at most one 
 
 This issue describes an internal processing limitation, not proof that the event is invalid. It therefore appears in top-level `issues`, including for a validation-only operation, and is not duplicated in `validation.warnings` or `validation.errors`. Enrichment, enrichment removal, and validation may all be incomplete below the reported boundary.
 
-Consumers that intentionally accept this processing depth can route or ignore the issue by its stable `issue_event_traversal_limited` code. The toolkit's issue-suppression options do not suppress it because it reports incomplete processing rather than a tolerable processor-specific condition.
+Consumers can route this condition by its stable `issue_event_traversal_limited` code. The toolkit does not allow its level to be set to ignored because it reports incomplete processing rather than a tolerable processor-specific condition.
 
 See [Recursive objects](event-processing.md#recursive-objects) for the language-neutral traversal rule.
 
+## How do I report missing recommended attributes?
+
+The `validation_attribute_recommended_missing` code defaults to `ignored` because recommended attributes are optional. The validator skips this check unless policy sets the code, or an applicable all-code baseline, to `warning` or `error`. Set its level explicitly when an environment wants to report or reject their absence:
+
+```sh
+ocsf-toolkit \
+  --schema ocsf-schema.json \
+  --event event.json \
+  --validate \
+  --validation-level validation_attribute_recommended_missing=warning
+```
+
+The corresponding Go configuration is:
+
+```go
+eventpipeline.WithValidation(
+	eventpipeline.WithValidationLevel(
+		validation.AttributeRecommendedMissing,
+		validation.LevelWarning,
+	),
+)
+```
+
+Use `error` instead of `warning` when absence should be an error-level validation finding. As with other validation errors, the CLI changes its exit status only when `--fail-on-validation-errors` is also selected.
+
 ## With the CLI, why do I see initialization issues when I use `--quiet`?
 
-`--quiet` suppresses the default directory summary on stdout. It does not suppress diagnostics written to stderr. Initialization issues describe nonfatal problems found while preparing the compiled schema for event processing, before any event is read, so the CLI writes each unsuppressed issue to stderr in both single-event and directory modes. Summary files also include these issues as durable run-level diagnostics, but individual event reports do not because the condition belongs to the schema rather than an event.
+`--quiet` suppresses the default directory summary on stdout. It does not suppress diagnostics written to stderr. Initialization issues describe nonfatal problems found while preparing the compiled schema for event processing, before any event is read, so the CLI writes each non-ignored issue to stderr in both single-event and directory modes. Summary files also include these issues as durable run-level diagnostics, but individual event reports do not because the condition belongs to the schema rather than an event.
 
-To silence an initialization issue, suppress its stable `issue_at_init_*` code with `--suppress-issues`. Enum-sibling initialization distinguishes an ineligible source (`issue_at_init_schema_enum_sibling_source_not_integral`), a missing target (`issue_at_init_schema_enum_sibling_target_not_found`), an enum target (`issue_at_init_schema_enum_sibling_target_is_enum`), and a target without the required direct string type and matching scalar/array shape (`issue_at_init_schema_enum_sibling_target_not_string`). For example, `--suppress-issues=issue_at_init_schema_enum_sibling_target_not_string` accepts that known processing limitation. Suppression is explicit because quiet output and accepting a known limitation are separate choices.
+To silence an initialization issue, set its stable `issue_at_init_*` code to ignored with `--issue-level ISSUE_CODE=ignored`. Enum-sibling initialization distinguishes an ineligible source (`issue_at_init_schema_enum_sibling_source_not_integral`), a missing target (`issue_at_init_schema_enum_sibling_target_not_found`), an enum target (`issue_at_init_schema_enum_sibling_target_is_enum`), and a target without the required direct string type and matching scalar/array shape (`issue_at_init_schema_enum_sibling_target_not_string`). For example, `--issue-level issue_at_init_schema_enum_sibling_target_not_string=ignored` accepts that known processing limitation. Level policy is explicit because quiet output and accepting a known limitation are separate choices; setting the code to error instead aborts schema setup.
 
 ## Why does directory output use separate `events/` and `reports/` subdirectories?
 

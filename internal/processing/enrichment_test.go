@@ -757,7 +757,7 @@ func TestValidationProcessesScalarEnumAndSiblingTogether(t *testing.T) {
 			assert,
 			schema,
 			NewEnrichment(WithAddObservables(false)),
-			NewValidation(WithWarnOnMissingRecommended()),
+			NewValidation(WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelWarning)),
 		)
 
 		result, err := pipeline.ProcessEvent(event)
@@ -774,7 +774,9 @@ func TestValidationProcessesScalarEnumAndSiblingTogether(t *testing.T) {
 		assert := require.New(t)
 		event := validValidationEvent()
 		event["mode_id"] = json.Number("1")
-		pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation(WithWarnOnMissingRecommended()))
+		pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation(
+			WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelWarning),
+		))
 
 		result, err := pipeline.ProcessEvent(event)
 
@@ -790,7 +792,9 @@ func TestValidationProcessesScalarEnumAndSiblingTogether(t *testing.T) {
 	t.Run("sibling requirement does not apply without enum", func(t *testing.T) {
 		assert := require.New(t)
 		event := validValidationEvent()
-		pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation(WithWarnOnMissingRecommended()))
+		pipeline := mustNewEventProcessorPipeline(assert, schema, NewValidation(
+			WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelWarning),
+		))
 
 		result, err := pipeline.ProcessEvent(event)
 

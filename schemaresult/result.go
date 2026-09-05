@@ -11,7 +11,7 @@ type InitializationIssue struct {
 	_ struct{}
 
 	// Code is a short machine-readable issue identifier suitable for searching, grouping, metrics, and structured logs.
-	Code issue.IssueCode `json:"code"`
+	Code issue.Code `json:"code"`
 
 	// Message is a human-readable issue description.
 	Message string `json:"message"`

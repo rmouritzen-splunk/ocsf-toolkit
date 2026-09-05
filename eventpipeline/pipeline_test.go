@@ -13,7 +13,6 @@ import (
 
 	"github.com/ocsf/ocsf-toolkit/enrichment"
 	"github.com/ocsf/ocsf-toolkit/eventresult"
-	"github.com/ocsf/ocsf-toolkit/internal/processing"
 	"github.com/ocsf/ocsf-toolkit/internal/schema"
 	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
@@ -21,26 +20,33 @@ import (
 	"github.com/ocsf/ocsf-toolkit/validation"
 )
 
-func TestPipelineOwnsPublicMethodSet(t *testing.T) {
-	publicType := reflect.TypeFor[Pipeline]()
-	require.Equal(t, 1, publicType.NumField())
-	require.Equal(t, reflect.TypeFor[*processing.Pipeline](), publicType.Field(0).Type)
-
-	publicPointerType := reflect.TypeFor[*Pipeline]()
-	require.Equal(t, 1, publicPointerType.NumMethod())
-	_, ok := publicPointerType.MethodByName("ProcessEvent")
-	require.True(t, ok)
+func TestEngineeringInvariantPipelineAndProcessingResultStateRemainPrivate(t *testing.T) {
+	// Engineering invariant test: Pipeline and ProcessingResult remain opaque concrete values while their private
+	// representations and public method sets may grow without changing existing callers.
+	for _, publicType := range []reflect.Type{reflect.TypeFor[Pipeline](), reflect.TypeFor[ProcessingResult]()} {
+		require.Equal(t, reflect.Struct, publicType.Kind())
+		for fieldIndex := range publicType.NumField() {
+			require.NotEmptyf(
+				t,
+				publicType.Field(fieldIndex).PkgPath,
+				"%s field %s must remain unexported",
+				publicType.Name(),
+				publicType.Field(fieldIndex).Name,
+			)
+		}
+	}
 }
 
-func TestProcessingResultIsOpaqueConcreteValueWithAccessors(t *testing.T) {
-	resultType := reflect.TypeFor[ProcessingResult]()
-	require.Equal(t, 1, resultType.NumField())
-	require.NotEmpty(t, resultType.Field(0).PkgPath, "the result state must remain unexported")
+func TestRemovedSuppressionCountsRemainAbsent(t *testing.T) {
+	processingResultType := reflect.TypeFor[ProcessingResult]()
+	_, hasSuppressedIssueCount := processingResultType.MethodByName("SuppressedIssueCount")
+	require.False(t, hasSuppressedIssueCount)
 
-	for _, method := range []string{"Validation", "Enrichment", "EnrichmentRemoval", "Issues", "SuppressedIssueCount"} {
-		_, ok := resultType.MethodByName(method)
-		require.Truef(t, ok, "ProcessingResult.%s is missing", method)
-	}
+	validationResultType := reflect.TypeFor[eventresult.ValidationResult]()
+	_, hasIgnoredErrorCount := validationResultType.FieldByName("IgnoredErrorCount")
+	require.False(t, hasIgnoredErrorCount)
+	_, hasIgnoredWarningCount := validationResultType.FieldByName("IgnoredWarningCount")
+	require.False(t, hasIgnoredWarningCount)
 }
 
 func TestProcessingResultDoesNotImplementJSONUnmarshaler(t *testing.T) {
@@ -56,8 +62,6 @@ func TestProcessingResultJSONMarshalPreservesStableShape(t *testing.T) {
 				Code:    validation.AttributeRequiredMissing,
 				Message: "required attribute is missing",
 			}},
-			SuppressedErrorCount:   1,
-			SuppressedWarningCount: 2,
 		},
 		enrichment: eventresult.EnrichmentResult{EnumSiblingsAdded: 2, ObservablesAdded: 3},
 		enrichmentRemoval: eventresult.EnrichmentRemovalResult{
@@ -71,7 +75,6 @@ func TestProcessingResultJSONMarshalPreservesStableShape(t *testing.T) {
 			Code:    issue.EventTraversalLimited,
 			Message: "processing was limited",
 		}},
-		suppressedIssues: 8,
 	}}
 
 	encoded, err := json.Marshal(original)
@@ -79,12 +82,11 @@ func TestProcessingResultJSONMarshalPreservesStableShape(t *testing.T) {
 	require.JSONEq(t, `{
 		"validation":{"findings":[
 			{"level":"error","code":"validation_attribute_required_missing","message":"required attribute is missing"}
-		],"suppressed_error_count":1,"suppressed_warning_count":2},
+		]},
 		"enrichment":{"enum_siblings_added":2,"observables_added":3},
 		"enrichment_removal":{"enum_siblings_removed":4,"enum_siblings_retained":5,
 			"observables_removed":6,"observables_retained":7},
-		"issues":[{"source":"processing","code":"issue_event_traversal_limited","message":"processing was limited"}],
-		"suppressed_issue_count":8
+		"issues":[{"source":"processing","code":"issue_event_traversal_limited","message":"processing was limited"}]
 	}`, string(encoded))
 }
 
@@ -138,65 +140,11 @@ func TestNewPipelineRejectsInvalidConfigurations(t *testing.T) {
 			options: []PipelineOption{WithValidation(WithValidationObservablePathNotation(pathstyle.Style("invalid")))},
 			wantErr: `validation has invalid observable path notation "invalid"`,
 		},
-		{
-			name: "unknown typed issue suppression code",
-			options: []PipelineOption{
-				WithEnumSiblings(enrichment.Add),
-				WithSuppressIssues(issue.IssueCode(255)),
-			},
-			wantErr: "issue suppression has unknown issue codes: 255",
-		},
-		{
-			name: "unknown string issue suppression code",
-			options: []PipelineOption{
-				WithEnumSiblings(enrichment.Remove),
-				WithSuppressIssuesByStrings("issue_unknown_z", "issue_unknown_a"),
-			},
-			wantErr: `issue suppression has unknown issue codes: "issue_unknown_a", "issue_unknown_z"`,
-		},
-		{
-			name: "mandatory issue suppression code",
-			options: []PipelineOption{
-				WithEnumSiblings(enrichment.Add),
-				WithSuppressIssues(issue.EventTraversalLimited),
-			},
-			wantErr: "issue suppression cannot suppress mandatory issue codes: issue_event_traversal_limited",
-		},
-		{
-			name: "mandatory class resolution issue suppression code",
-			options: []PipelineOption{
-				WithEnumSiblings(enrichment.Add),
-				WithSuppressIssues(issue.ClassUIDMissing),
-			},
-			wantErr: "issue suppression cannot suppress mandatory issue codes: issue_class_uid_missing",
-		},
-		{
-			name: "unknown validation policy code",
-			options: []PipelineOption{WithValidation(
-				WithSuppressValidation(validation.Code(255)),
-			)},
-			wantErr: "validation policy has unknown validation code 255",
-		},
-		{
-			name: "mandatory validation suppression code",
-			options: []PipelineOption{WithValidation(
-				WithSuppressValidation(validation.ClassUIDMissing),
-			)},
-			wantErr: "validation policy cannot suppress mandatory validation codes: validation_class_uid_missing",
-		},
-		{
-			name: "conflicting validation policy actions",
-			options: []PipelineOption{WithValidation(
-				WithSuppressValidation(validation.AttributeRequiredMissing),
-				WithValidationErrorsAsWarnings(validation.AttributeRequiredMissing),
-			)},
-			wantErr: "validation policy has conflicting actions for validation_attribute_required_missing",
-		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pipeline, err := newPipelineForSchema(&Schema{}, test.options...)
+			pipeline, err := newPipelineForSchema(newSchema(&schema.Compiled{}), test.options...)
 
 			require.EqualError(t, err, test.wantErr)
 			require.Nil(t, pipeline)
@@ -204,7 +152,7 @@ func TestNewPipelineRejectsInvalidConfigurations(t *testing.T) {
 	}
 }
 
-func TestValidationPolicyChangesLevelsAndTracksSuppressionByDefaultLevel(t *testing.T) {
+func TestValidationPolicyChangesLevelsAndIgnoresConfiguredFindings(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	newEvent := func() jsonish.Map {
@@ -223,9 +171,8 @@ func TestValidationPolicyChangesLevelsAndTracksSuppressionByDefaultLevel(t *test
 	}
 
 	result, err := mustNewPipeline(assert, schema, WithValidation(
-		WithWarnOnMissingRecommended(),
-		WithValidationErrorsAsWarnings(validation.AttributeRequiredMissing),
-		WithValidationWarningsAsErrors(validation.AttributeRecommendedMissing),
+		WithValidationLevel(validation.AttributeRequiredMissing, validation.LevelWarning),
+		WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelError),
 	)).ProcessEvent(newEvent())
 	assert.NoError(err)
 	required, present := find(result, validation.AttributeRequiredMissing)
@@ -236,30 +183,25 @@ func TestValidationPolicyChangesLevelsAndTracksSuppressionByDefaultLevel(t *test
 	assert.Equal(validation.LevelError, recommended.Level)
 
 	result, err = mustNewPipeline(assert, schema, WithValidation(
-		WithWarnOnMissingRecommended(),
-		WithSuppressValidation(validation.AttributeRequiredMissing, validation.AttributeRecommendedMissing),
+		WithValidationLevel(validation.AttributeRequiredMissing, validation.LevelIgnored),
+		WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelIgnored),
 	)).ProcessEvent(newEvent())
 	assert.NoError(err)
 	_, present = find(result, validation.AttributeRequiredMissing)
 	assert.False(present)
 	_, present = find(result, validation.AttributeRecommendedMissing)
 	assert.False(present)
-	assert.Equal(1, result.Validation().SuppressedErrorCount)
-	assert.Equal(1, result.Validation().SuppressedWarningCount)
 
 	result, err = mustNewPipeline(assert, schema, WithValidation(
-		WithWarnOnMissingRecommended(),
-		WithSuppressValidation(),
+		WithAllValidationLevels(validation.LevelIgnored),
+		WithValidationLevel(validation.AttributeDeprecated, validation.LevelWarning),
 	)).ProcessEvent(newEvent())
 	assert.NoError(err)
 	assert.Empty(result.Validation().Findings)
-	assert.GreaterOrEqual(result.Validation().SuppressedErrorCount, 1)
-	assert.Equal(1, result.Validation().SuppressedWarningCount)
 
 	result, err = mustNewPipeline(assert, schema, WithValidation(
-		WithWarnOnMissingRecommended(),
-		WithValidationErrorsAsWarnings(),
-		WithValidationWarningsAsErrors(),
+		WithValidationLevel(validation.AttributeRequiredMissing, validation.LevelWarning),
+		WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelError),
 	)).ProcessEvent(newEvent())
 	assert.NoError(err)
 	required, present = find(result, validation.AttributeRequiredMissing)
@@ -270,6 +212,39 @@ func TestValidationPolicyChangesLevelsAndTracksSuppressionByDefaultLevel(t *test
 	assert.Equal(validation.LevelError, recommended.Level)
 }
 
+func TestInvariantRecommendedMissingDefaultsToIgnoredAndCanBeEnabledByLevel(t *testing.T) {
+	// Invariant test: validation skips missing recommended attributes at the default ignored level and reports them
+	// only when validation-level policy enables them as warning or error.
+	assert := require.New(t)
+	schema := makeValidationTestSchema(assert)
+	newEvent := func() jsonish.Map {
+		event := validValidationEvent()
+		delete(event, "red")
+		return event
+	}
+	findRecommendedMissing := func(result ProcessingResult) (eventresult.ValidationFinding, bool) {
+		for _, finding := range result.Validation().Findings {
+			if finding.Code == validation.AttributeRecommendedMissing {
+				return finding, true
+			}
+		}
+		return eventresult.ValidationFinding{}, false
+	}
+
+	result, err := mustNewPipeline(assert, schema, WithValidation()).ProcessEvent(newEvent())
+	assert.NoError(err)
+	_, present := findRecommendedMissing(result)
+	assert.False(present)
+
+	result, err = mustNewPipeline(assert, schema, WithValidation(
+		WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelWarning),
+	)).ProcessEvent(newEvent())
+	assert.NoError(err)
+	finding, present := findRecommendedMissing(result)
+	assert.True(present)
+	assert.Equal(validation.LevelWarning, finding.Level)
+}
+
 func TestValidationLevelPolicyAcceptsExplicitCurrentDefault(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
@@ -278,9 +253,8 @@ func TestValidationLevelPolicyAcceptsExplicitCurrentDefault(t *testing.T) {
 	delete(event, "red")
 
 	result, err := mustNewPipeline(assert, schema, WithValidation(
-		WithWarnOnMissingRecommended(),
-		WithValidationWarningsAsErrors(validation.AttributeRequiredMissing),
-		WithValidationErrorsAsWarnings(validation.AttributeRecommendedMissing),
+		WithValidationLevel(validation.AttributeRequiredMissing, validation.LevelError),
+		WithValidationLevel(validation.AttributeRecommendedMissing, validation.LevelWarning),
 	)).ProcessEvent(event)
 
 	assert.NoError(err)
@@ -294,57 +268,25 @@ func TestValidationLevelPolicyAcceptsExplicitCurrentDefault(t *testing.T) {
 	}
 }
 
-func TestIssueSuppressionOptionsUseLastValueAndCopyCodes(t *testing.T) {
-	assert := require.New(t)
-	schema := makeValidationTestSchema(assert)
-	selected := []issue.IssueCode{issue.EnrichmentEnumSiblingOtherAdded}
-	selection := WithSuppressIssues(selected...)
-	selected[0] = issue.EnrichmentEnumSiblingNotAdded
+func TestIssueLevelOptionsRejectRepeatedCode(t *testing.T) {
+	schema := makeValidationTestSchema(require.New(t))
 
-	pipeline := mustNewPipeline(assert, schema,
+	pipeline, err := NewPipeline(
+		WithSchema(schema),
 		WithEnumSiblings(enrichment.Add),
 		WithObservables(enrichment.None),
-		WithSuppressIssues(),
-		selection,
+		WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelWarning),
+		WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored),
 	)
-	event := validValidationEvent()
-	event["activity_id"] = json.Number("1234")
 
-	result, err := pipeline.ProcessEvent(event)
-
-	assert.NoError(err)
-	assert.Len(result.Issues(), 1, "the last option suppresses only the copied enum-other code")
-	assert.Equal(issue.EnrichmentEnumSiblingNotAdded, result.Issues()[0].Code)
-
-	pipeline = mustNewPipeline(assert, schema,
-		WithEnumSiblings(enrichment.Add),
-		WithObservables(enrichment.None),
-		WithSuppressIssuesByStrings(issue.EnrichmentEnumSiblingNotAdded.String()),
-		WithSuppressIssues(),
-	)
-	event = validValidationEvent()
-	event["activity_id"] = json.Number("1234")
-	result, err = pipeline.ProcessEvent(event)
-
-	assert.NoError(err)
-	assert.Empty(result.Issues(), "the final empty list suppresses every suppressible issue")
-	assert.Equal(1, result.SuppressedIssueCount())
-
-	pipeline = mustNewPipeline(assert, schema,
-		WithEnumSiblings(enrichment.Add),
-		WithObservables(enrichment.None),
-		WithSuppressIssuesByStrings(issue.EnrichmentEnumSiblingNotAdded.String()),
-	)
-	event = validValidationEvent()
-	event["activity_id"] = json.Number("1234")
-	result, err = pipeline.ProcessEvent(event)
-
-	assert.NoError(err)
-	assert.Empty(result.Issues(), "the string-based option suppresses its selected issue")
-	assert.Equal(1, result.SuppressedIssueCount())
+	require.Nil(t, pipeline)
+	var duplicate *PipelineOptionIssueLevelDuplicateCodeError
+	require.ErrorAs(t, err, &duplicate)
+	require.Equal(t, issue.EnrichmentEnumSiblingNotAdded, duplicate.Code())
+	require.Equal(t, PipelineOptionIssueLevel, duplicate.Option())
 }
 
-func TestIssueSuppressionDoesNotChangeEnrichmentRemovalResults(t *testing.T) {
+func TestIgnoredIssueDoesNotChangeEnrichmentRemovalResults(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	event := validValidationEvent()
@@ -354,17 +296,16 @@ func TestIssueSuppressionDoesNotChangeEnrichmentRemovalResults(t *testing.T) {
 	result, err := mustNewPipeline(assert, schema,
 		WithEnumSiblings(enrichment.Remove),
 		WithObservables(enrichment.None),
-		WithSuppressIssues(),
+		WithAllIssueLevels(issue.LevelIgnored),
 	).ProcessEvent(event)
 
 	assert.NoError(err)
 	assert.Equal("source-specific", event["activity_name"])
 	assert.Equal(1, result.EnrichmentRemoval().EnumSiblingsRetained)
 	assert.Empty(result.Issues())
-	assert.Equal(1, result.SuppressedIssueCount())
 }
 
-func TestWithSuppressIssuesSuppressesNoneOneMultipleAndAllCodes(t *testing.T) {
+func TestIssueLevelsIgnoreNoneOneMultipleAndAllCodes(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	newEvent := func() jsonish.Map {
@@ -376,14 +317,14 @@ func TestWithSuppressIssuesSuppressesNoneOneMultipleAndAllCodes(t *testing.T) {
 		}
 		return event
 	}
-	issueCodesFor := func(options ...PipelineOption) []issue.IssueCode {
+	issueCodesFor := func(options ...PipelineOption) []issue.Code {
 		pipeline := mustNewPipeline(assert, schema, append([]PipelineOption{
 			WithEnumSiblings(enrichment.Add),
 			WithObservables(enrichment.Add),
 		}, options...)...)
 		result, err := pipeline.ProcessEvent(newEvent())
 		assert.NoError(err)
-		codes := make([]issue.IssueCode, len(result.Issues()))
+		codes := make([]issue.Code, len(result.Issues()))
 		for i, found := range result.Issues() {
 			codes[i] = found.Code
 		}
@@ -391,24 +332,25 @@ func TestWithSuppressIssuesSuppressesNoneOneMultipleAndAllCodes(t *testing.T) {
 	}
 
 	assert.ElementsMatch(
-		[]issue.IssueCode{issue.EnrichmentEnumSiblingNotAdded, issue.EnrichmentObservableDuplicateSkipped},
+		[]issue.Code{issue.EnrichmentEnumSiblingNotAdded, issue.EnrichmentObservableDuplicateSkipped},
 		issueCodesFor(),
-		"suppressing none reports every suppressible issue",
+		"ignoring none reports every ignorable issue",
 	)
 	assert.ElementsMatch(
-		[]issue.IssueCode{issue.EnrichmentObservableDuplicateSkipped},
-		issueCodesFor(WithSuppressIssues(issue.EnrichmentEnumSiblingNotAdded)),
-		"suppressing one code leaves the other reported",
+		[]issue.Code{issue.EnrichmentObservableDuplicateSkipped},
+		issueCodesFor(WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored)),
+		"ignoring one code leaves the other reported",
 	)
 	assert.Empty(
 		issueCodesFor(
-			WithSuppressIssues(issue.EnrichmentEnumSiblingNotAdded, issue.EnrichmentObservableDuplicateSkipped),
+			WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelIgnored),
+			WithIssueLevel(issue.EnrichmentObservableDuplicateSkipped, issue.LevelIgnored),
 		),
-		"suppressing multiple selected codes suppresses each of them",
+		"ignoring multiple selected codes ignores each of them",
 	)
 	assert.Empty(
-		issueCodesFor(WithSuppressIssues()),
-		"suppressing with an empty list suppresses every suppressible issue",
+		issueCodesFor(WithAllIssueLevels(issue.LevelIgnored)),
+		"an all-code ignored level omits every ignorable issue",
 	)
 }
 
@@ -425,17 +367,14 @@ func TestNewPipelineValidatesSelectedObservableTypeIDs(t *testing.T) {
 	assert.EqualError(err, "enrichment processor has unknown observable type IDs: -1, 3000")
 }
 
-func TestWithObservablesCopiesIDsAndLastOptionWins(t *testing.T) {
+func TestWithObservablesCopiesIDs(t *testing.T) {
 	assert := require.New(t)
 	schema := makeTestSchema(assert)
 	selected := []int64{1000}
 	selection := WithObservables(enrichment.Add, selected...)
 	selected[0] = 3000
 
-	pipeline, err := newPipelineForSchema(schema,
-		WithObservables(enrichment.Add, 3000),
-		selection,
-	)
+	pipeline, err := newPipelineForSchema(schema, selection)
 
 	assert.NoError(err)
 	event := jsonish.Map{"class_uid": json.Number("1"), "ball": jsonish.Map{"green": "go"}}
@@ -459,41 +398,101 @@ func TestNewPipelineRequiresSchema(t *testing.T) {
 	require.Nil(t, pipeline)
 }
 
-func TestWithSchemaLastOptionWins(t *testing.T) {
-	valid := makeValidationTestSchema(require.New(t))
+func TestNewPipelineReportsSchemaStateBeforeSemanticPolicyErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		schema  *Schema
+		wantErr error
+	}{
+		{name: "missing", wantErr: errSchemaNotConfigured},
+		{name: "uninitialized", schema: &Schema{}, wantErr: errUninitializedSchema},
+	}
 
-	pipeline, err := NewPipeline(
-		WithSchema(&Schema{}),
-		WithSchema(valid),
-		WithValidation(),
-	)
-	require.NoError(t, err)
-	require.NotNil(t, pipeline)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := []PipelineOption{
+				WithValidation(WithValidationLevel(validation.Code(255), validation.LevelWarning)),
+			}
+			if test.schema != nil {
+				options = append([]PipelineOption{WithSchema(test.schema)}, options...)
+			}
 
-	pipeline, err = NewPipeline(
-		WithSchema(valid),
-		WithSchema(&Schema{}),
-		WithValidation(),
-	)
-	require.ErrorIs(t, err, errUninitializedSchema)
-	require.Nil(t, pipeline)
+			pipeline, err := NewPipeline(options...)
+
+			require.ErrorIs(t, err, test.wantErr)
+			require.Nil(t, pipeline)
+		})
+	}
 }
 
-func TestNewPipelineReportsAllConfigurationProblems(t *testing.T) {
+func TestPipelineOptionsRejectDuplicateSingletons(t *testing.T) {
+	valid := makeValidationTestSchema(require.New(t))
+
+	for _, test := range []struct {
+		name    string
+		options []PipelineOption
+		option  PipelineOptionName
+	}{
+		{
+			name:    "schema",
+			options: []PipelineOption{WithSchema(valid), WithSchema(valid), WithValidation()},
+			option:  PipelineOptionSchema,
+		},
+		{
+			name: "enum siblings",
+			options: []PipelineOption{
+				WithSchema(valid), WithEnumSiblings(enrichment.Add), WithEnumSiblings(enrichment.Remove),
+			},
+			option: PipelineOptionEnumSiblings,
+		},
+		{
+			name: "observables",
+			options: []PipelineOption{
+				WithSchema(valid), WithObservables(enrichment.Add), WithObservables(enrichment.Remove),
+			},
+			option: PipelineOptionObservables,
+		},
+		{
+			name: "enrichment observable path notation",
+			options: []PipelineOption{
+				WithSchema(valid),
+				WithObservables(enrichment.Add),
+				WithEnrichmentObservablePathNotation(pathstyle.Simple),
+				WithEnrichmentObservablePathNotation(pathstyle.ArrayIndexed),
+			},
+			option: PipelineOptionEnrichmentObservablePathNotation,
+		},
+		{
+			name:    "validation",
+			options: []PipelineOption{WithSchema(valid), WithValidation(), WithValidation()},
+			option:  PipelineOptionValidation,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pipeline, err := NewPipeline(test.options...)
+
+			require.Nil(t, pipeline)
+			var duplicate *PipelineOptionDuplicateError
+			require.ErrorAs(t, err, &duplicate)
+			require.Equal(t, test.option, duplicate.Option())
+		})
+	}
+}
+
+func TestNewPipelineReportsFirstConfigurationProblem(t *testing.T) {
 	pipeline, err := newPipelineForSchema(newSchema(&schema.Compiled{}),
 		WithObservables(enrichment.None, 1000),
 		WithEnrichmentObservablePathNotation(pathstyle.ArrayIndexed),
-		WithSuppressIssues(issue.IssueCode(255)),
+		WithIssueLevel(issue.Code(255), issue.LevelWarning),
 	)
 
 	require.Nil(t, pipeline)
-	require.EqualError(t, err, "at least one event processing action is required\n"+
-		"observable path notation is configured without adding observables\n"+
-		"observable type IDs are configured without adding observables\n"+
-		"issue suppression has unknown issue codes: 255")
-	joined, ok := err.(interface{ Unwrap() []error })
-	require.True(t, ok)
-	require.Len(t, joined.Unwrap(), 4)
+	require.EqualError(t, err, "at least one event processing action is required")
+	_, ok := err.(interface{ Unwrap() []error })
+	require.False(t, ok)
+	require.NotContains(t, err.Error(), "observable path notation is configured without adding observables")
+	require.NotContains(t, err.Error(), "observable type IDs are configured without adding observables")
+	require.NotContains(t, err.Error(), "issue policy has unknown issue code 255")
 }
 
 func TestNewPipelineAllowsDifferentEnumSiblingsAndObservablesActions(t *testing.T) {
@@ -634,7 +633,7 @@ func TestPipelineStopsAfterRepeatedObjectAttribute(t *testing.T) {
 	pipeline := mustNewPipeline(assert, compiledSchema,
 		WithEnumSiblings(enrichment.Add),
 		WithObservables(enrichment.Add),
-		WithSuppressIssues(),
+		WithAllIssueLevels(issue.LevelIgnored),
 		WithValidation(),
 	)
 	recursivePerson := func() jsonish.Map {
@@ -726,6 +725,58 @@ func TestPipelineStopsAfterRepeatedObjectAttribute(t *testing.T) {
 	observableTraversalIssues := issuesWithCode(observableRemovalOnlyResult.Issues(), "issue_event_traversal_limited")
 	assert.Len(observableTraversalIssues, 1)
 	assert.Equal("observables[0]", observableTraversalIssues[0].Details["attribute_path"])
+}
+
+func TestEngineeringInvariantErrorLevelObservableTraversalIssueStopsProcessing(t *testing.T) {
+	// Engineering invariant test: a mandatory traversal-limit issue promoted to error must stop processing and return
+	// a ProcessingIssueError regardless of whether schema walking or observable analysis detects the limit.
+	assert := require.New(t)
+	personType := "person"
+	objectAttribute := func(objectType string) *itemAttributeDefinition {
+		return &itemAttributeDefinition{CommonAttributeDefinition: commonAttributeDefinition{
+			Type:       "object_t",
+			ObjectType: &objectType,
+		}}
+	}
+	loaded := newSchema(&schema.Compiled{
+		Classes: map[int64]*classDefinition{1: {
+			Uid: 1,
+			ItemDefinition: commonItemDefinition{Attributes: map[string]*itemAttributeDefinition{
+				"class_uid": {CommonAttributeDefinition: commonAttributeDefinition{Type: "integer_t"}},
+				"person":    objectAttribute(personType),
+			}},
+		}},
+		Objects: map[string]*objectDefinition{personType: {
+			ItemDefinition: commonItemDefinition{Attributes: map[string]*itemAttributeDefinition{
+				"manager": objectAttribute(personType),
+			}},
+		}},
+		Dictionary: &dictionaryDefinition{
+			Attributes: map[string]*commonAttributeDefinition{},
+			Types:      &typesDefinition{Attributes: map[string]*typeDefinition{}},
+		},
+	})
+	pipeline := mustNewPipeline(assert, loaded,
+		WithIssueLevel(issue.EventTraversalLimited, issue.LevelError),
+		WithValidation(
+			WithAllValidationLevels(validation.LevelIgnored),
+			WithValidationLevel(validation.ObservablePathNotFound, validation.LevelWarning),
+		),
+	)
+	event := jsonish.Map{
+		"class_uid": 1,
+		"observables": []any{jsonish.Map{
+			"name": "person.manager.manager.manager",
+		}},
+	}
+
+	result, err := pipeline.ProcessEvent(event)
+
+	assert.Equal(ProcessingResult{}, result)
+	var issueErr *ProcessingIssueError
+	assert.ErrorAs(err, &issueErr)
+	assert.Equal(issue.EventTraversalLimited, issueErr.Issue().Code)
+	assert.Equal(issue.SourceProcessing, issueErr.Issue().Source)
 }
 
 func TestPipelineConstructionIsConcurrent(t *testing.T) {

@@ -2,6 +2,7 @@
 package eventpath
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/ocsf/ocsf-toolkit/internal/pathseq"
@@ -174,7 +175,7 @@ func (p *Path) render(
 			}
 			attributeWritten = true
 		case elementArrayIndex:
-			style.AppendArrayNotation(&builder, element.index)
+			appendArrayNotation(&builder, style, element.index)
 		}
 	}
 	if appendAttribute {
@@ -186,8 +187,26 @@ func (p *Path) render(
 	return builder.String()
 }
 
-// maxArrayNotationLength upper-bounds Style.AppendArrayNotation's output across every style, including
-// the widest indexed/JSONPath case ("[" + a 64-bit index's sign and digits + "]").
+// appendArrayNotation appends style's representation of an array traversal at index. Simple and
+// invalid styles append nothing.
+func appendArrayNotation(builder *strings.Builder, style pathstyle.Style, index int) {
+	switch style {
+	case pathstyle.ArrayBrackets:
+		builder.WriteString("[]")
+	case pathstyle.ArrayWildcard:
+		builder.WriteString("[*]")
+	case pathstyle.ArrayIndexed, pathstyle.JSONPath:
+		builder.WriteByte('[')
+		var buffer [20]byte
+		builder.Write(strconv.AppendInt(buffer[:0], int64(index), 10))
+		builder.WriteByte(']')
+	default:
+		// Simple, and defensively other cases, do not add any array notation.
+	}
+}
+
+// maxArrayNotationLength upper-bounds array notation across every style, including the widest
+// indexed/JSONPath case ("[" + a 64-bit index's sign and digits + "]").
 const maxArrayNotationLength = 22
 
 // estimatedRenderedLength upper-bounds render's output to pre-size its builder, trading exactness

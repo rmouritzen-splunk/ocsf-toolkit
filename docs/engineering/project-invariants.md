@@ -134,7 +134,7 @@ Authority: `DECISION-ENUM-001`; concrete class and object definitions consumed b
 
 ### TOOLKIT-CLASS-001: failed class resolution stops before mutation
 
-If `class_uid` is missing, has the wrong type, or does not resolve a class, processing reports the mandatory class-resolution issue and stops before every mutation, including forced removal. Validation additionally reports its non-suppressible class finding when enabled.
+If `class_uid` is missing, has the wrong type, or does not resolve a class, processing reports the mandatory class-resolution issue and stops before every mutation, including forced removal. Validation additionally reports its class finding when enabled unless policy ignores that validation code. The validation finding is optional; the processing issue cannot be ignored.
 
 Authority: `docs/event-processing.md`, `docs/architecture.md`, the public processing contract, and explicit maintainer confirmation on 2026-08-22 that force removal must not run without `class_uid` resolution.
 
@@ -230,7 +230,7 @@ Authority: `docs/architecture.md`, `docs/validation.md`, and the documented secu
 
 ### TOOLKIT-CODE-001: diagnostic codes are typed machine-readable identities
 
-Processing issues and validation findings carry typed codes with stable string encodings distinct from human-readable messages. Processing issue strings use the `issue_` namespace. Validation code strings use the `validation_` namespace, while effective warning or error level is separate policy rather than part of code identity. Renaming or removing an existing code is an observable contract change even when it is deliberately permitted before 1.0.
+Processing issues and validation findings carry typed codes with stable string encodings distinct from human-readable messages. Processing issue strings use the `issue_` namespace. Validation code strings use the `validation_` namespace, while effective warning or error level is separate policy rather than part of code identity. Within a stable major version, exported code names and ordinals, string encodings, default levels, and ignorable or mandatory classifications remain stable. A code that stops being emitted remains exported at its existing ordinal and is marked deprecated for the rest of that major version. New codes append rather than shifting existing ordinals. Human-readable descriptions may be clarified without changing code identity.
 
 Authority: `README.md`, `docs/architecture.md`, `docs/validation.md`, and the public `issue` and `validation` packages.
 

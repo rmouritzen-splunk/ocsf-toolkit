@@ -45,26 +45,25 @@ func (reason enumSiblingRetentionReason) String() string {
 type enrichmentSafeRemovalProcessor struct {
 	enumSiblingsEnabled bool
 	observablesEnabled  bool
-	// deferObservablesRemoval is set by pipeline construction (see NewPipeline) when a separate unit in this
+	// deferObservablesRemoval is set by pipeline construction (see NewPipelineImpl) when a separate unit in this
 	// pipeline adds enum siblings during the attribute walk. Analyzing observables against sibling data requires
 	// that walk to finish first, so this unit's observable removal moves from onClass to onClassDone instead of
 	// running ahead of its own enum-sibling removal below.
 	deferObservablesRemoval bool
-	issueSuppression        issueSuppression
 }
 
 func (p *enrichmentSafeRemovalProcessor) onClass(context *processContext, event jsonish.Map) error {
 	// Analyze and remove observables before other event mutation so references to removable enum
 	// siblings are evaluated against the original event. Validation then walks only retained entries.
 	if !p.deferObservablesRemoval {
-		return removeObservablesSafely(context, event, p.observablesEnabled, p.issueSuppression)
+		return removeObservablesSafely(context, event, p.observablesEnabled)
 	}
 	return nil
 }
 
 func (p *enrichmentSafeRemovalProcessor) onClassDone(context *processContext, item jsonish.Map) error {
 	if p.deferObservablesRemoval {
-		return removeObservablesSafely(context, item, p.observablesEnabled, p.issueSuppression)
+		return removeObservablesSafely(context, item, p.observablesEnabled)
 	}
 	return nil
 }
@@ -88,7 +87,7 @@ func (p *enrichmentSafeRemovalProcessor) onEnumSiblingPairAttributes(
 ) error {
 	return removeEnumSiblingPair(
 		context, item, enumAttributeName, enumAttrDef, siblingAttributeName,
-		p.enumSiblingsEnabled, false, p.issueSuppression,
+		p.enumSiblingsEnabled, false,
 	)
 }
 
@@ -99,7 +98,6 @@ type enrichmentForceRemovalProcessor struct {
 	enumSiblingsEnabled     bool
 	observablesEnabled      bool
 	deferObservablesRemoval bool
-	issueSuppression        issueSuppression
 }
 
 func (p *enrichmentForceRemovalProcessor) onClass(context *processContext, event jsonish.Map) {
@@ -133,7 +131,7 @@ func (p *enrichmentForceRemovalProcessor) onEnumSiblingPairAttributes(
 ) error {
 	return removeEnumSiblingPair(
 		context, item, enumAttributeName, enumAttrDef, siblingAttributeName,
-		p.enumSiblingsEnabled, true, p.issueSuppression,
+		p.enumSiblingsEnabled, true,
 	)
 }
 
@@ -145,7 +143,6 @@ func removeEnumSiblingPair(
 	siblingAttributeName string,
 	enabled bool,
 	force bool,
-	suppression issueSuppression,
 ) error {
 	if !enabled {
 		return nil
@@ -162,23 +159,22 @@ func removeEnumSiblingPair(
 	if enumAttrDef.IsArray != nil && *enumAttrDef.IsArray {
 		return removeEnumArraySiblingPair(
 			context, item, enumAttributeName, enumAttrDef, siblingAttributeName, siblingValue, force,
-			suppression,
 		)
 	}
 	siblingString, ok := eventvalue.AsString(siblingValue)
 	if !ok {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-			enumSiblingRetentionReasonSiblingValueWrongType, "", suppression)
+			enumSiblingRetentionReasonSiblingValueWrongType, "")
 	}
 	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
 	if !enumPresent {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-			enumSiblingRetentionReasonEnumValueMissing, "", suppression)
+			enumSiblingRetentionReasonEnumValueMissing, "")
 	}
 	enumDetail, other, ok := enumSiblingValueDefinition(context, enumAttrDef, enumValue)
 	if !ok {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-			enumSiblingRetentionReasonEnumValueWrongType, "", suppression)
+			enumSiblingRetentionReasonEnumValueWrongType, "")
 	}
 	if other {
 		context.result.EnrichmentRemoval.EnumSiblingsRetained++
@@ -187,11 +183,11 @@ func removeEnumSiblingPair(
 	if !force {
 		if enumDetail == nil {
 			return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-				enumSiblingRetentionReasonEnumValueUnknown, "", suppression)
+				enumSiblingRetentionReasonEnumValueUnknown, "")
 		}
 		if siblingString != enumDetail.Caption {
 			return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-				enumSiblingRetentionReasonSiblingValueMismatch, enumDetail.Caption, suppression)
+				enumSiblingRetentionReasonSiblingValueMismatch, enumDetail.Caption)
 		}
 	}
 
@@ -219,26 +215,25 @@ func removeEnumArraySiblingPair(
 	siblingAttributeName string,
 	siblingValue any,
 	force bool,
-	suppression issueSuppression,
 ) error {
 	siblingValues, ok := eventvalue.NewArrayView(siblingValue)
 	if !ok {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-			enumSiblingRetentionReasonSiblingValueWrongType, "", suppression)
+			enumSiblingRetentionReasonSiblingValueWrongType, "")
 	}
 	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
 	if !enumPresent {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-			enumSiblingRetentionReasonEnumValueMissing, "", suppression)
+			enumSiblingRetentionReasonEnumValueMissing, "")
 	}
 	enumValues, ok := eventvalue.NewArrayView(enumValue)
 	if !ok {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-			enumSiblingRetentionReasonEnumValueWrongType, "", suppression)
+			enumSiblingRetentionReasonEnumValueWrongType, "")
 	}
 	if !force && enumValues.Len() != siblingValues.Len() {
 		return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-			enumSiblingRetentionReasonSiblingValueMismatch, "an equally sized caption array", suppression)
+			enumSiblingRetentionReasonSiblingValueMismatch, "an equally sized caption array")
 	}
 	for index := range enumValues.Len() {
 		detail, other, valid := enumArraySiblingValueDefinition(
@@ -246,7 +241,7 @@ func removeEnumArraySiblingPair(
 		)
 		if !valid {
 			return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-				enumSiblingRetentionReasonEnumValueWrongType, "", suppression)
+				enumSiblingRetentionReasonEnumValueWrongType, "")
 		}
 		if other {
 			context.result.EnrichmentRemoval.EnumSiblingsRetained++
@@ -257,12 +252,12 @@ func removeEnumArraySiblingPair(
 		}
 		if detail == nil {
 			return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-				enumSiblingRetentionReasonEnumValueUnknown, "", suppression)
+				enumSiblingRetentionReasonEnumValueUnknown, "")
 		}
 		siblingString, stringValue := siblingValues.AsStringAt(index)
 		if !stringValue || siblingString != detail.Caption {
 			return recordEnumSiblingRetention(context, &context.path, enumAttributeName, siblingAttributeName,
-				enumSiblingRetentionReasonSiblingValueMismatch, detail.Caption, suppression)
+				enumSiblingRetentionReasonSiblingValueMismatch, detail.Caption)
 		}
 	}
 	delete(item, siblingAttributeName)
@@ -320,13 +315,12 @@ func recordEnumSiblingRetention(
 	siblingAttribute string,
 	reason enumSiblingRetentionReason,
 	expectedCaption string,
-	suppression issueSuppression,
 ) error {
 	if reason <= invalidEnumSiblingRetentionReason || reason >= enumSiblingRetentionReasonCount {
 		return fmt.Errorf("unexpected enum sibling retention reason %d", reason)
 	}
 	context.result.EnrichmentRemoval.EnumSiblingsRetained++
-	if context.suppressesIssue(suppression, issue.EnrichmentRemovalEnumSiblingNotRemoved) {
+	if context.ignoresIssue(issueEnrichmentRemovalEnumSiblingNotRemovedMask) {
 		return nil
 	}
 
@@ -360,20 +354,18 @@ func recordEnumSiblingRetention(
 	if reason == enumSiblingRetentionReasonSiblingValueMismatch {
 		details["expected_value"] = expectedCaption
 	}
-	context.addProcessorIssue(
+	return context.addProcessorIssue(
 		issue.SourceEnrichmentRemoval,
 		issue.EnrichmentRemovalEnumSiblingNotRemoved,
 		details,
 		message,
 	)
-	return nil
 }
 
 func removeObservablesSafely(
 	context *processContext,
 	event jsonish.Map,
 	enabled bool,
-	suppression issueSuppression,
 ) error {
 	if !enabled {
 		return nil
@@ -398,20 +390,26 @@ func removeObservablesSafely(
 	for index, entry := range analysis.Entries {
 		diagnosticPath.PushArrayIndex(index)
 		if entry.Problem == observable.ProblemTraversalLimited {
-			context.addProcessingTraversalLimitIssue(
+			err := context.addProcessingTraversalLimitIssue(
 				diagnosticPath.String(pathstyle.ArrayIndexed), "observables", "",
 			)
 			diagnosticPath.Pop()
+			if err != nil {
+				return err
+			}
 			continue
 		}
-		if code, defined := observableIssueCode(entry.Problem); defined && !context.suppressesIssue(suppression, code) {
+		if code, mask, defined := observableIssueCode(entry.Problem); defined && !context.ignoresIssue(mask) {
 			if diagnostic, present := observable.EntryToDiagnostic(entry, index, &diagnosticPath); present {
-				context.addProcessorIssue(
+				if err := context.addProcessorIssue(
 					issue.SourceEnrichmentRemoval,
 					code,
 					diagnostic.Details,
 					diagnostic.Message,
-				)
+				); err != nil {
+					diagnosticPath.Pop()
+					return err
+				}
 			}
 		}
 		diagnosticPath.Pop()
@@ -440,30 +438,30 @@ func removeObservablesSafely(
 	return nil
 }
 
-func observableIssueCode(problem observable.Problem) (issue.IssueCode, bool) {
+func observableIssueCode(problem observable.Problem) (issue.Code, uint64, bool) {
 	switch problem {
 	case observable.ProblemArrayWrongType:
-		return issue.ObservableArrayWrongType, true
+		return issue.ObservableArrayWrongType, issueObservableArrayWrongTypeMask, true
 	case observable.ProblemElementWrongType:
-		return issue.ObservableElementWrongType, true
+		return issue.ObservableElementWrongType, issueObservableElementWrongTypeMask, true
 	case observable.ProblemNameMissing:
-		return issue.ObservableNameMissing, true
+		return issue.ObservableNameMissing, issueObservableNameMissingMask, true
 	case observable.ProblemNameWrongType:
-		return issue.ObservableNameWrongType, true
+		return issue.ObservableNameWrongType, issueObservableNameWrongTypeMask, true
 	case observable.ProblemNameInvalidSyntax:
-		return issue.ObservableNameInvalidSyntax, true
+		return issue.ObservableNameInvalidSyntax, issueObservableNameInvalidSyntaxMask, true
 	case observable.ProblemNameInvalidReference:
-		return issue.ObservableNameInvalidReference, true
+		return issue.ObservableNameInvalidReference, issueObservableNameInvalidReferenceMask, true
 	case observable.ProblemPathNotFound:
-		return issue.ObservablePathNotFound, true
+		return issue.ObservablePathNotFound, issueObservablePathNotFoundMask, true
 	case observable.ProblemPathNotObject:
-		return issue.ObservablePathNotObject, true
+		return issue.ObservablePathNotObject, issueObservablePathNotObjectMask, true
 	case observable.ProblemValueWrongType:
-		return issue.ObservableValueWrongType, true
+		return issue.ObservableValueWrongType, issueObservableValueWrongTypeMask, true
 	case observable.ProblemValueNotFound:
-		return issue.ObservableValueNotFound, true
+		return issue.ObservableValueNotFound, issueObservableValueNotFoundMask, true
 	default:
-		return issue.None, false
+		return issue.None, 0, false
 	}
 }
 

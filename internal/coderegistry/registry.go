@@ -1,5 +1,5 @@
 // Package coderegistry implements the stable-external-representation lookup shared by this toolkit's small
-// uint8-backed code enums (issue.IssueCode, validation.Code): a fixed metadata table indexed by the code itself,
+// uint8-backed code enums (issue.Code, validation.Code): a fixed metadata table indexed by the code itself,
 // with code 0 reserved as the invalid zero value.
 package coderegistry
 
@@ -54,8 +54,8 @@ func (r Registry[T]) Description(code T) string {
 	return r.infos[code].Description
 }
 
-// Suppressible reports whether code is valid and its metadata does not mark it mandatory.
-func (r Registry[T]) Suppressible(code T) bool {
+// Ignorable reports whether code is valid and its metadata does not mark it mandatory.
+func (r Registry[T]) Ignorable(code T) bool {
 	return r.Valid(code) && !r.infos[code].Mandatory
 }
 

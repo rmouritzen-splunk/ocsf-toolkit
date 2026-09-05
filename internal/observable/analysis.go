@@ -98,7 +98,7 @@ func NewAnalyzer(
 // LimitEntries restricts analysis to the first count observable entries. It is used when a processor has appended a
 // suffix whose semantic validity is already established by construction.
 func (a *Analyzer) LimitEntries(count int) {
-	if a == nil || count < 0 || count >= a.limit {
+	if count < 0 || count >= a.limit {
 		return
 	}
 	a.limit = count
@@ -107,9 +107,6 @@ func (a *Analyzer) LimitEntries(count int) {
 // Next returns the next observable index and its independently resolved entry. It returns an error for an
 // unexpected internal resolution state.
 func (a *Analyzer) Next() (int, Entry, bool, error) {
-	if a == nil {
-		return 0, Entry{}, false, nil
-	}
 	if a.wrongType {
 		if a.index != 0 {
 			return 0, Entry{}, false, nil
@@ -262,9 +259,6 @@ func problemForDefinitionStatus(status observablepath.DefinitionStatus) (Problem
 
 // RemovableCount returns the number of entries proven redundant.
 func (a *Analysis) RemovableCount() int {
-	if a == nil {
-		return 0
-	}
 	count := 0
 	for _, entry := range a.Entries {
 		if entry.Removable {

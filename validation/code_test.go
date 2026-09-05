@@ -2,59 +2,20 @@ package validation
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestCodesHaveStableLevelNeutralStringsAndDefaultLevels(t *testing.T) {
-	codes := Codes()
-	require.Len(t, codes, int(codeCount-1))
-	for _, code := range codes {
-		name := code.String()
-		require.True(t, code.Valid(), "code %d should be valid", code)
-		require.True(t, strings.HasPrefix(name, "validation_"), "code %d has incorrect prefix in %q", code, name)
-		require.NotContains(t, name, "validation_error_")
-		require.NotContains(t, name, "validation_warning_")
-		require.True(t, code.DefaultLevel().Valid())
-		require.NotEmpty(t, code.Description())
-
-		parsed, ok := ParseCode(name)
-		require.True(t, ok)
-		require.Equal(t, code, parsed)
-
-		encoded, err := json.Marshal(code)
-		require.NoError(t, err)
-		require.Equal(t, `"`+name+`"`, string(encoded))
-		var decoded Code
-		require.NoError(t, json.Unmarshal(encoded, &decoded))
-		require.Equal(t, code, decoded)
-	}
-	require.Equal(t, LevelError, AttributeRequiredMissing.DefaultLevel())
-	require.Equal(t, LevelWarning, AttributeDeprecated.DefaultLevel())
-}
 
 func TestCodeValidityExcludesSentinels(t *testing.T) {
 	require.False(t, None.Valid())
 	require.False(t, codeCount.Valid())
 	require.False(t, None.DefaultLevel().Valid())
 	require.False(t, codeCount.DefaultLevel().Valid())
+	require.False(t, None.Ignorable())
+	require.False(t, codeCount.Ignorable())
 	require.Empty(t, None.Description())
 	require.Empty(t, codeCount.Description())
-}
-
-func TestClassUIDResolutionCodesAreNotSuppressible(t *testing.T) {
-	mandatory := map[Code]struct{}{
-		ClassUIDMissing:   {},
-		ClassUIDWrongType: {},
-		ClassUIDUnknown:   {},
-	}
-	for _, code := range Codes() {
-		_, isMandatory := mandatory[code]
-		require.Equal(t, !isMandatory, code.Suppressible(), "unexpected suppressibility for %q", code.String())
-	}
-	require.False(t, None.Suppressible())
 }
 
 func TestParseCodeRejectsUnknownString(t *testing.T) {

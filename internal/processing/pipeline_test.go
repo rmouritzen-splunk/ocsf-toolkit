@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ocsf/ocsf-toolkit/internal/schema"
+	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 	"github.com/ocsf/ocsf-toolkit/validation"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,118 @@ func TestPipelineInitializesSharedCachesLazily(t *testing.T) {
 	validationPipeline := mustNewEventProcessorPipeline(assert, processingSchema, NewValidation())
 	assert.True(validationPipeline.validation.cache.VersionOK)
 	assert.NotNil(validationPipeline.validation.cache.Types)
+}
+
+func TestEngineeringInvariantClassResolutionOnlyValidationDoesNotRequireEventWalk(t *testing.T) {
+	// Engineering invariant test: validation that runs entirely during class resolution must not force the
+	// schema-guided per-attribute event walk.
+	assert := require.New(t)
+	processingSchema := makeValidationTestSchema(assert)
+	pipeline := mustNewEventProcessorPipeline(assert, processingSchema, NewValidation(
+		func(config *ValidationConfig) {
+			config.PolicyRules = append(config.PolicyRules, ValidationPolicyRule{
+				Level: validation.LevelIgnored,
+				All:   true,
+			})
+		},
+		WithValidationLevel(validation.ClassUIDUnknown, validation.LevelError),
+	))
+
+	assert.False(pipeline.requiresEventWalk)
+}
+
+func TestEngineeringInvariantErrorIssueStopsBeforeValidationDispatch(t *testing.T) {
+	// Engineering invariant test: an error-level mutation issue must stop dispatch before validation sees the value.
+	assert := require.New(t)
+	compiled := makeTestSchema(assert)
+	pipeline := mustNewEventProcessorPipeline(
+		assert,
+		compiled,
+		NewEnrichment(WithAddEnumSiblings(false)),
+		NewValidation(),
+	)
+	policy, err := compileIssuePolicy([]IssueLevelRule{{
+		Code: issue.EnrichmentObservableNotAddedWrongType, Level: issue.LevelError,
+	}})
+	assert.NoError(err)
+	pipeline.issuePolicy = policy
+	class := compiled.Classes[1]
+	context := processContext{
+		compiled:            compiled,
+		pipelineImpl:        pipeline,
+		class:               class,
+		classObservableTrie: pipeline.mutations[0].add.classObservableTries[1],
+	}
+	context.path.PushAttribute("ball")
+
+	err = context.visitObjectWrongType("not an object", "ball", class.Attributes["ball"])
+
+	assert.Error(err)
+	assert.Empty(context.result.Validation.Findings)
+}
+
+func TestEngineeringInvariantErrorEnumSiblingIssueStopsBeforeObservableWork(t *testing.T) {
+	// Engineering invariant test: an error-level enum-sibling issue must stop the combined callback before observable
+	// enrichment performs any work.
+	assert := require.New(t)
+	compiled := makeValidationTestSchema(assert)
+	class := compiled.Classes[1]
+	class.Attributes["activity_name"].Observable = testPtrTo(int64(1000))
+	pipeline := mustNewEventProcessorPipeline(assert, compiled, NewEnrichment())
+	policy, err := compileIssuePolicy([]IssueLevelRule{{
+		Code: issue.EnrichmentEnumSiblingOtherAdded, Level: issue.LevelError,
+	}})
+	assert.NoError(err)
+	pipeline.issuePolicy = policy
+	context := processContext{
+		compiled:            compiled,
+		pipelineImpl:        pipeline,
+		class:               class,
+		classObservableTrie: pipeline.mutations[0].add.classObservableTries[1],
+	}
+	event := jsonish.Map{"activity_id": json.Number("99")}
+
+	err = context.visitEnumSiblingPairAttributes(event, "activity_id", class.Attributes["activity_id"])
+
+	assert.Error(err)
+	assert.Equal("Other", event["activity_name"])
+	assert.Empty(context.observables)
+}
+
+func TestEngineeringInvariantErrorClassIssueStopsBeforeValidationWork(t *testing.T) {
+	// Engineering invariant test: an error-level class-resolution issue must stop before validation constructs a
+	// finding that ProcessEvent will discard.
+	tests := []struct {
+		name  string
+		code  issue.Code
+		event jsonish.Map
+	}{
+		{name: "missing", code: issue.ClassUIDMissing, event: jsonish.Map{}},
+		{name: "wrong type", code: issue.ClassUIDWrongType, event: jsonish.Map{"class_uid": "1"}},
+		{name: "unknown", code: issue.ClassUIDUnknown, event: jsonish.Map{"class_uid": json.Number("999")}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert := require.New(t)
+			compiled := makeValidationTestSchema(assert)
+			pipeline := mustNewEventProcessorPipeline(assert, compiled, NewValidation())
+			policy, policyErr := compileIssuePolicy([]IssueLevelRule{{
+				Code: test.code, Level: issue.LevelError,
+			}})
+			assert.NoError(policyErr)
+			pipeline.issuePolicy = policy
+			context := processContext{compiled: compiled, pipelineImpl: pipeline}
+
+			resolved, err := context.resolveClass(test.event)
+
+			assert.False(resolved)
+			var issueErr *processingIssueError
+			assert.ErrorAs(err, &issueErr)
+			assert.Equal(test.code, issueErr.issue.Code)
+			assert.Empty(context.result.Validation.Findings)
+		})
+	}
 }
 
 func TestPipelineTraversalCacheInitializesNumericEnumsForEveryPipeline(t *testing.T) {
@@ -327,16 +440,16 @@ func TestNewPipelineOrdersEnumSiblingsBeforeObservablesRegardlessOfConfiguration
 }
 
 func TestPipelineZeroValueCannotProcessEvent(t *testing.T) {
-	var pipeline Pipeline
+	var pipeline PipelineImpl
 
 	result, err := pipeline.ProcessEvent(jsonish.Map{})
 
-	require.ErrorIs(t, err, errUninitializedPipeline)
+	require.ErrorIs(t, err, ErrUninitializedPipeline)
 	require.Empty(t, result)
 }
 
 func TestPipelineRejectsNilEvent(t *testing.T) {
-	pipeline := &Pipeline{compiled: &schema.Compiled{}}
+	pipeline := &PipelineImpl{compiled: &schema.Compiled{}}
 
 	result, err := pipeline.ProcessEvent(nil)
 

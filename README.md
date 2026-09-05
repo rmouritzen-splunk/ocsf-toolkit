@@ -78,7 +78,7 @@ ocsf-toolkit \
   --report-output -
 ```
 
-The `--schema` argument must point to a compiled OCSF schema file. See [Compiled Schema](#appendix-compiled-schema).
+The `--schema` argument must point to a compiled OCSF schema file. The CLI follows symbolic links and requires the resulting path to be a regular file that can be opened for reading before schema loading begins. See [Compiled Schema](#appendix-compiled-schema).
 
 General form:
 
@@ -88,7 +88,7 @@ ocsf-toolkit --schema COMPILED_SCHEMA_FILE (--event FILE | --events-dir DIR) [--
 
 Select at least one processing action. Compatible actions may be combined.
 
-The mutation actions operate on two independent components: `enum-siblings` and `observables`. `--enum-siblings[=ACTION]` and `--observables[=ACTION]` set one component's action directly, where `ACTION` is `add`, `remove`, or `force-remove` (bare `--enum-siblings` or `--observables` means `add`). `--enrich`, `--unenrich`, and `--force-remove` are shorthand that set both components at once to `add`, `remove`, or `force-remove` respectively. The shorthand flags cannot be combined with each other or with `--enum-siblings`/`--observables`; select either one shorthand flag or the per-component flags. Enum-sibling work always runs before observable work, regardless of flag order.
+The mutation actions operate on two independent components: `enum-siblings` and `observables`. `--enum-siblings ACTION` and `--observables ACTION` set one component's action directly, where `ACTION` is `add`, `remove`, or `force-remove` (bare `--enum-siblings` or `--observables` means `add`). Attached forms such as `--enum-siblings=remove` are also accepted. `--enrich`, `--unenrich`, and `--force-remove` are shorthand that set both components at once to `add`, `remove`, or `force-remove` respectively. The shorthand flags cannot be combined with each other or with `--enum-siblings`/`--observables`; select either one shorthand flag or the per-component flags. Enum-sibling work always runs before observable work, regardless of flag order.
 
 ### CLI Examples
 
@@ -150,47 +150,51 @@ ocsf-toolkit \
 
 Supported styles are `simple`, `brackets`, `wildcard`, `indexed`, and `jsonpath`. The option requires observable enrichment or validation. Observable resolution accepts every supported notation regardless of this preference.
 
-Add only selected observable types by supplying their numeric IDs once as a comma-separated list:
+Add only selected observable types by repeating their numeric IDs:
 
 ```sh
 ocsf-toolkit \
   --schema ocsf-schema-v1.9.0.json \
   --events-dir events \
   --enrich \
-  --observable-ids 1,2,4 \
+  --observable-id 1 \
+  --observable-id 2 \
+  --observable-id 4 \
   --output-dir out
 ```
 
-Omitting `--observable-ids` adds every schema-declared observable type. The option may be supplied only once, and an explicitly empty list or empty comma-separated component is invalid. Each selected ID, including `0`, must exist in the loaded schema; the CLI reports all unknown IDs together.
+Omitting `--observable-id` adds every schema-declared observable type. Repeat the option to select multiple types. Each selected ID, including `0`, must exist in the loaded schema; duplicate IDs are accepted and pipeline construction deduplicates them, while reporting all unknown IDs together.
 
-Suppress selected tolerable enrichment issue codes, or every suppressible issue when given without a value:
+Set the handling level for a processing issue code, or use `all` to set the level for every issue:
 
 ```sh
 ocsf-toolkit \
   --schema ocsf-schema-v1.9.0.json \
   --events-dir events \
   --enrich \
-  --suppress-issues=issue_enrichment_observable_duplicate_skipped \
+  --issue-level issue_enrichment_observable_duplicate_skipped=ignored \
   --output-dir out
 ```
 
-`--suppress-issues` may be supplied only once and requires a mutation action. It does not affect event mutations, result counters, validation findings, or mandatory diagnostics reporting class-resolution failure or limited event traversal. `ocsf-toolkit --list-issue-codes` prints every issue code and exits, noting which codes are mandatory and cannot be suppressed.
+Repeat `--issue-level ISSUE_CODE=LEVEL` to configure multiple codes. Every issue code defaults to `warning`, as reported by `issue.Code.DefaultLevel()`. Levels are `ignored`, `warning`, and `error`; `error` stops at the first matching issue. Use `all=LEVEL` once before specific codes; each specific code occurs once. Mandatory diagnostics reporting class-resolution failure or limited event traversal cannot be ignored. The same policy applies to schema initialization issues in the CLI. `ocsf-toolkit --list-issue-codes` prints every issue code and exits, noting which codes are mandatory.
 
-Validation findings can be suppressed or remapped by code:
+Validation finding levels use the same repeated key-value form:
 
 ```sh
 ocsf-toolkit \
   --schema ocsf-schema-v1.9.0.json \
   --events-dir events \
   --validate \
-  --validation-warnings-as-errors \
-  --suppress-validations=validation_attribute_unknown \
+  --validation-level all=error \
+  --validation-level validation_attribute_unknown=ignored \
   --output-dir out
 ```
 
-The three policy options are `--suppress-validations`, `--validation-warnings-as-errors`, and `--validation-errors-as-warnings`. Each may be supplied once and requires `--validate`. Bare `--suppress-validations` suppresses every suppressible finding, while an assigned comma-separated value suppresses exactly those codes regardless of level. Findings for a missing, wrong-type, or unknown `class_uid` cannot be suppressed because processing stops without a resolved class; explicitly selecting one for suppression is invalid. A bare level-change option selects every code at the default level named by the option; with a comma-separated value, it selects exactly those codes regardless of their current defaults. Mandatory findings may be remapped because level and suppressibility are independent. Conflicting actions for one code are rejected. `--fail-on-validation-errors` uses effective levels after policy is applied. `ocsf-toolkit --list-validation-codes` prints every code with its description, toolkit default level, and mandatory status.
+Repeat `--validation-level VALIDATION_CODE=LEVEL` to configure multiple codes; it requires `--validate`. Use `all=LEVEL` once before specific codes; each specific code occurs once. Every validation finding may be ignored, including findings for a missing, wrong-type, or unknown `class_uid`; the corresponding processing issues remain mandatory. Enabling validation while resolving every code to `ignored` is a configuration error. `--fail-on-validation-errors` uses effective levels after policy is applied. `ocsf-toolkit --list-validation-codes` prints every code with its description and toolkit default level.
 
-Use `--warn-on-missing-recommended` with `--validate` when absent recommended attributes should produce validation warnings. Recommended attributes are otherwise optional and do not produce findings.
+CLI help canonically displays flag values with a space, such as `--event my_event.json`. The parser also accepts an attached flag value, such as `--event=my_event.json`.
+
+The `validation_attribute_recommended_missing` code defaults to `ignored`. Set it to `warning` or `error` with `--validation-level` when missing recommended attributes should produce findings.
 
 Directory outputs preserve input-relative paths. For example:
 
@@ -215,7 +219,7 @@ ocsf-toolkit \
   --output-dir processed
 ```
 
-This writes processed events beneath `processed/events/` and per-event processing reports beneath `processed/reports/`. Use `--enum-siblings=remove` or `--observables=remove` alone to select one safe-removal component. Use `--force-remove`, or `--enum-siblings=force-remove`/`--observables=force-remove` for one component, only when potentially non-redundant source content may be discarded. Forced observable removal deletes the entire `observables` attribute without inspecting its entries. Forced enum sibling removal still preserves siblings required for integral enum ID 99, including an array sibling when any paired enum element is 99.
+This writes processed events beneath `processed/events/` and per-event processing reports beneath `processed/reports/`. Use `--enum-siblings remove` or `--observables remove` alone to select one safe-removal component. Use `--force-remove`, or `--enum-siblings force-remove`/`--observables force-remove` for one component, only when potentially non-redundant source content may be discarded. Forced observable removal deletes the entire `observables` attribute without inspecting its entries. Forced enum sibling removal still preserves siblings required for integral enum ID 99, including an array sibling when any paired enum element is 99.
 
 Read a single event from stdin, write enriched JSON to stdout, and write its processing report to a file:
 
@@ -311,7 +315,7 @@ In single-event mode, either `--event-output -` or `--report-output -` writes it
 
 Successfully completed directory processing writes a human-readable summary with tool metadata to stdout by default. Use `--quiet` to suppress this default. `--summary` and `--summary-json` add explicit human-readable and JSON summary destinations; they may be used together, with or without `--quiet`, subject to the one-output-on-stdout rule. Summary options apply only to directory processing. JSON processing reports carry `report_version: 1`; JSON directory summaries carry `summary_version: 1` and group initialization issues, per-file results, and aggregate validation, enrichment, enrichment-removal, issue, and output counts. If directory processing stops on a fatal error, normal summaries are not written; stderr reports the failure and, when at least one event completed, only the number of event files processed before the error.
 
-stderr is reserved for errors, failure diagnostics, and nonfatal schema initialization issues. Before processing, output paths selected for different command-wide artifacts are checked and must identify different files, including when existing filesystem aliases make differently written paths refer to the same file.
+stderr is reserved for errors, failure diagnostics, and nonfatal schema initialization issues. When successfully parsed command-line options contain multiple independent configuration problems, each problem is printed on its own `error: ...` line followed by terse usage once. Parsing, filesystem operations, schema loading, and processing remain fail-fast. Before processing, output paths selected for different command-wide artifacts are checked and must identify different files, including when existing filesystem aliases make differently written paths refer to the same file.
 
 Path preservation differs slightly between directory and single-event processing. In directory mode, the toolkit walks files under `--events-dir` and computes each output path relative to that input root. In single-event mode, `--event` is supplied directly by the user. Paths that remain within the current directory tree after lexical cleaning are preserved beneath the selected output directory. Absolute paths, relative paths that would escape the current directory tree, and other non-local paths use a safe basename instead.
 
@@ -429,7 +433,7 @@ Array attributes may use JSON-native `[]any` values or typed Go slices such as `
 
 ### Pipeline Options
 
-`eventpipeline.NewPipeline` takes a list of `eventpipeline.PipelineOption` values. Configure its schema with `eventpipeline.WithSchema`; when `WithSchema` or another option of the same kind is passed more than once, the last one wins, including any nested options it carries.
+`eventpipeline.NewPipeline` takes a list of `eventpipeline.PipelineOption` values. Configure its schema with `eventpipeline.WithSchema`. Each single-valued option, including `WithSchema`, `WithEnumSiblings`, `WithObservables`, `WithEnrichmentObservablePathNotation`, and `WithValidation`, may be passed once; repeating one is a configuration error rather than an override. The same rule applies to `WithValidationObservablePathNotation` within `WithValidation`.
 
 Add enum siblings and observables:
 
@@ -490,7 +494,10 @@ pipeline, err := eventpipeline.NewPipeline(
 	eventpipeline.WithObservables(enrichment.Add, 1, 2, 4),
 	eventpipeline.WithEnrichmentObservablePathNotation(pathstyle.ArrayIndexed),
 	eventpipeline.WithValidation(
-		eventpipeline.WithWarnOnMissingRecommended(),
+		eventpipeline.WithValidationLevel(
+			validation.AttributeRecommendedMissing,
+			validation.LevelWarning,
+		),
 		eventpipeline.WithValidationObservablePathNotation(pathstyle.ArrayIndexed),
 	),
 )
@@ -498,7 +505,7 @@ pipeline, err := eventpipeline.NewPipeline(
 
 `WithEnumSiblings` takes an `enrichment.Action`: `enrichment.Add` adds enum siblings, `enrichment.Remove` or `enrichment.ForceRemove` removes them, and `enrichment.None` (the default when the option is omitted) leaves them alone. `WithObservables` works the same way for observables, and when its action is `enrichment.Add`, an optional list of observable type IDs restricts generation to those types; an empty list means all types, duplicate IDs are harmless, and pipeline construction reports every selected ID absent from the schema. Supplying IDs when the action is not `enrichment.Add` is invalid. Use `WithEnrichmentObservablePathNotation` with a `pathstyle.Style` value to select generated observable name notation; it has no effect unless observables are added. Generated enum sibling arrays are parallel to their enum arrays, with one caption at each matching index. When integral enum ID 99 has no sibling value, including at an integral enum-array position, enrichment adds the schema caption, typically `Other`, and reports that synthesized value as an enrichment issue so a corresponding validation warning has clear provenance. String enum key `"99"` has no special meaning.
 
-`eventpipeline.NewPipeline` validates the complete resolved configuration and returns an aggregate error containing every detected problem: an empty or no-op configuration, an unconfigured or invalid action, observable path notation or type IDs configured without adding observables, or an invalid observable path notation. It also requires an initialized schema selected through `WithSchema`. CLI flag validation reports equivalent conflicts using the relevant flag names.
+`eventpipeline.NewPipeline` returns the first detected problem in deterministic validation order. It first checks structural option errors such as repeated single-valued options and invalid level-rule ordering, then requires an initialized schema selected through exactly one `WithSchema`, and finally validates the resolved processing configuration, including empty or no-op configurations, invalid actions, observable path notation or type IDs configured without adding observables, invalid path notation, and invalid issue or validation level rules. CLI flag validation reports equivalent conflicts using the relevant flag names.
 
 Across event processing, an object attribute whose value is null is treated as missing. Null array elements remain invalid because no OCSF array element type permits null.
 
@@ -506,41 +513,40 @@ Enrichment preserves existing observable entries and appends generated entries t
 
 Safe removal (`enrichment.Remove`) removes supported scalar and array enum siblings whose source has direct type `integer_t` or `long_t` and whose same-shaped target has direct type `string_t`, plus redundant observables that can be proven safe. Enum and sibling arrays must have equal lengths, and safe removal compares every value with the caption at the same index before removing the sibling array. Validation reports unequal enum/sibling array lengths with `validation_attribute_enum_array_sibling_length_mismatch`. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using the toolkit's stable scalar-to-string formatting, and an explicit null value matches either null or missing event content. Object observables without values are removed only when their path resolves to a JSON object.
 
-`WithValidation` reports findings at each code's toolkit default level. Use `WithWarnOnMissingRecommended()` to enable findings for missing recommended attributes. Use `WithValidationObservablePathNotation` to report when a valid observable name does not use the preferred notation; this preference never prevents resolution of another supported notation.
+`WithValidation` reports findings at each code's toolkit default level. Missing recommended attributes are not checked while their code remains at its `validation.LevelIgnored` default; configure `validation.AttributeRecommendedMissing` as warning or error to enable that validation. Use `WithValidationObservablePathNotation` to report when a valid observable name does not use the preferred notation; this preference never prevents resolution of another supported notation.
 
-Validation policy is immutable pipeline configuration. `WithSuppressValidation` suppresses findings independently of level; with no codes it suppresses every suppressible validation finding. Findings for a missing, wrong-type, or unknown `class_uid` are mandatory because processing cannot continue without a resolved class, so explicitly selecting one for suppression makes pipeline construction fail. `WithValidationWarningsAsErrors` and `WithValidationErrorsAsWarnings` choose an effective level and may remap mandatory findings. With no codes, each level option selects all codes having the level named by the option. With explicit codes, every option selects exactly those codes regardless of their current defaults, so explicitly choosing the current default is valid and preserves intent if a future release changes that default. Assigning incompatible actions to the same code makes pipeline construction fail.
+Validation policy is immutable pipeline configuration. `WithValidationLevel(code, level)` sets one code to `validation.LevelIgnored`, `validation.LevelWarning`, or `validation.LevelError`; `WithAllValidationLevels(level)` sets the level for every code. The `all` setting may appear once and must precede specific settings; each specific code may appear once. Every validation code may be ignored, including class-resolution findings; mandatory processing issues independently report class-resolution failures. `NewPipeline` rejects `WithValidation` configurations whose resolved policy ignores every validation code.
 
 ```go
 pipeline, err := eventpipeline.NewPipeline(
 	eventpipeline.WithSchema(schema),
 	eventpipeline.WithValidation(
-		eventpipeline.WithValidationWarningsAsErrors(),
-		eventpipeline.WithSuppressValidation(validation.AttributeUnknown),
+		eventpipeline.WithAllValidationLevels(validation.LevelError),
+		eventpipeline.WithValidationLevel(validation.AttributeUnknown, validation.LevelIgnored),
 	),
 )
 ```
 
-Enrichment and enrichment removal normally collect every tolerable processing issue. Use `WithSuppressIssues()` to skip constructing and collecting all suppressible issues, or pass selected `issue.IssueCode` values to suppress only those codes. `WithSuppressIssuesByStrings` provides the same selection for dynamically loaded string values. Unknown codes make pipeline construction fail, and suppression does not change event mutations, counters, validation findings, returned Go errors, or mandatory diagnostics reporting class-resolution failure or limited event traversal.
+Enrichment and enrichment removal report processing conditions according to immutable pipeline issue policy. `WithIssueLevel(code, level)` sets one code to `issue.LevelIgnored`, `issue.LevelWarning`, or `issue.LevelError`; `WithAllIssueLevels(level)` sets the level for every issue. The `all` setting may appear once and must precede specific settings; each specific code may appear once. Mandatory diagnostics reporting class-resolution failure or limited event traversal cannot be ignored. An error-level issue stops processing and returns an `eventpipeline.ProcessingIssueError`; ignored and warning-level issues do not change the mutation that led to the condition.
 
 ```go
 pipeline, err := eventpipeline.NewPipeline(
 	eventpipeline.WithSchema(schema),
 	eventpipeline.WithEnumSiblings(enrichment.Add),
 	eventpipeline.WithObservables(enrichment.Add),
-	eventpipeline.WithSuppressIssues(issue.EnrichmentObservableDuplicateSkipped),
+	eventpipeline.WithIssueLevel(issue.EnrichmentObservableDuplicateSkipped, issue.LevelIgnored),
 )
 ```
 
 ### Result Model
 
-`eventpipeline.ProcessingResult` is an opaque concrete value with typed accessors for processor-specific results and non-fatal processing issues:
+`eventpipeline.ProcessingResult` is an opaque concrete value with typed accessors for processor-specific results and warning-level processing issues:
 
 ```go
 result.Validation()
 result.Enrichment()
 result.EnrichmentRemoval()
 result.Issues()
-result.SuppressedIssueCount()
 ```
 
 The private value representation lets future toolkit releases add processor families through new accessor methods without changing the public structure. Compiler diagnostics confirm that the supported Go toolchain inlines every simple accessor across package boundaries, reducing calls to direct private-state access and making the abstraction zero-cost without interface boxing or an inherently necessary allocation. The zero value is a valid empty result. `ProcessingResult` preserves its processor-section JSON representation when marshaled and can be unmarshaled from the same representation. The processor-specific structs in `eventresult` remain field-oriented and support keyed literals, but intentionally reject positional literals so future releases can add fields compatibly.
@@ -551,11 +557,7 @@ Validation findings have a severity-neutral stable `validation.Code`, an explici
 result.Validation().Findings
 result.Validation().Count(validation.LevelError)
 result.Validation().Count(validation.LevelWarning)
-result.Validation().SuppressedErrorCount
-result.Validation().SuppressedWarningCount
 ```
-
-Suppression counters use each code's toolkit default level, not a remapped effective level.
 
 Enrichment counters report what was added:
 
@@ -573,7 +575,7 @@ result.EnrichmentRemoval().ObservablesRemoved
 result.EnrichmentRemoval().ObservablesRetained
 ```
 
-`ProcessingResult.Issues()` returns non-fatal processing diagnostics with a typed `issue.Source` identifying the broad part of processing that reported the issue and a stable `issue.IssueCode` whose string begins with `issue_` identifying the precise condition. They are separate from OCSF validation findings and include enrichment and enrichment-removal problems as well as shared processing limitations, so an issue can be reported even by a validation-only pipeline. `SuppressedIssueCount()` reports how many otherwise-reportable processing issues were omitted by issue suppression. Validation findings appear only in the `Findings` slice returned by `Validation()`.
+`ProcessingResult.Issues()` returns warning-level processing diagnostics with a typed `issue.Source` identifying the broad part of processing that reported the issue and a stable `issue.Code` whose string begins with `issue_` identifying the precise condition. They are separate from OCSF validation findings and include enrichment and enrichment-removal problems as well as shared processing limitations, so an issue can be reported even by a validation-only pipeline. Ignored issues are omitted without a count. An error-level issue makes `ProcessEvent` return a zero result and an `*eventpipeline.ProcessingIssueError`; callers can use `errors.As` to recover its structured `eventresult.ProcessingIssue`. Validation findings appear only in the `Findings` slice returned by `Validation()`.
 
 For a complete working example of library usage, see the CLI implementation in `cmd/ocsf-toolkit`.
 

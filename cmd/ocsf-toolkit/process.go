@@ -40,29 +40,26 @@ func (e *commandConfigurationError) Unwrap() error {
 }
 
 type eventReport struct {
-	ReportVersion        int                                  `json:"report_version"`
-	EventSource          string                               `json:"event_source"`
-	EventDestination     string                               `json:"event_destination,omitempty"`
-	Validation           *eventresult.ValidationResult        `json:"validation,omitempty"`
-	Enrichment           *eventresult.EnrichmentResult        `json:"enrichment,omitempty"`
-	EnrichmentRemoval    *eventresult.EnrichmentRemovalResult `json:"enrichment_removal,omitempty"`
-	Issues               []eventresult.ProcessingIssue        `json:"issues,omitempty"`
-	SuppressedIssueCount int                                  `json:"suppressed_issue_count,omitempty"`
+	ReportVersion     int                                  `json:"report_version"`
+	EventSource       string                               `json:"event_source"`
+	EventDestination  string                               `json:"event_destination,omitempty"`
+	Validation        *eventresult.ValidationResult        `json:"validation,omitempty"`
+	Enrichment        *eventresult.EnrichmentResult        `json:"enrichment,omitempty"`
+	EnrichmentRemoval *eventresult.EnrichmentRemovalResult `json:"enrichment_removal,omitempty"`
+	Issues            []eventresult.ProcessingIssue        `json:"issues,omitempty"`
 }
 
 func processEvents(
 	config processConfig,
 	pipeline *eventpipeline.Pipeline,
 	initializationIssues []schemaresult.InitializationIssue,
-	suppressedInitializationIssues int,
 	destinations processingDestinations,
 	stdin io.Reader,
 	outputs *destinationWriter,
 ) (processSummary, bool, error) {
 	summary := processSummary{
-		SchemaPath:                     config.schemaPath,
-		InitializationIssues:           initializationIssues,
-		SuppressedInitializationIssues: suppressedInitializationIssues,
+		SchemaPath:           config.schemaPath,
+		InitializationIssues: initializationIssues,
 	}
 	retainFileSummaries := config.eventPath != "" || config.summaryJSONFile != ""
 	if config.eventPath != "" {
@@ -145,10 +142,10 @@ func processEvents(
 	return summary, false, nil
 }
 
-func newPipeline(config processConfig) (*eventpipeline.Pipeline, []schemaresult.InitializationIssue, int, error) {
+func newPipeline(config processConfig) (*eventpipeline.Pipeline, []schemaresult.InitializationIssue, error) {
 	schema, initializationIssues, err := eventpipeline.NewSchema(config.schemaPath)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
 
 	options := make([]eventpipeline.PipelineOption, 0, 4)
@@ -164,67 +161,129 @@ func newPipeline(config processConfig) (*eventpipeline.Pipeline, []schemaresult.
 		}
 	}
 	if config.validate {
-		validationOptions := make([]eventpipeline.ValidationOption, 0, 6)
-		if config.warnOnMissingRecommended {
-			validationOptions = append(validationOptions, eventpipeline.WithWarnOnMissingRecommended())
-		}
+		validationOptions := make([]eventpipeline.ValidationOption, 0, 1+len(config.validationLevels.rules))
 		if config.observablePathNotation != "" {
 			validationOptions = append(validationOptions, eventpipeline.WithValidationObservablePathNotation(
 				pathstyle.Style(config.observablePathNotation),
 			))
 		}
-		if config.suppressValidation.configured {
-			validationOptions = append(validationOptions,
-				eventpipeline.WithSuppressValidation(config.suppressValidation.codes...))
-		}
-		if config.validationWarningsAsErrors.configured {
-			validationOptions = append(validationOptions,
-				eventpipeline.WithValidationWarningsAsErrors(config.validationWarningsAsErrors.codes...))
-		}
-		if config.validationErrorsAsWarnings.configured {
-			validationOptions = append(validationOptions,
-				eventpipeline.WithValidationErrorsAsWarnings(config.validationErrorsAsWarnings.codes...))
+		for _, rule := range config.validationLevels.rules {
+			if rule.all {
+				validationOptions = append(validationOptions, eventpipeline.WithAllValidationLevels(rule.level))
+			} else {
+				validationOptions = append(validationOptions, eventpipeline.WithValidationLevel(rule.code, rule.level))
+			}
 		}
 		options = append(options, eventpipeline.WithValidation(validationOptions...))
 	}
-	if config.suppressIssuesConfigured {
-		options = append(options, eventpipeline.WithSuppressIssuesByStrings(config.suppressIssueCodes...))
+	for _, rule := range config.issueLevels.rules {
+		if rule.all {
+			options = append(options, eventpipeline.WithAllIssueLevels(rule.level))
+		} else {
+			options = append(options, eventpipeline.WithIssueLevel(rule.code, rule.level))
+		}
 	}
 	options = append(options, eventpipeline.WithSchema(schema))
 	pipeline, err := eventpipeline.NewPipeline(options...)
 	if err != nil {
-		return nil, nil, 0, &commandConfigurationError{
+		if cliError := cliPipelineOptionError(err); cliError != nil {
+			return nil, nil, &commandConfigurationError{cause: cliError}
+		}
+		return nil, nil, &commandConfigurationError{
 			cause: fmt.Errorf("configure event processor pipeline: %w", err),
 		}
 	}
-	reported, suppressed := suppressInitializationIssues(config, initializationIssues)
-	return pipeline, reported, suppressed, nil
+	reported, err := applyInitializationIssueLevels(config, initializationIssues)
+	return pipeline, reported, err
 }
 
-func suppressInitializationIssues(
+func applyInitializationIssueLevels(
 	config processConfig,
 	initializationIssues []schemaresult.InitializationIssue,
-) ([]schemaresult.InitializationIssue, int) {
-	if !config.suppressIssuesConfigured {
-		return initializationIssues, 0
-	}
-	suppressedCodes := make(map[issue.IssueCode]struct{}, len(config.suppressIssueCodes))
-	for _, name := range config.suppressIssueCodes {
-		if code, ok := issue.ParseCode(name); ok {
-			suppressedCodes[code] = struct{}{}
+) ([]schemaresult.InitializationIssue, error) {
+	reported := make([]schemaresult.InitializationIssue, 0, len(initializationIssues))
+	for _, found := range initializationIssues {
+		level := effectiveInitializationIssueLevel(config.issueLevels.rules, found.Code)
+		switch level {
+		case issue.LevelIgnored:
+			continue
+		case issue.LevelError:
+			return nil, fmt.Errorf("initialization issue %s: %s", found.Code, found.Message)
+		default:
+			reported = append(reported, found)
 		}
 	}
-	reported := make([]schemaresult.InitializationIssue, 0, len(initializationIssues))
-	suppressed := 0
-	for _, found := range initializationIssues {
-		_, selected := suppressedCodes[found.Code]
-		if found.Code.Suppressible() && (len(config.suppressIssueCodes) == 0 || selected) {
-			suppressed++
+	return reported, nil
+}
+
+func effectiveInitializationIssueLevel(rules []issueLevelRule, code issue.Code) issue.Level {
+	level := issue.LevelWarning
+	for _, rule := range rules {
+		if rule.all {
+			if rule.level != issue.LevelIgnored || code.Ignorable() {
+				level = rule.level
+			}
 			continue
 		}
-		reported = append(reported, found)
+		if rule.code == code {
+			level = rule.level
+		}
 	}
-	return reported, suppressed
+	return level
+}
+
+func cliPipelineOptionError(err error) error {
+	var duplicate *eventpipeline.PipelineOptionDuplicateError
+	if errors.As(err, &duplicate) {
+		switch duplicate.Option() {
+		case eventpipeline.PipelineOptionAllIssueLevels:
+			return errors.New("duplicate --issue-level: all")
+		case eventpipeline.PipelineOptionAllValidationLevels:
+			return errors.New("duplicate --validation-level: all")
+		default:
+			return fmt.Errorf("%s may only be specified once", cliPipelineOptionName(duplicate.Option()))
+		}
+	}
+
+	var issueAllAfterCode *eventpipeline.PipelineOptionIssueLevelAllAfterCodeError
+	if errors.As(err, &issueAllAfterCode) {
+		return errors.New("invalid --issue-level order: all=LEVEL must precede specific codes")
+	}
+	var issueDuplicate *eventpipeline.PipelineOptionIssueLevelDuplicateCodeError
+	if errors.As(err, &issueDuplicate) {
+		return fmt.Errorf("duplicate --issue-level: %s", issueDuplicate.Code())
+	}
+	var validationAllAfterCode *eventpipeline.PipelineOptionValidationLevelAllAfterCodeError
+	if errors.As(err, &validationAllAfterCode) {
+		return errors.New("invalid --validation-level order: all=LEVEL must precede specific codes")
+	}
+	var validationDuplicate *eventpipeline.PipelineOptionValidationLevelDuplicateCodeError
+	if errors.As(err, &validationDuplicate) {
+		return fmt.Errorf("duplicate --validation-level: %s", validationDuplicate.Code())
+	}
+	return nil
+}
+
+func cliPipelineOptionName(option eventpipeline.PipelineOptionName) string {
+	switch option {
+	case eventpipeline.PipelineOptionSchema:
+		return "--schema"
+	case eventpipeline.PipelineOptionEnumSiblings:
+		return "--enum-siblings"
+	case eventpipeline.PipelineOptionObservables:
+		return "--observables"
+	case eventpipeline.PipelineOptionEnrichmentObservablePathNotation,
+		eventpipeline.PipelineOptionValidationObservablePathNotation:
+		return "--observable-path-notation"
+	case eventpipeline.PipelineOptionValidation:
+		return "--validate"
+	case eventpipeline.PipelineOptionIssueLevel, eventpipeline.PipelineOptionAllIssueLevels:
+		return "--issue-level"
+	case eventpipeline.PipelineOptionValidationLevel, eventpipeline.PipelineOptionAllValidationLevels:
+		return "--validation-level"
+	default:
+		return "pipeline option " + string(option)
+	}
 }
 
 func processOneEvent(
@@ -255,8 +314,6 @@ func processOneEvent(
 	fileResult.ProcessingCompleted = true
 	fileResult.ValidationErrorCount = result.Validation().Count(validation.LevelError)
 	fileResult.ValidationWarningCount = result.Validation().Count(validation.LevelWarning)
-	fileResult.SuppressedValidationErrorCount = result.Validation().SuppressedErrorCount
-	fileResult.SuppressedValidationWarningCount = result.Validation().SuppressedWarningCount
 	fileResult.EnumSiblingsAdded = result.Enrichment().EnumSiblingsAdded
 	fileResult.ObservablesAdded = result.Enrichment().ObservablesAdded
 	fileResult.EnumSiblingsRemoved = result.EnrichmentRemoval().EnumSiblingsRemoved
@@ -264,7 +321,6 @@ func processOneEvent(
 	fileResult.ObservablesRemoved = result.EnrichmentRemoval().ObservablesRemoved
 	fileResult.ObservablesRetained = result.EnrichmentRemoval().ObservablesRetained
 	fileResult.IssueCount = len(result.Issues())
-	fileResult.SuppressedIssueCount = result.SuppressedIssueCount()
 
 	if config.mutatesEvent() {
 		outputPath := eventOutput.path.display
@@ -307,9 +363,8 @@ func buildEventReport(
 	fileResult fileSummary,
 ) eventReport {
 	report := eventReport{
-		ReportVersion:        eventReportVersion,
-		EventSource:          input.path,
-		SuppressedIssueCount: result.SuppressedIssueCount(),
+		ReportVersion: eventReportVersion,
+		EventSource:   input.path,
 	}
 	if fileResult.EventWritten {
 		report.EventDestination = fileResult.EventPath

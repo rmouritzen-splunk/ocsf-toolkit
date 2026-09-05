@@ -29,13 +29,13 @@ func TestHumanSummaryUsesHelpWrappingAndPreservesIndentation(t *testing.T) {
 	report := summaryReport{
 		Metadata: buildSummaryMetadata(),
 		Validation: &validationSummaryReport{
-			SuppressedErrorCount: 12,
+			TotalWarningCount: 12,
 		},
 	}
 
 	output := humanSummaryWithMetadata(report, 20)
 
-	require.Contains(t, output, "  Errors suppressed:\n  12\n")
+	require.Contains(t, output, "  Warnings reported:\n  12\n")
 }
 
 func TestSummaryAggregatesAllValidationCategoriesAndProcessorCounts(t *testing.T) {
@@ -45,13 +45,12 @@ func TestSummaryAggregatesAllValidationCategoriesAndProcessorCounts(t *testing.T
 		{InputPath: "clean.json", ProcessingCompleted: true, EventWritten: true, ReportWritten: true},
 		{
 			InputPath: "warning.json", ProcessingCompleted: true, ValidationWarningCount: 2,
-			SuppressedValidationWarningCount: 1, EnumSiblingsAdded: 2, ObservablesAdded: 3,
-			IssueCount: 1, SuppressedIssueCount: 2, EventWritten: true, ReportWritten: true,
+			EnumSiblingsAdded: 2, ObservablesAdded: 3, IssueCount: 1, EventWritten: true, ReportWritten: true,
 		},
 		{
 			InputPath: "error.json", ProcessingCompleted: true, ValidationErrorCount: 3,
-			SuppressedValidationErrorCount: 2, EnumSiblingsRemoved: 4, EnumSiblingsRetained: 1,
-			ObservablesRemoved: 5, ObservablesRetained: 2, EventWritten: true, ReportWritten: true,
+			EnumSiblingsRemoved: 4, EnumSiblingsRetained: 1, ObservablesRemoved: 5,
+			ObservablesRetained: 2, EventWritten: true, ReportWritten: true,
 		},
 		{InputPath: "both.json", ProcessingCompleted: true, ValidationErrorCount: 1, ValidationWarningCount: 1,
 			EventWritten: true, ReportWritten: true},
@@ -70,8 +69,6 @@ func TestSummaryAggregatesAllValidationCategoriesAndProcessorCounts(t *testing.T
 	assert.Equal(1, report.Validation.EventsWithWarningsAndErrors)
 	assert.Equal(4, report.Validation.TotalErrorCount)
 	assert.Equal(3, report.Validation.TotalWarningCount)
-	assert.Equal(2, report.Validation.SuppressedErrorCount)
-	assert.Equal(1, report.Validation.SuppressedWarningCount)
 	assert.Equal(2, report.Enrichment.EnumSiblingsAdded)
 	assert.Equal(3, report.Enrichment.ObservablesAdded)
 	assert.Equal(4, report.EnrichmentRemoval.EnumSiblingsRemoved)
@@ -79,7 +76,6 @@ func TestSummaryAggregatesAllValidationCategoriesAndProcessorCounts(t *testing.T
 	assert.Equal(5, report.EnrichmentRemoval.ObservablesRemoved)
 	assert.Equal(2, report.EnrichmentRemoval.ObservablesRetained)
 	assert.Equal(1, report.Issues.ReportedCount)
-	assert.Equal(2, report.Issues.SuppressedCount)
 	assert.Equal(4, report.Outputs.EventsWritten)
 	assert.Equal(4, report.Outputs.ReportsWritten)
 	assert.Len(report.Files, 4)
@@ -105,7 +101,7 @@ func TestProcessValidationSummaryCountsEventsWithWarningsOnly(t *testing.T) {
 		"--schema", schemaPath,
 		"--events-dir", eventsDir,
 		"--validate",
-		"--warn-on-missing-recommended",
+		"--validation-level", validation.AttributeRecommendedMissing.String()+"=warning",
 		"--output-dir", outputDir,
 		"--summary-json", summaryPath,
 	)
@@ -251,10 +247,9 @@ func TestProcessDirectoryPreservesRelativeOutputPathsAndWritesSummary(t *testing
 	assert.Contains(string(summaryJSON), `"events_with_warnings_only":0`)
 	assert.Contains(string(summaryJSON), `"total_error_count":0`)
 	assert.Contains(string(summaryJSON), `"total_warning_count":0`)
-	assert.Contains(string(summaryJSON), `"suppressed_error_count":0`)
-	assert.Contains(string(summaryJSON), `"suppressed_warning_count":0`)
-	assert.NotContains(string(summaryJSON), `"suppressed_default_error_count"`)
-	assert.NotContains(string(summaryJSON), `"suppressed_default_warning_count"`)
+	assert.NotContains(string(summaryJSON), `"ignored_error_count"`)
+	assert.NotContains(string(summaryJSON), `"ignored_warning_count"`)
+	assert.NotContains(string(summaryJSON), `"ignored_issue_count"`)
 	assert.Contains(string(summaryJSON), `"events_written":1`)
 	assert.Contains(string(summaryJSON), `"event_destination":`)
 	assert.Contains(string(summaryJSON), `"report_destination":`)
@@ -313,11 +308,8 @@ func validationHumanSummaryLines(noFindings, warningsOnly, errorsOnly, both, err
 		fmt.Sprintf("  Events with warnings and errors: %d", both),
 		fmt.Sprintf("  Errors reported: %d", errors),
 		fmt.Sprintf("  Warnings reported: %d", warnings),
-		"  Errors suppressed: 0",
-		"  Warnings suppressed: 0",
 		"Processing issues:",
 		"  Reported: 0",
-		"  Suppressed: 0",
 		"Outputs:",
 		"  Processed events written: 0",
 		"  Processing reports written: 1",

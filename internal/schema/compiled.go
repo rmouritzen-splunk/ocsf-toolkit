@@ -37,7 +37,7 @@ type Compiled struct {
 // TypeDerivedFrom reports whether typeName is baseType or directly derives from it through the compiled type
 // dictionary.
 func (s *Compiled) TypeDerivedFrom(typeName, baseType string) bool {
-	if s == nil || s.Dictionary == nil || s.Dictionary.Types == nil {
+	if s.Dictionary == nil || s.Dictionary.Types == nil {
 		return typeName == baseType
 	}
 	types := s.Dictionary.Types.Attributes
@@ -57,7 +57,7 @@ func (s *Compiled) TypeDerivedFrom(typeName, baseType string) bool {
 // ResolvePrimitiveType follows dictionary type inheritance to its terminal primitive or unknown type. It reports
 // cyclic inheritance for internally constructed compiled schemas that bypass schema loading validation.
 func (s *Compiled) ResolvePrimitiveType(typeName string) (string, error) {
-	if s == nil || s.Dictionary == nil || s.Dictionary.Types == nil {
+	if s.Dictionary == nil || s.Dictionary.Types == nil {
 		return typeName, nil
 	}
 	types := s.Dictionary.Types.Attributes
@@ -81,7 +81,7 @@ func (s *Compiled) ResolvePrimitiveType(typeName string) (string, error) {
 
 // DictionaryType returns the definition of a named dictionary type, or nil when it is unavailable.
 func (s *Compiled) DictionaryType(typeName string) *TypeDefinition {
-	if s == nil || s.Dictionary == nil || s.Dictionary.Types == nil {
+	if s.Dictionary == nil || s.Dictionary.Types == nil {
 		return nil
 	}
 	return s.Dictionary.Types.Attributes[typeName]
@@ -362,18 +362,12 @@ func makeObservableTypes(objects map[string]*ObjectDefinition) (map[int64]string
 
 // ObservableTypeIDValue returns an observable type ID preboxed for insertion into a JSON-like event map.
 func (s *Compiled) ObservableTypeIDValue(typeID int64) (any, bool) {
-	if s == nil {
-		return nil, false
-	}
 	value, present := s.observableTypeIDs[typeID]
 	return value, present
 }
 
 // ObservableTypeValue returns an observable type caption preboxed for insertion into a JSON-like event map.
 func (s *Compiled) ObservableTypeValue(typeID int64) (any, bool) {
-	if s == nil {
-		return nil, false
-	}
 	value, present := s.observableTypeValues[typeID]
 	return value, present
 }

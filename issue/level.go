@@ -1,17 +1,16 @@
-package validation
+package issue
 
 import "github.com/ocsf/ocsf-toolkit/internal/coderegistry"
 
-// Level identifies the effective reporting level of a validation finding.
+// Level controls how an event-processing issue affects pipeline processing.
 type Level uint8
 
 const (
-	invalidLevel Level = iota
-	// LevelIgnored omits an ignorable validation finding under the active policy.
-	LevelIgnored
-	// LevelWarning reports a condition that should be reviewed but does not fail validation under the active policy.
+	// LevelIgnored omits an ignorable issue and continues processing.
+	LevelIgnored Level = iota + 1
+	// LevelWarning reports an issue in the processing result and continues processing.
 	LevelWarning
-	// LevelError reports a condition that fails validation under the active policy.
+	// LevelError returns an issue as a processing error and stops processing.
 	LevelError
 	levelCount
 )
@@ -22,7 +21,7 @@ var levelInfos = [levelCount]coderegistry.Info{
 	LevelError:   {Name: "error"},
 }
 
-var levelRegistry = coderegistry.New[Level]("validation level", levelInfos[:])
+var levelRegistry = coderegistry.New[Level]("issue level", levelInfos[:])
 
 // Valid reports whether level is defined by this toolkit version.
 func (level Level) Valid() bool {
@@ -34,7 +33,7 @@ func (level Level) String() string {
 	return levelRegistry.String(level)
 }
 
-// ParseLevel resolves a stable external validation-level representation.
+// ParseLevel resolves a stable external issue-level representation.
 func ParseLevel(value string) (Level, bool) {
 	return levelRegistry.Parse(value)
 }

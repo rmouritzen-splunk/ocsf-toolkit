@@ -11,7 +11,7 @@ import (
 
 func TestClassUIDIssueAndValidationCodesRemainConsistent(t *testing.T) {
 	pairs := []struct {
-		issueCode      issue.IssueCode
+		issueCode      issue.Code
 		validationCode validation.Code
 	}{
 		{issueCode: issue.ClassUIDMissing, validationCode: validation.ClassUIDMissing},
@@ -24,7 +24,7 @@ func TestClassUIDIssueAndValidationCodesRemainConsistent(t *testing.T) {
 		validationSuffix := strings.TrimPrefix(pair.validationCode.String(), "validation_")
 		require.Equal(t, validationSuffix, issueSuffix)
 		require.Equal(t, pair.validationCode.Description(), pair.issueCode.Description())
-		require.False(t, pair.issueCode.Suppressible())
-		require.False(t, pair.validationCode.Suppressible())
+		require.False(t, pair.issueCode.Ignorable())
+		require.True(t, pair.validationCode.Ignorable())
 	}
 }

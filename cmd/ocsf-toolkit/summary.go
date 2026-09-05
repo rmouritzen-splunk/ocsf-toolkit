@@ -13,14 +13,11 @@ import (
 type processSummary struct {
 	SchemaPath                            string
 	InitializationIssues                  []schemaresult.InitializationIssue
-	SuppressedInitializationIssues        int
 	EventsProcessed                       int
 	ParseFailures                         int
 	ProcessingFailures                    int
 	TotalValidationErrorCount             int
 	TotalValidationWarningCount           int
-	TotalSuppressedValidationErrorCount   int
-	TotalSuppressedValidationWarningCount int
 	EventsWithNoValidationFindings        int
 	EventsWithValidationWarningsOnly      int
 	EventsWithValidationErrorsOnly        int
@@ -32,7 +29,6 @@ type processSummary struct {
 	TotalObservablesRemoved               int
 	TotalObservablesRetained              int
 	TotalIssueCount                       int
-	TotalSuppressedIssueCount             int
 	EventWriteFailures                    int
 	ReportWriteFailures                   int
 	EventsWritten                         int
@@ -59,8 +55,7 @@ type summaryReport struct {
 }
 
 type initializationSummaryReport struct {
-	Issues               []schemaresult.InitializationIssue `json:"issues,omitempty"`
-	SuppressedIssueCount int                                `json:"suppressed_issue_count,omitempty"`
+	Issues []schemaresult.InitializationIssue `json:"issues,omitempty"`
 }
 
 type summaryMetadataReport struct {
@@ -86,8 +81,6 @@ type validationSummaryReport struct {
 	EventsWithWarningsAndErrors int `json:"events_with_warnings_and_errors"`
 	TotalErrorCount             int `json:"total_error_count"`
 	TotalWarningCount           int `json:"total_warning_count"`
-	SuppressedErrorCount        int `json:"suppressed_error_count"`
-	SuppressedWarningCount      int `json:"suppressed_warning_count"`
 }
 
 type enrichmentSummaryReport struct {
@@ -105,8 +98,7 @@ type enrichmentRemovalSummaryReport struct {
 }
 
 type issueSummaryReport struct {
-	ReportedCount   int `json:"reported_count"`
-	SuppressedCount int `json:"suppressed_count"`
+	ReportedCount int `json:"reported_count"`
 }
 
 type outputSummaryReport struct {
@@ -117,29 +109,26 @@ type outputSummaryReport struct {
 }
 
 type fileSummary struct {
-	InputPath                        string
-	RelativePath                     string
-	ProcessingCompleted              bool
-	ParseError                       string
-	ProcessingError                  string
-	EventPath                        string
-	EventWriteError                  string
-	ReportPath                       string
-	ReportWriteError                 string
-	ValidationErrorCount             int
-	ValidationWarningCount           int
-	SuppressedValidationErrorCount   int
-	SuppressedValidationWarningCount int
-	EnumSiblingsAdded                int
-	ObservablesAdded                 int
-	EnumSiblingsRemoved              int
-	EnumSiblingsRetained             int
-	ObservablesRemoved               int
-	ObservablesRetained              int
-	IssueCount                       int
-	SuppressedIssueCount             int
-	EventWritten                     bool
-	ReportWritten                    bool
+	InputPath              string
+	RelativePath           string
+	ProcessingCompleted    bool
+	ParseError             string
+	ProcessingError        string
+	EventPath              string
+	EventWriteError        string
+	ReportPath             string
+	ReportWriteError       string
+	ValidationErrorCount   int
+	ValidationWarningCount int
+	EnumSiblingsAdded      int
+	ObservablesAdded       int
+	EnumSiblingsRemoved    int
+	EnumSiblingsRetained   int
+	ObservablesRemoved     int
+	ObservablesRetained    int
+	IssueCount             int
+	EventWritten           bool
+	ReportWritten          bool
 }
 
 type fileSummaryReport struct {
@@ -154,10 +143,8 @@ type fileSummaryReport struct {
 }
 
 type fileValidationSummaryReport struct {
-	ErrorCount             int `json:"error_count"`
-	WarningCount           int `json:"warning_count"`
-	SuppressedErrorCount   int `json:"suppressed_error_count"`
-	SuppressedWarningCount int `json:"suppressed_warning_count"`
+	ErrorCount   int `json:"error_count"`
+	WarningCount int `json:"warning_count"`
 }
 
 type fileEnrichmentRemovalSummaryReport struct {
@@ -180,10 +167,7 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 		Metadata:            buildSummaryMetadata(),
 		SchemaPath:          summary.SchemaPath,
 		EventFilesProcessed: summary.EventsProcessed,
-		Issues: issueSummaryReport{
-			ReportedCount:   summary.TotalIssueCount,
-			SuppressedCount: summary.TotalSuppressedIssueCount,
-		},
+		Issues:              issueSummaryReport{ReportedCount: summary.TotalIssueCount},
 		Outputs: outputSummaryReport{
 			EventsWritten:       summary.EventsWritten,
 			ReportsWritten:      summary.ReportsWritten,
@@ -195,10 +179,9 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 	for index, file := range summary.Files {
 		report.Files[index] = buildFileSummaryReport(config, file)
 	}
-	if len(summary.InitializationIssues) != 0 || summary.SuppressedInitializationIssues != 0 {
+	if len(summary.InitializationIssues) != 0 {
 		report.Initialization = &initializationSummaryReport{
-			Issues:               summary.InitializationIssues,
-			SuppressedIssueCount: summary.SuppressedInitializationIssues,
+			Issues: summary.InitializationIssues,
 		}
 	}
 	if config.validate {
@@ -209,8 +192,6 @@ func buildSummaryReport(config processConfig, summary processSummary) summaryRep
 			EventsWithWarningsAndErrors: summary.EventsWithValidationWarningsAndErrors,
 			TotalErrorCount:             summary.TotalValidationErrorCount,
 			TotalWarningCount:           summary.TotalValidationWarningCount,
-			SuppressedErrorCount:        summary.TotalSuppressedValidationErrorCount,
-			SuppressedWarningCount:      summary.TotalSuppressedValidationWarningCount,
 		}
 	}
 	if config.enrich {
@@ -237,10 +218,7 @@ func buildFileSummaryReport(config processConfig, file fileSummary) fileSummaryR
 		EventSource:  file.InputPath,
 		RelativePath: file.RelativePath,
 		Processed:    file.ProcessingCompleted,
-		Issues: issueSummaryReport{
-			ReportedCount:   file.IssueCount,
-			SuppressedCount: file.SuppressedIssueCount,
-		},
+		Issues:       issueSummaryReport{ReportedCount: file.IssueCount},
 		Outputs: fileOutputSummaryReport{
 			EventDestination:  file.EventPath,
 			ReportDestination: file.ReportPath,
@@ -250,10 +228,8 @@ func buildFileSummaryReport(config processConfig, file fileSummary) fileSummaryR
 	}
 	if config.validate {
 		report.Validation = &fileValidationSummaryReport{
-			ErrorCount:             file.ValidationErrorCount,
-			WarningCount:           file.ValidationWarningCount,
-			SuppressedErrorCount:   file.SuppressedValidationErrorCount,
-			SuppressedWarningCount: file.SuppressedValidationWarningCount,
+			ErrorCount:   file.ValidationErrorCount,
+			WarningCount: file.ValidationWarningCount,
 		}
 	}
 	if config.enrich {
@@ -317,7 +293,6 @@ func humanSummary(report summaryReport) string {
 		}
 		lines = append(lines,
 			summaryEntry("Reported: %d", len(report.Initialization.Issues)),
-			summaryEntry("Suppressed: %d", report.Initialization.SuppressedIssueCount),
 		)
 	}
 	if report.Validation != nil {
@@ -329,8 +304,6 @@ func humanSummary(report summaryReport) string {
 			summaryEntry("Events with warnings and errors: %d", report.Validation.EventsWithWarningsAndErrors),
 			summaryEntry("Errors reported: %d", report.Validation.TotalErrorCount),
 			summaryEntry("Warnings reported: %d", report.Validation.TotalWarningCount),
-			summaryEntry("Errors suppressed: %d", report.Validation.SuppressedErrorCount),
-			summaryEntry("Warnings suppressed: %d", report.Validation.SuppressedWarningCount),
 		)
 	}
 	if report.Enrichment != nil {
@@ -358,7 +331,6 @@ func humanSummary(report summaryReport) string {
 	lines = append(lines,
 		"Processing issues:",
 		summaryEntry("Reported: %d", report.Issues.ReportedCount),
-		summaryEntry("Suppressed: %d", report.Issues.SuppressedCount),
 		"Outputs:",
 		summaryEntry("Processed events written: %d", report.Outputs.EventsWritten),
 		summaryEntry("Processing reports written: %d", report.Outputs.ReportsWritten),
@@ -400,8 +372,6 @@ func updateSummary(summary *processSummary, fileResult fileSummary, retainFileSu
 	}
 	summary.TotalValidationErrorCount += fileResult.ValidationErrorCount
 	summary.TotalValidationWarningCount += fileResult.ValidationWarningCount
-	summary.TotalSuppressedValidationErrorCount += fileResult.SuppressedValidationErrorCount
-	summary.TotalSuppressedValidationWarningCount += fileResult.SuppressedValidationWarningCount
 	switch {
 	case fileResult.ValidationErrorCount > 0 && fileResult.ValidationWarningCount > 0:
 		summary.EventsWithValidationWarningsAndErrors++
@@ -419,7 +389,6 @@ func updateSummary(summary *processSummary, fileResult fileSummary, retainFileSu
 	summary.TotalObservablesRemoved += fileResult.ObservablesRemoved
 	summary.TotalObservablesRetained += fileResult.ObservablesRetained
 	summary.TotalIssueCount += fileResult.IssueCount
-	summary.TotalSuppressedIssueCount += fileResult.SuppressedIssueCount
 	if fileResult.EventWriteError != "" {
 		summary.EventWriteFailures++
 	}

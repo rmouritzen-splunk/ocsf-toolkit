@@ -28,9 +28,6 @@ type EnumDefinition struct {
 
 // CaptionValue returns the caption preboxed for insertion into a JSON-like event map.
 func (e *EnumDefinition) CaptionValue() any {
-	if e == nil {
-		return nil
-	}
 	if e.captionValue == nil {
 		return e.Caption
 	}

@@ -6,12 +6,14 @@ import (
 	"strings"
 
 	"github.com/ocsf/ocsf-toolkit/enrichment"
+	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/validation"
 )
 
 type cliOptions struct {
 	General             generalOptions
 	Mutation            mutationOptions
+	Issues              issueOptions
 	Validation          validationOptions
 	Help                bool
 	ListIssueCodes      bool
@@ -35,22 +37,112 @@ type generalOptions struct {
 }
 
 type validationOptions struct {
-	Validate                 bool
-	WarnOnMissingRecommended bool
-	FailOnValidationErrors   bool
-	Suppress                 validationCodesOption
-	WarningsAsErrors         validationCodesOption
-	ErrorsAsWarnings         validationCodesOption
+	Validate               bool
+	FailOnValidationErrors bool
+	Levels                 validationLevelsOption
+}
+
+type issueOptions struct {
+	Levels issueLevelsOption
 }
 
 type mutationOptions struct {
-	Enrich         bool
-	Unenrich       bool
-	ForceRemove    bool
-	EnumSiblings   enrichmentActionOption
-	Observables    enrichmentActionOption
-	ObservableIDs  observableTypeIDsOption
-	SuppressIssues suppressIssuesOption
+	Enrich        bool
+	Unenrich      bool
+	ForceRemove   bool
+	EnumSiblings  enrichmentActionOption
+	Observables   enrichmentActionOption
+	ObservableIDs observableTypeIDsOption
+}
+
+type issueLevelsOption struct {
+	optionName string
+	rules      []issueLevelRule
+}
+
+type issueLevelRule struct {
+	code  issue.Code
+	level issue.Level
+	all   bool
+}
+
+func (o *issueLevelsOption) setOptionName(name string) {
+	o.optionName = name
+}
+
+//nolint:dupl // Typed issue and validation parsing keeps package-specific errors clear.
+func (o *issueLevelsOption) Set(value string) error {
+	codeName, levelName, ok := strings.Cut(value, "=")
+	if !ok || codeName == "" || levelName == "" {
+		return fmt.Errorf("invalid value %q for %s: expected ISSUE_CODE=LEVEL", value, o.optionName)
+	}
+	level, ok := issue.ParseLevel(levelName)
+	if !ok {
+		return fmt.Errorf("unknown issue level %q in %s", levelName, o.optionName)
+	}
+	if codeName == "all" {
+		o.rules = append(o.rules, issueLevelRule{level: level, all: true})
+		return nil
+	}
+	code, ok := issue.ParseCode(codeName)
+	if !ok {
+		return fmt.Errorf("unknown issue code %q in %s", codeName, o.optionName)
+	}
+	o.rules = append(o.rules, issueLevelRule{code: code, level: level})
+	return nil
+}
+
+func (*issueLevelsOption) String() string {
+	return ""
+}
+
+func (*issueLevelsOption) Type() string {
+	return "issue level"
+}
+
+type validationLevelsOption struct {
+	optionName string
+	rules      []validationLevelRule
+}
+
+type validationLevelRule struct {
+	code  validation.Code
+	level validation.Level
+	all   bool
+}
+
+func (o *validationLevelsOption) setOptionName(name string) {
+	o.optionName = name
+}
+
+//nolint:dupl // Typed issue and validation parsing keeps package-specific errors clear.
+func (o *validationLevelsOption) Set(value string) error {
+	codeName, levelName, ok := strings.Cut(value, "=")
+	if !ok || codeName == "" || levelName == "" {
+		return fmt.Errorf("invalid value %q for %s: expected VALIDATION_CODE=LEVEL", value, o.optionName)
+	}
+	level, ok := validation.ParseLevel(levelName)
+	if !ok {
+		return fmt.Errorf("unknown validation level %q in %s", levelName, o.optionName)
+	}
+	if codeName == "all" {
+		o.rules = append(o.rules, validationLevelRule{level: level, all: true})
+		return nil
+	}
+	code, ok := validation.ParseCode(codeName)
+	if !ok {
+		return fmt.Errorf("unknown validation code %q in %s", codeName, o.optionName)
+	}
+	o.rules = append(o.rules, validationLevelRule{code: code, level: level})
+	return nil
+}
+
+func (*validationLevelsOption) String() string {
+	return ""
+}
+
+func (*validationLevelsOption) Type() string {
+	return "validation level"
 }
 
 // setOnceOption guards a pflag.Value option against being specified more than once, and names itself as optionName
@@ -76,12 +168,6 @@ func (o *setOnceOption) markConfigured() error {
 // flag without duplicating that name as a literal string at each call site.
 type namedOption interface {
 	setOptionName(name string)
-}
-
-// isEmptyOrAllCodesValue reports whether value is the flag-omitted-entirely case (empty) or the flag-given-without-a-
-// value case (optionalCodesAllValue, via NoOptDefVal): both mean "every code", so Set should record no explicit codes.
-func isEmptyOrAllCodesValue(value string) bool {
-	return value == "" || value == optionalCodesAllValue
 }
 
 type enrichmentActionOption struct {
@@ -110,31 +196,27 @@ func (*enrichmentActionOption) Type() string {
 }
 
 type observableTypeIDsOption struct {
-	setOnceOption
-	values []int64
+	optionName string
+	configured bool
+	values     []int64
+}
+
+func (o *observableTypeIDsOption) setOptionName(name string) {
+	o.optionName = name
 }
 
 func (o *observableTypeIDsOption) Set(value string) error {
-	if err := o.markConfigured(); err != nil {
-		return err
-	}
 	if value == "" {
-		return fmt.Errorf("%s requires at least one observable type ID", o.optionName)
+		return fmt.Errorf("%s requires an observable type ID", o.optionName)
 	}
-	components := strings.Split(value, ",")
-	o.values = make([]int64, len(components))
-	for index, component := range components {
-		if component == "" {
-			return fmt.Errorf("%s contains an empty observable type ID", o.optionName)
-		}
-		typeID, err := strconv.ParseInt(component, 10, 64)
-		if err != nil {
-			return fmt.Errorf(
-				"invalid observable type ID %q in %s: must be a signed 64-bit integer", component, o.optionName,
-			)
-		}
-		o.values[index] = typeID
+	typeID, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fmt.Errorf(
+			"invalid observable type ID %q in %s: must be a signed 64-bit integer", value, o.optionName,
+		)
 	}
+	o.configured = true
+	o.values = append(o.values, typeID)
 	return nil
 }
 
@@ -147,70 +229,5 @@ func (o *observableTypeIDsOption) String() string {
 }
 
 func (*observableTypeIDsOption) Type() string {
-	return "observable IDs"
-}
-
-// optionalCodesAllValue is the NoOptDefVal used when a code-selection option is given without a value. It is not a
-// valid issue or validation code, so it cannot collide with a real one.
-const optionalCodesAllValue = "*"
-
-type suppressIssuesOption struct {
-	setOnceOption
-	values []string
-}
-
-func (o *suppressIssuesOption) Set(value string) error {
-	if err := o.markConfigured(); err != nil {
-		return err
-	}
-	if isEmptyOrAllCodesValue(value) {
-		return nil
-	}
-	o.values = strings.Split(value, ",")
-	return nil
-}
-
-func (o *suppressIssuesOption) String() string {
-	return strings.Join(o.values, ",")
-}
-
-func (*suppressIssuesOption) Type() string {
-	return "issue codes"
-}
-
-type validationCodesOption struct {
-	setOnceOption
-	codes []validation.Code
-}
-
-func (o *validationCodesOption) Set(value string) error {
-	if err := o.markConfigured(); err != nil {
-		return err
-	}
-	if isEmptyOrAllCodesValue(value) {
-		return nil
-	}
-	for component := range strings.SplitSeq(value, ",") {
-		if component == "" {
-			return fmt.Errorf("%s contains an empty validation code", o.optionName)
-		}
-		code, ok := validation.ParseCode(component)
-		if !ok {
-			return fmt.Errorf("unknown validation code %q in %s", component, o.optionName)
-		}
-		o.codes = append(o.codes, code)
-	}
-	return nil
-}
-
-func (o *validationCodesOption) String() string {
-	values := make([]string, len(o.codes))
-	for index, code := range o.codes {
-		values[index] = code.String()
-	}
-	return strings.Join(values, ",")
-}
-
-func (*validationCodesOption) Type() string {
-	return "validation codes"
+	return "observable ID"
 }

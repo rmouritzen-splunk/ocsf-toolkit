@@ -27,7 +27,7 @@ type numericEnumEntry struct {
 // NumericEnumDefinition returns the definition indexed for an integral enum value. The owning compiled schema must
 // have initialized its traversal cache before this method is used.
 func (a *ItemAttributeDefinition) NumericEnumDefinition(value int64) *EnumDefinition {
-	if a == nil || a.numericEnums == nil {
+	if a.numericEnums == nil {
 		return nil
 	}
 	index := a.numericEnums
@@ -51,7 +51,7 @@ func (a *ItemAttributeDefinition) NumericEnumDefinition(value int64) *EnumDefini
 // NumericEnumKeysCanonical reports whether every numeric enum key is a canonical signed 64-bit integer. When
 // true, an exact json.Number spelling may be looked up directly in Enum before numeric normalization.
 func (a *ItemAttributeDefinition) NumericEnumKeysCanonical() bool {
-	return a != nil && a.numericEnums != nil && a.numericEnums.keysCanonical
+	return a.numericEnums != nil && a.numericEnums.keysCanonical
 }
 
 func (s *Compiled) initializeItemNumericEnums(item *ItemDefinition) {

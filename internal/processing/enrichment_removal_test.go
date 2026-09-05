@@ -35,7 +35,7 @@ func TestEnumSiblingRetentionReasonsHaveStableStrings(t *testing.T) {
 
 func TestRecordEnumSiblingRetentionRejectsUnexpectedReason(t *testing.T) {
 	err := recordEnumSiblingRetention(
-		&processContext{}, nil, "mode_id", "mode", enumSiblingRetentionReasonCount, "", issueSuppression{},
+		&processContext{}, nil, "mode_id", "mode", enumSiblingRetentionReasonCount, "",
 	)
 	require.ErrorContains(t, err, "unexpected enum sibling retention reason")
 }
@@ -1004,7 +1004,7 @@ func TestEnrichmentRemovalReportsMalformedObservables(t *testing.T) {
 		name       string
 		observable any
 		prepare    func(jsonish.Map)
-		wantCode   issue.IssueCode
+		wantCode   issue.Code
 	}{
 		{
 			name:       "attribute is not an array",

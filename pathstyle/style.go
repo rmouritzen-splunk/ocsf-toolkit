@@ -1,10 +1,5 @@
 package pathstyle
 
-import (
-	"strconv"
-	"strings"
-)
-
 // Style selects how an OCSF event attribute path represents array traversal and the event root.
 type Style string
 
@@ -28,24 +23,5 @@ func (s Style) Valid() bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// AppendArrayNotation appends the style's representation of an array traversal at index.
-// Simple and invalid styles append nothing.
-func (s Style) AppendArrayNotation(builder *strings.Builder, index int) {
-	switch s {
-	case ArrayBrackets:
-		builder.WriteString("[]")
-	case ArrayWildcard:
-		builder.WriteString("[*]")
-	case ArrayIndexed, JSONPath:
-		builder.WriteByte('[')
-		var buffer [20]byte
-		builder.Write(strconv.AppendInt(buffer[:0], int64(index), 10))
-		builder.WriteByte(']')
-	default:
-		// Simple, and defensively other cases, do not add any array notation.
-		return
 	}
 }

@@ -22,24 +22,13 @@ import (
 type validationProcessor struct {
 	config ValidationConfig
 	cache  *schema.ValidationCache
-	policy validationPolicy
-}
-
-// validationPolicySetting is immutable pipeline-owned state for one explicitly configured code. A false suppressed
-// value and invalid level represent no level override, though such an empty setting is not stored in validationPolicy.
-type validationPolicySetting struct {
-	suppressed bool
-	level      validation.Level
-}
-
-type validationPolicy struct {
-	settings         map[validation.Code]validationPolicySetting
-	suppressAll      bool
-	errorsAsWarnings bool
-	warningsAsErrors bool
+	policy levelPolicy
 }
 
 func (p *validationProcessor) onClassUIDMissing(context *processContext) {
+	if p.policy.isIgnored(validationClassUIDMissingMask) {
+		return
+	}
 	p.addFinding(
 		context,
 		validation.ClassUIDMissing,
@@ -49,6 +38,9 @@ func (p *validationProcessor) onClassUIDMissing(context *processContext) {
 }
 
 func (p *validationProcessor) onClassUIDWrongType(context *processContext, value any) {
+	if p.policy.isIgnored(validationClassUIDWrongTypeMask) {
+		return
+	}
 	valueType, valueTypeExtra := eventvalue.DescribeType(value)
 	p.addFindingString2(
 		context,
@@ -68,6 +60,9 @@ func (p *validationProcessor) onClassUIDWrongType(context *processContext, value
 }
 
 func (p *validationProcessor) onClassUIDUnknown(context *processContext) {
+	if p.policy.isIgnored(validationClassUIDUnknownMask) {
+		return
+	}
 	p.addFinding(
 		context,
 		validation.ClassUIDUnknown,
@@ -80,8 +75,7 @@ func (p *validationProcessor) onClassUIDUnknown(context *processContext) {
 }
 
 func (p *validationProcessor) onClass(context *processContext, event jsonish.Map) {
-
-	if context.class.Deprecated != nil {
+	if !p.policy.isIgnored(validationClassDeprecatedMask) && context.class.Deprecated != nil {
 		p.addFindingQuote1Int1String1(
 			context,
 			validation.ClassDeprecated,
@@ -100,6 +94,9 @@ func (p *validationProcessor) onClass(context *processContext, event jsonish.Map
 		)
 	}
 
+	if p.policy.isIgnored(validationProfileUnknownMask) {
+		return
+	}
 	metadata, ok := event["metadata"].(jsonish.Map)
 	if !ok {
 		return
@@ -143,6 +140,9 @@ func (p *validationProcessor) onObjectDone(
 	item jsonish.Map,
 	objectDefinition *schema.ObjectDefinition,
 ) {
+	if p.policy.isIgnored(constraintValidationMask) {
+		return
+	}
 	p.validateConstraints(context, item, &objectDefinition.ItemDefinition, &context.path)
 }
 
@@ -154,6 +154,9 @@ func (p *validationProcessor) onInactiveAttribute(
 	attrDef *schema.ItemAttributeDefinition,
 	itemDefinition *schema.ItemDefinition,
 ) {
+	if p.policy.isIgnored(validationAttributeRequiresProfileMask) {
+		return
+	}
 	requiredProfiles := slices.Clone(attrDef.Profiles)
 	slices.Sort(requiredProfiles)
 	valueValidation, validationResult := p.onInactiveAttributeValue(c, item, value, attributeName, attrDef)
@@ -187,7 +190,7 @@ func (p *validationProcessor) onInactiveAttributeValue(
 	attrDef *schema.ItemAttributeDefinition,
 ) (string, eventresult.ValidationResult) {
 	valueValidator := *p
-	valueValidator.policy = validationPolicy{}
+	valueValidator.policy = defaultValidationPolicy()
 	validationContext := processContext{compiled: c.compiled, class: c.class, path: c.path}
 	shallow := attrDef.Enum != nil
 	switch {
@@ -218,6 +221,9 @@ func (p *validationProcessor) onInactiveArray(
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
 ) {
+	if p.policy.isIgnored(validationAttributeWrongTypeMask) {
+		return
+	}
 	if _, ok := eventvalue.NewArrayView(value); !ok {
 		p.onAttribute(c, item, value, attributeName, attrDef, -1, attributeArrayWrongType)
 	}
@@ -265,12 +271,6 @@ func validationResultMap(result eventresult.ValidationResult) jsonish.Map {
 		}
 		details["findings"] = findings
 	}
-	if result.SuppressedErrorCount != 0 {
-		details["suppressed_error_count"] = result.SuppressedErrorCount
-	}
-	if result.SuppressedWarningCount != 0 {
-		details["suppressed_warning_count"] = result.SuppressedWarningCount
-	}
 	return details
 }
 
@@ -279,6 +279,9 @@ func (p *validationProcessor) onUnknownAttribute(
 	attributeName string,
 	itemDefinition *schema.ItemDefinition,
 ) {
+	if p.policy.isIgnored(validationAttributeUnknownMask) {
+		return
+	}
 	attributePath := c.path.ChildString(attributeName, pathstyle.ArrayIndexed)
 	details := jsonish.Map{
 		"attribute_path": attributePath,
@@ -337,9 +340,15 @@ func (p *validationProcessor) onAttribute(
 ) {
 	switch status {
 	case attributeMissing:
+		if p.policy.isIgnored(requirementValidationMask) {
+			return
+		}
 		p.validateRequirement(context, &context.path, attributeName, attrDef)
 		return
 	case attributeArrayWrongType:
+		if p.policy.isIgnored(validationAttributeWrongTypeMask) {
+			return
+		}
 		p.addWrongType(
 			context,
 			context.path.String(pathstyle.ArrayIndexed),
@@ -350,12 +359,21 @@ func (p *validationProcessor) onAttribute(
 		)
 		return
 	case attributeEnum:
+		if p.policy.isIgnored(enumValueValidationMask | enumSiblingValidationMask) {
+			return
+		}
 		p.validateEnum(context, item, value, attributeName, attrDef, arrayIndex)
 		return
 	case attributePrimitive:
+		if p.policy.isIgnored(validationAttributeWrongTypeMask | primitiveValueValidationMask) {
+			return
+		}
 		p.validatePrimitiveValue(context, value, &context.path, attributeName, attrDef)
 		return
 	case attributePresent:
+		if p.policy.isIgnored(attributeDeprecationValidationMask) {
+			return
+		}
 	default:
 		return
 	}
@@ -371,17 +389,27 @@ func (p *validationProcessor) validateEnum(
 	attrDef *schema.ItemAttributeDefinition,
 	arrayIndex int,
 ) {
+	if p.policy.isIgnored(enumValueValidationMask | enumSiblingValidationMask) {
+		return
+	}
 	enumDetail, lookupStatus := lookupEnumDefinition(c, attrDef, value)
 	if lookupStatus == enumLookupValueUnusable {
 		return
 	}
 	if lookupStatus == enumLookupDefinitionMissing {
-		validationPath := c.path.String(pathstyle.ArrayIndexed)
 		code := validation.AttributeEnumValueUnknown
+		mask := validationAttributeEnumValueUnknownMask
+		if isArrayElement(arrayIndex) {
+			code = validation.AttributeEnumArrayValueUnknown
+			mask = validationAttributeEnumArrayValueUnknownMask
+		}
+		if p.policy.isIgnored(mask) {
+			return
+		}
+		validationPath := c.path.String(pathstyle.ArrayIndexed)
 		message := "Unknown enum value at " + strconv.Quote(validationPath) +
 			"; it is not defined for enum " + strconv.Quote(attributeName) + "."
 		if isArrayElement(arrayIndex) {
-			code = validation.AttributeEnumArrayValueUnknown
 			message = "Unknown enum array value at " + strconv.Quote(validationPath) +
 				"; it is not defined for enum " + strconv.Quote(attributeName) + "."
 		}
@@ -419,6 +447,9 @@ func (p *validationProcessor) validateArrayEnum(
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
 ) {
+	if p.policy.isIgnored(enumValueValidationMask | enumSiblingValidationMask) {
+		return
+	}
 	var enumDetail *schema.EnumDefinition
 	var lookupStatus enumLookupStatus
 	other := false
@@ -450,6 +481,9 @@ func (p *validationProcessor) validateArrayEnum(
 		}
 	}
 	if enumDetail == nil {
+		if p.policy.isIgnored(validationAttributeEnumArrayValueUnknownMask) {
+			return
+		}
 		validationPath := c.path.String(pathstyle.ArrayIndexed)
 		p.addFindingQuote2(
 			c,
@@ -480,6 +514,16 @@ func (p *validationProcessor) onEnumSiblingPairAttributes(
 	siblingAttributeName string,
 	siblingAttrDef *schema.ItemAttributeDefinition,
 ) error {
+	if p.policy.isIgnored(
+		requirementValidationMask |
+			validationAttributeWrongTypeMask |
+			enumValueValidationMask |
+			enumSiblingValidationMask |
+			primitiveValueValidationMask |
+			attributeDeprecationValidationMask,
+	) {
+		return nil
+	}
 	if enumAttrDef.IsArray != nil && *enumAttrDef.IsArray {
 		p.validateEnumArraySiblingLengths(c, item, enumAttributeName, siblingAttributeName)
 		if err := p.validateEnumPairArrayAttribute(c, item, enumAttributeName, enumAttrDef); err != nil {
@@ -501,7 +545,7 @@ func (p *validationProcessor) onEnumSiblingPairAttributes(
 
 	siblingValue, siblingPresent := eventvalue.Attribute(item, siblingAttributeName)
 	siblingPath := c.path.ChildString(siblingAttributeName, pathstyle.ArrayIndexed)
-	if siblingPresent && !enumPresent {
+	if !p.policy.isIgnored(validationAttributeEnumSiblingWithoutEnumMask) && siblingPresent && !enumPresent {
 		enumPath := c.path.ChildString(enumAttributeName, pathstyle.ArrayIndexed)
 		p.addFindingQuote2(
 			c,
@@ -541,6 +585,9 @@ func (p *validationProcessor) validateEnumArraySiblingLengths(
 	enumAttributeName string,
 	siblingAttributeName string,
 ) {
+	if p.policy.isIgnored(validationAttributeEnumArraySiblingLengthMismatchMask) {
+		return
+	}
 	enumValue, enumPresent := eventvalue.Attribute(item, enumAttributeName)
 	siblingValue, siblingPresent := eventvalue.Attribute(item, siblingAttributeName)
 	if !enumPresent || !siblingPresent {
@@ -606,10 +653,16 @@ func (p *validationProcessor) validateAttributeDeprecation(
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
 ) {
+	if p.policy.isIgnored(attributeDeprecationValidationMask) {
+		return
+	}
 	if attrDef == nil {
 		return
 	}
 	if attrDef.Deprecated != nil {
+		if p.policy.isIgnored(validationAttributeDeprecatedMask) {
+			return
+		}
 		attributePath := path.String(pathstyle.ArrayIndexed)
 		p.addFindingQuote1String1(
 			c,
@@ -629,6 +682,9 @@ func (p *validationProcessor) validateAttributeDeprecation(
 	}
 	typeDef := c.compiled.DictionaryType(attrDef.Type)
 	if typeDef == nil || typeDef.Deprecated == nil {
+		return
+	}
+	if p.policy.isIgnored(validationAttributeTypeDeprecatedMask) {
 		return
 	}
 	attributePath := path.String(pathstyle.ArrayIndexed)
@@ -656,6 +712,9 @@ func (p *validationProcessor) onObject(
 	attributeName string,
 	objectDef *schema.ObjectDefinition,
 ) {
+	if p.policy.isIgnored(validationObjectDeprecatedMask) {
+		return
+	}
 	if objectDef.Deprecated == nil {
 		return
 	}
@@ -683,6 +742,9 @@ func (p *validationProcessor) onObjectWrongType(
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
 ) {
+	if p.policy.isIgnored(validationAttributeWrongTypeMask) {
+		return
+	}
 	expectedType := "object"
 	if attrDef.ObjectType != nil {
 		expectedType = *attrDef.ObjectType + " (object)"
@@ -702,6 +764,9 @@ func (p *validationProcessor) onObjectSchemaMissing(
 	attributeName string,
 	objectType string,
 ) {
+	if p.policy.isIgnored(validationSchemaBugObjectMissingMask) {
+		return
+	}
 	attributePath := context.path.String(pathstyle.ArrayIndexed)
 	p.addFindingQuote1(
 		context,
@@ -718,10 +783,19 @@ func (p *validationProcessor) onObjectSchemaMissing(
 }
 
 func (p *validationProcessor) onEventDone(context *processContext, event jsonish.Map) error {
-	p.validateVersion(context, event)
-	p.validateTypeUID(context, event)
-	p.validateConstraints(context, event, &context.class.ItemDefinition, nil)
-	return p.validateObservables(context, event)
+	if !p.policy.isIgnored(versionValidationMask) {
+		p.validateVersion(context, event)
+	}
+	if !p.policy.isIgnored(typeUIDValidationMask) {
+		p.validateTypeUID(context, event)
+	}
+	if !p.policy.isIgnored(constraintValidationMask) {
+		p.validateConstraints(context, event, &context.class.ItemDefinition, nil)
+	}
+	if !p.policy.isIgnored(observableValidationMask) {
+		return p.validateObservables(context, event)
+	}
+	return nil
 }
 
 func (p *validationProcessor) validateRequirement(
@@ -730,6 +804,9 @@ func (p *validationProcessor) validateRequirement(
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
 ) {
+	if p.policy.isIgnored(requirementValidationMask) {
+		return
+	}
 	if attrDef == nil {
 		return
 	}
@@ -738,20 +815,21 @@ func (p *validationProcessor) validateRequirement(
 		attributePath := path.String(pathstyle.ArrayIndexed)
 		p.addRequiredAttributeMissing(c, attributePath, attributeName)
 	case "recommended":
-		if p.config.WarnOnMissingRecommended {
-			attributePath := path.String(pathstyle.ArrayIndexed)
-			p.addFindingQuote1(
-				c,
-				validation.AttributeRecommendedMissing,
-				jsonish.Map{
-					"attribute_path": attributePath,
-					"attribute":      attributeName,
-				},
-				"Recommended attribute ",
-				attributePath,
-				" is missing.",
-			)
+		if p.policy.isIgnored(validationAttributeRecommendedMissingMask) {
+			return
 		}
+		attributePath := path.String(pathstyle.ArrayIndexed)
+		p.addFindingQuote1(
+			c,
+			validation.AttributeRecommendedMissing,
+			jsonish.Map{
+				"attribute_path": attributePath,
+				"attribute":      attributeName,
+			},
+			"Recommended attribute ",
+			attributePath,
+			" is missing.",
+		)
 	}
 }
 
@@ -763,6 +841,12 @@ func (p *validationProcessor) validateEnumSibling(
 	path *eventpath.Path,
 	enumDetail *schema.EnumDefinition,
 ) {
+	if p.policy.isIgnored(
+		validationAttributeEnumSiblingSuspiciousMask |
+			validationAttributeEnumSiblingIncorrectMask,
+	) {
+		return
+	}
 	if attrDef.Sibling == nil {
 		return
 	}
@@ -774,6 +858,9 @@ func (p *validationProcessor) validateEnumSibling(
 
 	if attributeIsOtherEnumValue(value) {
 		if enumDetail.Caption == siblingValue {
+			if p.policy.isIgnored(validationAttributeEnumSiblingSuspiciousMask) {
+				return
+			}
 			validationPath := path.String(pathstyle.ArrayIndexed)
 			siblingPath := path.SiblingString(siblingName, pathstyle.ArrayIndexed)
 			p.addFindingQuote3(
@@ -795,6 +882,9 @@ func (p *validationProcessor) validateEnumSibling(
 	}
 
 	if enumDetail.Caption != siblingValue {
+		if p.policy.isIgnored(validationAttributeEnumSiblingIncorrectMask) {
+			return
+		}
 		validationPath := path.String(pathstyle.ArrayIndexed)
 		siblingPath := path.SiblingString(siblingName, pathstyle.ArrayIndexed)
 		p.addFindingQuote3(
@@ -824,6 +914,13 @@ func (p *validationProcessor) validateEnumArraySibling(
 	enumDetail *schema.EnumDefinition,
 	other bool,
 ) {
+	if p.policy.isIgnored(
+		validationAttributeEnumArraySiblingMissingMask |
+			validationAttributeEnumArraySiblingIncorrectMask |
+			validationAttributeEnumSiblingSuspiciousMask,
+	) {
+		return
+	}
 	if attrDef.Sibling == nil {
 		return
 	}
@@ -885,6 +982,9 @@ func (p *validationProcessor) addEnumArraySiblingLengthMismatch(
 	enumLength int,
 	siblingLength int,
 ) {
+	if p.policy.isIgnored(validationAttributeEnumArraySiblingLengthMismatchMask) {
+		return
+	}
 	p.addFindingQuote2Int2(
 		c,
 		validation.AttributeEnumArraySiblingLengthMismatch,
@@ -914,6 +1014,9 @@ func (p *validationProcessor) addEnumArraySiblingSuspicious(
 	siblingName string,
 	schemaCaption string,
 ) {
+	if p.policy.isIgnored(validationAttributeEnumSiblingSuspiciousMask) {
+		return
+	}
 	validationPath := path.String(pathstyle.ArrayIndexed)
 	siblingPath := path.SiblingString(siblingName, pathstyle.ArrayIndexed)
 	p.addFindingQuote3(
@@ -938,6 +1041,9 @@ func (p *validationProcessor) addEnumArraySiblingMissing(
 	siblingName string,
 	expectedCaption any,
 ) {
+	if p.policy.isIgnored(validationAttributeEnumArraySiblingMissingMask) {
+		return
+	}
 	validationPath := path.String(pathstyle.ArrayIndexed)
 	siblingPath := path.SiblingString(siblingName, pathstyle.ArrayIndexed)
 	p.addFindingQuote2(
@@ -962,6 +1068,9 @@ func (p *validationProcessor) addEnumArraySiblingIncorrect(
 	siblingName string,
 	expectedCaption string,
 ) {
+	if p.policy.isIgnored(validationAttributeEnumArraySiblingIncorrectMask) {
+		return
+	}
 	validationPath := path.String(pathstyle.ArrayIndexed)
 	siblingPath := path.SiblingString(siblingName, pathstyle.ArrayIndexed)
 	p.addFindingQuote3(
@@ -987,6 +1096,9 @@ func (p *validationProcessor) validateEnumValueDeprecated(
 	path *eventpath.Path,
 	enumDetail *schema.EnumDefinition,
 ) {
+	if p.policy.isIgnored(validationAttributeEnumValueDeprecatedMask) {
+		return
+	}
 	if enumDetail.Deprecated == nil {
 		return
 	}
@@ -1013,6 +1125,9 @@ func (p *validationProcessor) validateEnumArrayValueDeprecated(
 	path *eventpath.Path,
 	enumDetail *schema.EnumDefinition,
 ) {
+	if p.policy.isIgnored(validationAttributeEnumArrayValueDeprecatedMask) {
+		return
+	}
 	if enumDetail.Deprecated == nil {
 		return
 	}
@@ -1042,6 +1157,9 @@ func (p *validationProcessor) validatePrimitiveValue(
 ) {
 	typeValidation := p.cache.Types[attrDef.Type]
 	if typeValidation == nil || typeValidation.Definition == nil {
+		if p.policy.isIgnored(validationSchemaBugTypeMissingMask) {
+			return
+		}
 		attributePath := path.String(pathstyle.ArrayIndexed)
 		p.addFindingQuote1(
 			c,
@@ -1066,16 +1184,26 @@ func (p *validationProcessor) validatePrimitiveValue(
 		// json_t's structured-or-scalar value has no fixed shape to validate.
 	case "boolean_t":
 		if _, ok := eventvalue.AsBoolean(value); !ok {
-			p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
-				expectedPrimitiveType(expectedType, primitiveType))
+			if !p.policy.isIgnored(validationAttributeWrongTypeMask) {
+				p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
+					expectedPrimitiveType(expectedType, primitiveType))
+			}
+			return
+		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
 			return
 		}
 		p.validateTypeValues(c, value, path, attributeName, attrDef.Type, typeValidation)
 	case "float_t":
 		floatValue, ok := eventvalue.AsFloat(value)
 		if !ok {
-			p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
-				expectedPrimitiveType(expectedType, primitiveType))
+			if !p.policy.isIgnored(validationAttributeWrongTypeMask) {
+				p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
+					expectedPrimitiveType(expectedType, primitiveType))
+			}
+			return
+		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
 			return
 		}
 		p.validateFloatRange(c, value, floatValue, path, attributeName, attrDef.Type, typeValidation)
@@ -1089,8 +1217,13 @@ func (p *validationProcessor) validatePrimitiveValue(
 			intValue, ok = eventvalue.AsInteger(value)
 		}
 		if !ok {
-			p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
-				expectedPrimitiveType(expectedType, primitiveType))
+			if !p.policy.isIgnored(validationAttributeWrongTypeMask) {
+				p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
+					expectedPrimitiveType(expectedType, primitiveType))
+			}
+			return
+		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
 			return
 		}
 		p.validateNumberRange(c, intValue, path, attributeName, attrDef.Type, typeValidation)
@@ -1098,14 +1231,22 @@ func (p *validationProcessor) validatePrimitiveValue(
 	case "string_t":
 		stringValue, ok := eventvalue.AsString(value)
 		if !ok {
-			p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
-				expectedPrimitiveType(expectedType, primitiveType))
+			if !p.policy.isIgnored(validationAttributeWrongTypeMask) {
+				p.addWrongType(c, path.String(pathstyle.ArrayIndexed), attributeName, value, expectedType,
+					expectedPrimitiveType(expectedType, primitiveType))
+			}
+			return
+		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
 			return
 		}
 		p.validateStringMaxLen(c, stringValue, path, attributeName, attrDef.Type, typeValidation)
 		p.validateStringRegex(c, stringValue, path, attributeName, attrDef.Type, typeValidation)
 		p.validateTypeValues(c, value, path, attributeName, attrDef.Type, typeValidation)
 	default:
+		if p.policy.isIgnored(validationSchemaBugPrimitiveTypeUnknownMask) {
+			return
+		}
 		attributePath := path.String(pathstyle.ArrayIndexed)
 		p.addFindingQuote1(
 			c,
@@ -1140,6 +1281,9 @@ func (p *validationProcessor) validateArrayPrimitiveValue(
 	}
 	primitiveType := typeValidation.PrimitiveType
 	wrongType := func() {
+		if p.policy.isIgnored(validationAttributeWrongTypeMask) {
+			return
+		}
 		p.addWrongType(
 			c,
 			path.String(pathstyle.ArrayIndexed),
@@ -1159,6 +1303,9 @@ func (p *validationProcessor) validateArrayPrimitiveValue(
 			wrongType()
 			return
 		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
+			return
+		}
 		if typeValidation.HasValue && !typeValidation.Value.ContainsBool(value) {
 			p.validateTypeValues(
 				c, valueAny(), path, attributeName, attrDef.Type, typeValidation,
@@ -1168,6 +1315,9 @@ func (p *validationProcessor) validateArrayPrimitiveValue(
 		value, ok := values.AsFloatAt(arrayIndex)
 		if !ok {
 			wrongType()
+			return
+		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
 			return
 		}
 		if typeValidation.HasRange {
@@ -1196,6 +1346,9 @@ func (p *validationProcessor) validateArrayPrimitiveValue(
 			wrongType()
 			return
 		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
+			return
+		}
 		if typeValidation.HasRange &&
 			(value < typeValidation.Range.Low || value > typeValidation.Range.High) {
 			p.validateNumberRange(c, value, path, attributeName, attrDef.Type, typeValidation)
@@ -1209,6 +1362,9 @@ func (p *validationProcessor) validateArrayPrimitiveValue(
 		value, ok := values.AsStringAt(arrayIndex)
 		if !ok {
 			wrongType()
+			return
+		}
+		if p.policy.isIgnored(primitiveValueValidationMask) {
 			return
 		}
 		p.validateStringMaxLen(c, value, path, attributeName, attrDef.Type, typeValidation)
@@ -1242,6 +1398,15 @@ func (p *validationProcessor) validateTypeValues(
 		return
 	}
 	constraint := typeValidation.Value
+	code := validation.AttributeValueNotInTypeValues
+	mask := validationAttributeValueNotInTypeValuesMask
+	if constraint.TypeName != attributeTypeName {
+		code = validation.AttributeValueNotInSuperTypeValues
+		mask = validationAttributeValueNotInSuperTypeValuesMask
+	}
+	if p.policy.isIgnored(mask) {
+		return
+	}
 	if constraint.Contains(value) {
 		return
 	}
@@ -1251,15 +1416,12 @@ func (p *validationProcessor) validateTypeValues(
 		"attribute":      attributeName,
 		"type":           attributeTypeName,
 	}
-	var code validation.Code
 	var message string
 	if constraint.TypeName != attributeTypeName {
-		code = validation.AttributeValueNotInSuperTypeValues
 		details["super_type"] = constraint.TypeName
 		message = "Attribute " + strconv.Quote(attributePath) + ", type " + strconv.Quote(attributeTypeName) +
 			", value is not in super type " + strconv.Quote(constraint.TypeName) + " list of allowed values."
 	} else {
-		code = validation.AttributeValueNotInTypeValues
 		message = "Attribute " + strconv.Quote(attributePath) + " value is not in type " +
 			strconv.Quote(attributeTypeName) + " list of allowed values."
 	}
@@ -1278,6 +1440,15 @@ func (p *validationProcessor) validateNumberRange(
 		return
 	}
 	constraint := typeValidation.Range
+	code := validation.AttributeValueExceedsRange
+	mask := validationAttributeValueExceedsRangeMask
+	if constraint.TypeName != attributeTypeName {
+		code = validation.AttributeValueExceedsSuperTypeRange
+		mask = validationAttributeValueExceedsSuperTypeRangeMask
+	}
+	if p.policy.isIgnored(mask) {
+		return
+	}
 
 	low := constraint.Low
 	high := constraint.High
@@ -1300,17 +1471,14 @@ func (p *validationProcessor) validateNumberRange(
 		"type":           attributeTypeName,
 		"range":          []int64{low, high},
 	}
-	var code validation.Code
 	var message string
 	if constraint.TypeName != attributeTypeName {
-		code = validation.AttributeValueExceedsSuperTypeRange
 		details["super_type"] = constraint.TypeName
 		details["super_type_range"] = []int64{low, high}
 		message = "Attribute " + strconv.Quote(attributePath) + ", type " + strconv.Quote(attributeTypeName) +
 			", value is outside super type " + strconv.Quote(constraint.TypeName) + " range of " +
 			strconv.FormatInt(low, 10) + " to " + strconv.FormatInt(high, 10) + "."
 	} else {
-		code = validation.AttributeValueExceedsRange
 		message = "Attribute " + strconv.Quote(attributePath) + " value is outside type " +
 			strconv.Quote(attributeTypeName) + " range of " + strconv.FormatInt(low, 10) + " to " +
 			strconv.FormatInt(high, 10) + "."
@@ -1386,6 +1554,15 @@ func (p *validationProcessor) validateStringMaxLen(
 		return
 	}
 	constraint := typeValidation.MaxLen
+	code := validation.AttributeValueExceedsMaxLen
+	mask := validationAttributeValueExceedsMaxLenMask
+	if constraint.TypeName != attributeTypeName {
+		code = validation.AttributeValueExceedsSuperTypeMaxLen
+		mask = validationAttributeValueExceedsSuperTypeMaxLenMask
+	}
+	if p.policy.isIgnored(mask) {
+		return
+	}
 
 	length := utf8.RuneCountInString(value)
 	maxLen := constraint.MaxLen
@@ -1400,16 +1577,13 @@ func (p *validationProcessor) validateStringMaxLen(
 		"length":         length,
 		"max_len":        maxLen,
 	}
-	var code validation.Code
 	var message string
 	if constraint.TypeName != attributeTypeName {
-		code = validation.AttributeValueExceedsSuperTypeMaxLen
 		details["super_type"] = constraint.TypeName
 		message = "Attribute " + strconv.Quote(attributePath) + ", type " + strconv.Quote(attributeTypeName) +
 			", value length " + strconv.Itoa(length) + " exceeds super type " + strconv.Quote(constraint.TypeName) +
 			" max length " + strconv.FormatInt(maxLen, 10) + "."
 	} else {
-		code = validation.AttributeValueExceedsMaxLen
 		message = "Attribute " + strconv.Quote(attributePath) + " value length of " + strconv.Itoa(length) +
 			" exceeds type " + strconv.Quote(attributeTypeName) + " max length " + strconv.FormatInt(maxLen, 10) + "."
 	}
@@ -1430,6 +1604,9 @@ func (p *validationProcessor) validateStringRegex(
 	constraint := typeValidation.Regex
 
 	if constraint.Err != nil {
+		if p.policy.isIgnored(validationSchemaBugTypeRegexInvalidMask) {
+			return
+		}
 		attributePath := path.String(pathstyle.ArrayIndexed)
 		p.addFindingQuote1String1(
 			c,
@@ -1449,6 +1626,15 @@ func (p *validationProcessor) validateStringRegex(
 		)
 		return
 	}
+	code := validation.AttributeValueRegexNotMatched
+	mask := validationAttributeValueRegexNotMatchedMask
+	if constraint.TypeName != attributeTypeName {
+		code = validation.AttributeValueSuperTypeRegexNotMatched
+		mask = validationAttributeValueSuperTypeRegexNotMatchedMask
+	}
+	if p.policy.isIgnored(mask) {
+		return
+	}
 	if constraint.Compiled.MatchString(value) {
 		return
 	}
@@ -1459,15 +1645,12 @@ func (p *validationProcessor) validateStringRegex(
 		"type":           attributeTypeName,
 		"regex":          constraint.Regex,
 	}
-	var code validation.Code
 	var message string
 	if constraint.TypeName != attributeTypeName {
-		code = validation.AttributeValueSuperTypeRegexNotMatched
 		details["super_type"] = constraint.TypeName
 		message = "Attribute " + strconv.Quote(attributePath) + ", type " + strconv.Quote(attributeTypeName) +
 			", value does not match regex of super type " + strconv.Quote(constraint.TypeName) + "."
 	} else {
-		code = validation.AttributeValueRegexNotMatched
 		message = "Attribute " + strconv.Quote(attributePath) + " value does not match regex of type " +
 			strconv.Quote(attributeTypeName) + "."
 	}
@@ -1475,6 +1658,9 @@ func (p *validationProcessor) validateStringRegex(
 }
 
 func (p *validationProcessor) validateVersion(c *processContext, event jsonish.Map) {
+	if p.policy.isIgnored(versionValidationMask) {
+		return
+	}
 	metadata, ok := event["metadata"].(jsonish.Map)
 	if !ok {
 		return
@@ -1497,6 +1683,9 @@ func (p *validationProcessor) validateVersion(c *processContext, event jsonish.M
 		eventVersion, eventVersionOK = semver.Parse(version)
 	}
 	if !eventVersionOK {
+		if p.policy.isIgnored(validationVersionInvalidFormatMask) {
+			return
+		}
 		p.addFinding(
 			c,
 			validation.VersionInvalidFormat,
@@ -1516,6 +1705,9 @@ func (p *validationProcessor) validateVersion(c *processContext, event jsonish.M
 	if comparison < 0 {
 		switch {
 		case eventVersion.IsInitialDevelopment():
+			if p.policy.isIgnored(validationVersionIncompatibleInitialDevelopmentMask) {
+				return
+			}
 			p.addFindingQuote1(
 				c,
 				validation.VersionIncompatibleInitialDevelopment,
@@ -1529,6 +1721,9 @@ func (p *validationProcessor) validateVersion(c *processContext, event jsonish.M
 				".",
 			)
 		case eventVersion.IsPrerelease():
+			if p.policy.isIgnored(validationVersionIncompatiblePrereleaseMask) {
+				return
+			}
 			p.addFindingQuote1(
 				c,
 				validation.VersionIncompatiblePrerelease,
@@ -1542,6 +1737,9 @@ func (p *validationProcessor) validateVersion(c *processContext, event jsonish.M
 				".",
 			)
 		default:
+			if p.policy.isIgnored(validationVersionEarlierMask) {
+				return
+			}
 			p.addFindingQuote1(
 				c,
 				validation.VersionEarlier,
@@ -1557,6 +1755,9 @@ func (p *validationProcessor) validateVersion(c *processContext, event jsonish.M
 		return
 	}
 
+	if p.policy.isIgnored(validationVersionIncompatibleLaterMask) {
+		return
+	}
 	p.addFindingQuote1(
 		c,
 		validation.VersionIncompatibleLater,
@@ -1571,6 +1772,9 @@ func (p *validationProcessor) validateVersion(c *processContext, event jsonish.M
 }
 
 func (p *validationProcessor) validateTypeUID(c *processContext, event jsonish.Map) {
+	if p.policy.isIgnored(typeUIDValidationMask) {
+		return
+	}
 	classUID, classOK := eventvalue.AsInteger(event["class_uid"])
 	activityID, activityOK := eventvalue.AsInteger(event["activity_id"])
 	typeUID, typeOK := eventvalue.AsInteger(event["type_uid"])
@@ -1580,6 +1784,9 @@ func (p *validationProcessor) validateTypeUID(c *processContext, event jsonish.M
 
 	expectedTypeUID, ok := schema.ExpectedTypeUID(classUID, activityID)
 	if !ok {
+		if p.policy.isIgnored(validationTypeUIDExpectedValueOverflowMask) {
+			return
+		}
 		p.addFinding(
 			c,
 			validation.TypeUIDExpectedValueOverflow,
@@ -1593,6 +1800,9 @@ func (p *validationProcessor) validateTypeUID(c *processContext, event jsonish.M
 		return
 	}
 	if typeUID == expectedTypeUID {
+		return
+	}
+	if p.policy.isIgnored(validationTypeUIDIncorrectMask) {
 		return
 	}
 	p.addFinding(
@@ -1612,6 +1822,9 @@ func (p *validationProcessor) validateConstraints(
 	itemDefinition *schema.ItemDefinition,
 	path *eventpath.Path,
 ) {
+	if p.policy.isIgnored(constraintValidationMask) {
+		return
+	}
 	if itemDefinition == nil || len(itemDefinition.Constraints) == 0 {
 		return
 	}
@@ -1620,6 +1833,9 @@ func (p *validationProcessor) validateConstraints(
 		constraintDetails := itemDefinition.Constraints[constraintKey]
 		switch constraintKey {
 		case "at_least_one":
+			if p.policy.isIgnored(validationConstraintFailedMask) {
+				continue
+			}
 			if anyConstraintPathPresent(eventItem, constraintDetails) {
 				continue
 			}
@@ -1633,6 +1849,9 @@ func (p *validationProcessor) validateConstraints(
 				"; expected at least one constraint attribute, but got none.",
 			)
 		case "just_one":
+			if p.policy.isIgnored(validationConstraintFailedMask) {
+				continue
+			}
 			count := countConstraintPathsPresent(eventItem, constraintDetails)
 			if count == 1 {
 				continue
@@ -1650,6 +1869,9 @@ func (p *validationProcessor) validateConstraints(
 				".",
 			)
 		default:
+			if p.policy.isIgnored(validationConstraintUnknownMask) {
+				continue
+			}
 			description, details := p.constraintInfo(c, itemDefinition, path, constraintKey, constraintDetails)
 			p.addFindingString1(
 				c,
@@ -1712,6 +1934,9 @@ func countConstraintPathsPresent(eventItem jsonish.Map, paths []string) int {
 }
 
 func (p *validationProcessor) validateObservables(c *processContext, event jsonish.Map) error {
+	if p.policy.isIgnored(observableValidationMask) {
+		return nil
+	}
 	analyzer, present := observable.NewAnalyzer(event, c.class, c.compiled.Objects, c.activeProfiles)
 	if !present {
 		return nil
@@ -1731,14 +1956,23 @@ func (p *validationProcessor) validateObservables(c *processContext, event jsoni
 		}
 		observablePath.PushArrayIndex(index)
 		if entry.Problem == observable.ProblemTraversalLimited {
-			c.addProcessingTraversalLimitIssue(observablePath.String(pathstyle.ArrayIndexed), "observables", "")
+			err := c.addProcessingTraversalLimitIssue(
+				observablePath.String(pathstyle.ArrayIndexed), "observables", "",
+			)
 			observablePath.Pop()
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		if p.config.PathNotationConfigured && entry.PathDefined {
 			p.validateObservablePathNotation(c, index, entry.Path, &observablePath, p.config.PathNotation)
 		}
-		if code, known := nonStructuralObservableValidationCode(entry.Problem); known {
+		if code, mask, known := nonStructuralObservableValidationCode(entry.Problem); known {
+			if p.policy.isIgnored(mask) {
+				observablePath.Pop()
+				continue
+			}
 			if diagnostic, present := observable.EntryToDiagnostic(entry, index, &observablePath); present {
 				p.addFinding(c, code, diagnostic.Details, diagnostic.Message)
 			}
@@ -1752,20 +1986,20 @@ func (p *validationProcessor) validateObservables(c *processContext, event jsoni
 	return nil
 }
 
-func nonStructuralObservableValidationCode(problem observable.Problem) (validation.Code, bool) {
+func nonStructuralObservableValidationCode(problem observable.Problem) (validation.Code, uint64, bool) {
 	switch problem {
 	case observable.ProblemNameInvalidSyntax:
-		return validation.ObservableNameInvalidSyntax, true
+		return validation.ObservableNameInvalidSyntax, validationObservableNameInvalidSyntaxMask, true
 	case observable.ProblemNameInvalidReference:
-		return validation.ObservableNameInvalidReference, true
+		return validation.ObservableNameInvalidReference, validationObservableNameInvalidReferenceMask, true
 	case observable.ProblemPathNotFound:
-		return validation.ObservablePathNotFound, true
+		return validation.ObservablePathNotFound, validationObservablePathNotFoundMask, true
 	case observable.ProblemPathNotObject:
-		return validation.ObservablePathNotObject, true
+		return validation.ObservablePathNotObject, validationObservablePathNotObjectMask, true
 	case observable.ProblemValueNotFound:
-		return validation.ObservableValueNotFound, true
+		return validation.ObservableValueNotFound, validationObservableValueNotFoundMask, true
 	default:
-		return validation.None, false
+		return validation.None, 0, false
 	}
 }
 
@@ -1805,6 +2039,9 @@ func (p *validationProcessor) validateObservablePathNotation(
 	observablePath *eventpath.Path,
 	preferred pathstyle.Style,
 ) {
+	if p.policy.isIgnored(validationObservableNamePathNotationMask) {
+		return
+	}
 	if path.UsesNotation(preferred, c.class, c.compiled.Objects) {
 		return
 	}
@@ -1830,6 +2067,9 @@ func (p *validationProcessor) addRequiredAttributeMissing(
 	attributePath string,
 	attributeName string,
 ) {
+	if p.policy.isIgnored(validationAttributeRequiredMissingMask) {
+		return
+	}
 	p.addFindingQuote1(
 		c,
 		validation.AttributeRequiredMissing,
@@ -1851,6 +2091,9 @@ func (p *validationProcessor) addWrongType(
 	expectedType string,
 	expectedTypeExtra string,
 ) {
+	if p.policy.isIgnored(validationAttributeWrongTypeMask) {
+		return
+	}
 	valueType, valueTypeExtra := eventvalue.DescribeType(value)
 	p.addFindingQuote1String4(
 		c,
@@ -1890,7 +2133,7 @@ func (p *validationProcessor) addFinding(
 
 // The addFinding formatting-helper suffixes encode dynamic values in message order: Quote uses strconv.Quote, String
 // copies a string verbatim, and Int renders a base-10 integer. The count is the number of adjacent values of that kind.
-// These suppression-aware, fixed-argument helpers defer conversion and message allocation until a finding is known to
+// These policy-aware, fixed-argument helpers defer conversion and message allocation until a finding is known to
 // be reportable, avoiding the reflection, boxing, and escaping behavior of fmt.Sprintf with variadic any arguments.
 func (p *validationProcessor) addFindingQuote1(
 	c *processContext,
@@ -2152,47 +2395,25 @@ func (*validationProcessor) appendFinding(
 	)
 }
 
-func (p *validationProcessor) findingLevel(c *processContext, code validation.Code) (validation.Level, bool) {
-	defaultLevel := code.DefaultLevel()
-	if p.policy.settings != nil {
-		if setting, configured := p.policy.settings[code]; configured {
-			return p.applyValidationPolicySetting(c, defaultLevel, setting)
-		}
-	}
-	if p.policy.suppressAll && code.Suppressible() {
-		return p.suppressFinding(c, defaultLevel)
-	}
-	if defaultLevel == validation.LevelError {
-		if p.policy.errorsAsWarnings {
-			return validation.LevelWarning, true
-		}
-	} else {
-		if p.policy.warningsAsErrors {
-			return validation.LevelError, true
-		}
-	}
-	return defaultLevel, true
+func (p *validationProcessor) findingLevel(_ *processContext, code validation.Code) (validation.Level, bool) {
+	level := p.effectiveFindingLevel(code)
+	return level, level != validation.LevelIgnored
 }
 
-func (p *validationProcessor) applyValidationPolicySetting(
-	c *processContext,
-	defaultLevel validation.Level,
-	setting validationPolicySetting,
-) (validation.Level, bool) {
-	if setting.suppressed {
-		return p.suppressFinding(c, defaultLevel)
+func (p *validationProcessor) effectiveFindingLevel(code validation.Code) validation.Level {
+	mask := uint64(1) << code
+	switch {
+	case p.policy.isIgnored(mask):
+		return validation.LevelIgnored
+	case p.policy.isWarning(mask):
+		return validation.LevelWarning
+	case p.policy.isError(mask):
+		return validation.LevelError
+	default:
+		return code.DefaultLevel()
 	}
-	return setting.level, true
 }
 
-func (*validationProcessor) suppressFinding(
-	c *processContext,
-	defaultLevel validation.Level,
-) (validation.Level, bool) {
-	if defaultLevel == validation.LevelError {
-		c.result.Validation.SuppressedErrorCount++
-	} else {
-		c.result.Validation.SuppressedWarningCount++
-	}
-	return 0, false
+func validationRequiresEventWalk(policy levelPolicy) bool {
+	return !policy.isIgnored(eventWalkValidationMask)
 }

@@ -1,14 +1,17 @@
-// Package issue defines machine-readable codes and sources for tolerable, non-fatal event-processing issues.
+// Package issue defines machine-readable codes, sources, and policy levels for event-processing issues.
 package issue
 
 import "github.com/ocsf/ocsf-toolkit/internal/coderegistry"
 
-// IssueCode identifies a tolerable, non-fatal event-processing condition.
-type IssueCode uint8
+// Code identifies an event-processing condition.
+type Code uint8
 
+// Code names and ordinals are public compatibility contracts. During v1, retain the name and ordinal of a code that
+// stops being emitted and add "Deprecated: this code is no longer emitted." to its documentation. Never reorder
+// existing codes; append new codes immediately before issueCodeCount.
 const (
 	// None indicates the absence of an issue code and is not a valid reportable code.
-	None IssueCode = iota
+	None Code = iota
 	// EventTraversalLimited reports that schema-guided processing stopped at a recursive-object boundary.
 	EventTraversalLimited
 	// EnrichmentObservableNotAddedWrongType reports an unsupported observable source value.
@@ -169,45 +172,54 @@ var issueCodeInfos = [issueCodeCount]coderegistry.Info{
 	},
 }
 
-var issueCodeRegistry = coderegistry.New[IssueCode]("issue code", issueCodeInfos[:])
+var issueCodeRegistry = coderegistry.New[Code]("issue code", issueCodeInfos[:])
 
-// Codes returns every valid IssueCode in declaration order.
-func Codes() []IssueCode {
+// Codes returns every valid Code in declaration order.
+func Codes() []Code {
 	return issueCodeRegistry.Codes()
 }
 
 // Valid reports whether code is defined by this toolkit version.
-func (code IssueCode) Valid() bool {
+func (code Code) Valid() bool {
 	return issueCodeRegistry.Valid(code)
 }
 
-// Suppressible reports whether code describes a tolerable processor-specific issue. Issues that report incomplete
-// event processing are mandatory.
-func (code IssueCode) Suppressible() bool {
-	return issueCodeRegistry.Suppressible(code)
+// DefaultLevel returns the toolkit's default handling level for code, or an invalid level for an invalid code. Every
+// issue code currently defaults to Warning.
+func (code Code) DefaultLevel() Level {
+	if !code.Valid() {
+		return Level(0)
+	}
+	return LevelWarning
+}
+
+// Ignorable reports whether issue-level policy may omit code. Issues that report incomplete event processing are
+// mandatory and cannot be ignored.
+func (code Code) Ignorable() bool {
+	return issueCodeRegistry.Ignorable(code)
 }
 
 // String returns the stable external representation of code, or an empty string for an invalid code.
-func (code IssueCode) String() string {
+func (code Code) String() string {
 	return issueCodeRegistry.String(code)
 }
 
 // Description returns a short human-readable explanation of code, or an empty string for an invalid code.
-func (code IssueCode) Description() string {
+func (code Code) Description() string {
 	return issueCodeRegistry.Description(code)
 }
 
 // ParseCode resolves a stable external issue-code representation.
-func ParseCode(value string) (IssueCode, bool) {
+func ParseCode(value string) (Code, bool) {
 	return issueCodeRegistry.Parse(value)
 }
 
 // MarshalText returns the stable external representation used by JSON encoders.
-func (code IssueCode) MarshalText() ([]byte, error) {
+func (code Code) MarshalText() ([]byte, error) {
 	return issueCodeRegistry.MarshalText(code)
 }
 
 // UnmarshalText resolves a stable external representation used by JSON decoders.
-func (code *IssueCode) UnmarshalText(text []byte) error {
+func (code *Code) UnmarshalText(text []byte) error {
 	return issueCodeRegistry.UnmarshalText(text, code)
 }

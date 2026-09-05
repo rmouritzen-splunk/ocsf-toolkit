@@ -10,11 +10,12 @@ import (
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
 
-// Pipeline is the concrete internal event-processing engine.
-type Pipeline struct {
-	compiled   *schema.Compiled
-	mutations  []*mutationDispatcher
-	validation *validationProcessor
+// PipelineImpl is the internal implementation of eventpipeline.Pipeline.
+type PipelineImpl struct {
+	compiled    *schema.Compiled
+	mutations   []*mutationDispatcher
+	validation  *validationProcessor
+	issuePolicy levelPolicy
 	// requiresEventWalk lets observable-removal-only pipelines skip the schema-guided event walk.
 	requiresEventWalk bool
 }
@@ -100,10 +101,11 @@ func (d *mutationDispatcher) onObjectWrongType(
 	c *processContext,
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
-) {
+) error {
 	if d.add != nil {
-		d.add.onObjectWrongType(c, attributeName, attrDef)
+		return d.add.onObjectWrongType(c, attributeName, attrDef)
 	}
+	return nil
 }
 
 func (d *mutationDispatcher) onAttribute(
@@ -114,15 +116,16 @@ func (d *mutationDispatcher) onAttribute(
 	attrDef *schema.ItemAttributeDefinition,
 	arrayIndex int,
 	status attributeState,
-) {
+) error {
 	switch {
 	case d.add != nil:
-		d.add.onAttribute(c, item, value, attributeName, attrDef, arrayIndex, status)
+		return d.add.onAttribute(c, item, value, attributeName, attrDef, arrayIndex, status)
 	case d.safeRemove != nil:
 		d.safeRemove.onAttribute(c, item, attributeName, attrDef, status)
 	case d.forceRemove != nil:
 		d.forceRemove.onAttribute(c, item, attributeName, attrDef, status)
 	}
+	return nil
 }
 
 func (d *mutationDispatcher) onArrayElement(
@@ -132,10 +135,11 @@ func (d *mutationDispatcher) onArrayElement(
 	attributeName string,
 	attrDef *schema.ItemAttributeDefinition,
 	status attributeState,
-) {
+) error {
 	if d.add != nil {
-		d.add.onArrayElement(c, values, index, attributeName, attrDef, status)
+		return d.add.onArrayElement(c, values, index, attributeName, attrDef, status)
 	}
+	return nil
 }
 
 func (d *mutationDispatcher) onEnumSiblingPairAttributes(
@@ -148,7 +152,7 @@ func (d *mutationDispatcher) onEnumSiblingPairAttributes(
 ) error {
 	switch {
 	case d.add != nil:
-		d.add.onEnumSiblingPairAttributes(
+		return d.add.onEnumSiblingPairAttributes(
 			c, item, enumAttributeName, enumAttrDef, siblingAttributeName, siblingAttrDef,
 		)
 	case d.safeRemove != nil:
@@ -166,7 +170,8 @@ func (d *mutationDispatcher) onEventDone(c *processContext, event jsonish.Map) e
 	return nil
 }
 
-// NewPipeline builds a reusable pipeline from a resolved configuration. Validation runs after mutating processors.
+// NewPipelineImpl builds a reusable pipeline implementation from a resolved configuration. Validation runs after
+// mutating processors.
 // Enum-sibling work always runs ahead of observable work, with no exception, so newly added, retained, or deleted
 // enum siblings are visible (or already absent) before observables are generated or analyzed; building the
 // enum-siblings dispatcher before the observables dispatcher below is what guarantees that order for per-attribute
@@ -175,8 +180,8 @@ func (d *mutationDispatcher) onEventDone(c *processContext, event jsonish.Map) e
 // Observable safe-removal analyzes the whole event once. Enum-sibling work occurs during the attribute walk, so an
 // observables-only safe-removal dispatcher must defer analysis until class completion whenever another dispatcher
 // handles enum siblings. Force-removing observables never analyzes sibling data and does not need this deferral.
-func NewPipeline(compiled *schema.Compiled, config PipelineConfig) (*Pipeline, error) {
-	compiledValidationPolicy, err := config.validate()
+func NewPipelineImpl(compiled *schema.Compiled, config PipelineConfig) (*PipelineImpl, error) {
+	policies, err := config.validateAndCompileLevelPolicies()
 	if err != nil {
 		return nil, err
 	}
@@ -196,17 +201,16 @@ func NewPipeline(compiled *schema.Compiled, config PipelineConfig) (*Pipeline, e
 
 	// requiresEventWalk decides whether ProcessEvent traverses the event at all. Every processor family that
 	// inspects per-attribute or per-object state (for example a future lint or update processor) must be added to
-	// this condition, independently of whether it also participates in PipelineConfig.Validate's "at least one
+	// this condition, independently of whether it also participates in PipelineConfig's "at least one
 	// action" gate in config.go; the two conditions are not the same predicate (observable removal, for instance,
 	// counts as an action there but does not require the event walk here).
-	pipeline := &Pipeline{
-		compiled: compiled,
+	impl := &PipelineImpl{
+		compiled:    compiled,
+		issuePolicy: policies.issues,
 		requiresEventWalk: config.EnumSiblingsAction != enrichment.None ||
 			config.ObservablesAction == enrichment.Add ||
-			config.ValidationEnabled,
+			config.ValidationEnabled && validationRequiresEventWalk(policies.validation),
 	}
-
-	suppression := newIssueSuppression(config.IssueSuppression)
 
 	// Only an observables-only safe-removal dispatcher uses this pipeline-wide deferral; see the note above.
 	deferObservablesRemoval := config.EnumSiblingsAction != enrichment.None
@@ -220,12 +224,11 @@ func NewPipeline(compiled *schema.Compiled, config PipelineConfig) (*Pipeline, e
 				true,
 				false,
 				config.Observables,
-				suppression,
 			)
 			if err != nil {
 				return nil, err
 			}
-			pipeline.mutations = append(pipeline.mutations, dispatcher)
+			impl.mutations = append(impl.mutations, dispatcher)
 		}
 	} else {
 		var enumDispatcher, observablesDispatcher *mutationDispatcher
@@ -237,7 +240,6 @@ func NewPipeline(compiled *schema.Compiled, config PipelineConfig) (*Pipeline, e
 				false,
 				false,
 				config.Observables,
-				suppression,
 			)
 			if err != nil {
 				return nil, err
@@ -252,7 +254,6 @@ func NewPipeline(compiled *schema.Compiled, config PipelineConfig) (*Pipeline, e
 				true,
 				deferObservablesRemoval,
 				config.Observables,
-				suppression,
 			)
 			if err != nil {
 				return nil, err
@@ -260,26 +261,26 @@ func NewPipeline(compiled *schema.Compiled, config PipelineConfig) (*Pipeline, e
 			observablesDispatcher = dispatcher
 		}
 
-		pipeline.mutations = append(
-			pipeline.mutations,
+		impl.mutations = append(
+			impl.mutations,
 			orderedMutationDispatchers(enumDispatcher, observablesDispatcher)...,
 		)
 	}
 
 	if config.ValidationEnabled {
-		pipeline.validation = &validationProcessor{
+		impl.validation = &validationProcessor{
 			config: config.Validation,
 			cache:  validationCache,
-			policy: compiledValidationPolicy,
+			policy: policies.validation,
 		}
 	}
 
-	return pipeline, nil
+	return impl, nil
 }
 
-// orderedMutationDispatchers returns enumDispatcher and observablesDispatcher in the order NewPipeline's mutations
+// orderedMutationDispatchers returns enumDispatcher and observablesDispatcher in the order NewPipelineImpl's mutations
 // slice must run them: enum-sibling work always ahead of observable work, with no exception; see the ordering note
-// on NewPipeline. If enum-sibling work force-removes siblings before observable safe-removal analyzes them, that
+// on NewPipelineImpl. If enum-sibling work force-removes siblings before observable safe-removal analyzes them, that
 // analysis correctly cannot verify (and so retains) any observable derived from a now-deleted sibling.
 func orderedMutationDispatchers(enumDispatcher, observablesDispatcher *mutationDispatcher) []*mutationDispatcher {
 	dispatchers := make([]*mutationDispatcher, 0, 2)
@@ -300,7 +301,6 @@ func newMutationDispatcher(
 	action enrichment.Action,
 	enumSiblingsEnabled, observablesEnabled, deferObservablesRemoval bool,
 	observables ObservablesConfig,
-	suppression issueSuppression,
 ) (dispatcher *mutationDispatcher, err error) {
 	defer func() {
 		if err == nil {
@@ -328,21 +328,18 @@ func newMutationDispatcher(
 			observableTypes:      observableTypes,
 			classObservableTries: classObservableTries,
 			objectObservability:  objectObservability,
-			issueSuppression:     suppression,
 		}}, nil
 	case enrichment.Remove:
 		return &mutationDispatcher{safeRemove: &enrichmentSafeRemovalProcessor{
 			enumSiblingsEnabled:     enumSiblingsEnabled,
 			observablesEnabled:      observablesEnabled,
 			deferObservablesRemoval: deferObservablesRemoval || enumSiblingsEnabled && observablesEnabled,
-			issueSuppression:        suppression,
 		}}, nil
 	case enrichment.ForceRemove:
 		return &mutationDispatcher{forceRemove: &enrichmentForceRemovalProcessor{
 			enumSiblingsEnabled:     enumSiblingsEnabled,
 			observablesEnabled:      observablesEnabled,
 			deferObservablesRemoval: deferObservablesRemoval || enumSiblingsEnabled && observablesEnabled,
-			issueSuppression:        suppression,
 		}}, nil
 	default:
 		// enrichment.None, and defensively other unknown actions, do not identify a mutation processor.

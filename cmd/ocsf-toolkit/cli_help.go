@@ -39,20 +39,20 @@ func joinHelpSection(header string, entries []string) string {
 }
 
 // writeIssueCodes lists every issue code and its description, sorted, one blank-line-separated entry per code,
-// annotating mandatory codes that --suppress-issues cannot accept.
+// annotating mandatory codes that cannot use the ignored level.
 func writeIssueCodes(w io.Writer, width int) {
 	codes := issue.Codes()
 	sort.Slice(codes, func(i, j int) bool { return codes[i].String() < codes[j].String() })
 
 	entries := make([]string, len(codes))
 	for i, code := range codes {
-		name := code.String()
-		if !code.Suppressible() {
-			name += " (mandatory, cannot be suppressed)"
+		name := fmt.Sprintf("%s (default: %s)", code, code.DefaultLevel())
+		if !code.Ignorable() {
+			name += " (mandatory, cannot be ignored)"
 		}
 		entries[i] = formatHelpEntry(name, code.Description())
 	}
-	header := "Issue codes (suppressible with --suppress-issues unless noted otherwise):"
+	header := "Issue codes:"
 	writeWrappedLines(w, joinHelpSection(header, entries), width)
 }
 
@@ -63,12 +63,9 @@ func writeValidationCodes(w io.Writer, width int) {
 	entries := make([]string, len(codes))
 	for index, code := range codes {
 		name := fmt.Sprintf("%s (default: %s)", code, code.DefaultLevel())
-		if !code.Suppressible() {
-			name += " (mandatory, cannot be suppressed)"
-		}
 		entries[index] = formatHelpEntry(name, code.Description())
 	}
-	header := "Validation codes (suppressible with --suppress-validations unless noted otherwise):"
+	header := "Validation codes:"
 	writeWrappedLines(w, joinHelpSection(header, entries), width)
 }
 
@@ -100,11 +97,6 @@ func writeHelp(w io.Writer, parser *cliParser) {
 }
 
 func writeHelpFlag(w io.Writer, flag *pflag.Flag, width int) {
-	if bareUsage := flagAnnotation(flag, flagBareUsageAnnotation); bareUsage != "" {
-		writeHelpFlagLine(w, flag, "", bareUsage, true, width)
-		writeHelpFlagLine(w, flag, flagAnnotation(flag, flagValueNameAnnotation), flag.Usage, false, width)
-		return
-	}
 	writeHelpFlagLine(w, flag, flagAnnotation(flag, flagValueNameAnnotation), flag.Usage, true, width)
 }
 
@@ -117,7 +109,7 @@ func writeHelpFlagLine(w io.Writer, flag *pflag.Flag, valueName, usage string, i
 		option = "    " + option
 	}
 	if valueName != "" {
-		option += "=" + valueName
+		option += " " + valueName
 	}
 	prefix := "  " + option
 	optionWidth := utf8.RuneCountInString(prefix)
@@ -217,9 +209,12 @@ func flagAnnotation(flag *pflag.Flag, name string) string {
 
 func processHelpNotes() string {
 	notes := []string{
-		formatHelpEntry("Forced observable removal deletes the entire observables attribute without inspecting it."),
-		formatHelpEntry("Forced enum sibling removal retains siblings required for enum ID 99."),
-		formatHelpEntry("Enum sibling work always runs before observable work, regardless of flag order."),
+		formatHelpEntry(
+			"Flag values may be separated by a space or attached with =; for example:",
+			"--event my_event.json",
+			"--event=my_event.json",
+		),
+		formatHelpEntry("Only one output option may use stdout."),
 		formatHelpEntry(
 			"--output-dir writes processed events beneath events/ and processing reports beneath reports/.",
 		),
@@ -231,7 +226,9 @@ func processHelpNotes() string {
 			"With --event, relative paths are cleaned and preserved;"+
 				" absolute paths and paths that would escape the current directory using .. use a safe basename.",
 		),
-		formatHelpEntry("Only one output option may use stdout."),
+		formatHelpEntry("Enum sibling work always runs before observable work, regardless of flag order."),
+		formatHelpEntry("Forced observable removal deletes the entire observables attribute without inspecting it."),
+		formatHelpEntry("Forced enum sibling removal retains siblings required for enum ID 99."),
 	}
 	return joinHelpSection("Notes:", notes)
 }

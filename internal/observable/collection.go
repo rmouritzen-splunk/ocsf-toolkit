@@ -155,9 +155,6 @@ func identify(value any) (identity, bool) {
 // Append preserves the collection's array representation when it can hold generated observable maps. A fixed-size
 // Go array is necessarily normalized to a slice because appending cannot preserve its length or concrete array type.
 func (c *Collection) Append(generated []jsonish.Map) (any, error) {
-	if c == nil {
-		return nil, errors.New("existing observables value is not an array")
-	}
 	existing := c.source
 	switch values := existing.(type) {
 	case []jsonish.Map:
@@ -215,9 +212,6 @@ func appendAsAny(existing *Collection, generated []jsonish.Map) []any {
 // fast paths and reflective fallbacks intentionally remain together because observable removal is an event-processing
 // hot path and the branches describe one type-preservation operation.
 func (c *Collection) FilterRemovable(entries []Entry, removeCount int) (any, error) {
-	if c == nil {
-		return nil, errors.New("observable value is not an array")
-	}
 	value := c.source
 	if value == nil {
 		return nil, errors.New("observable value is not an array")

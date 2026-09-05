@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"strings"
 
 	"github.com/ocsf/ocsf-toolkit/enrichment"
 	"github.com/spf13/pflag"
@@ -22,9 +23,29 @@ type cliFlagRegistration struct {
 	group  *cliFlagGroup
 }
 
+func (p *cliParser) parse(args []string) error {
+	return p.flags.Parse(normalizeOptionalActionValues(args))
+}
+
+// pflag treats a flag with NoOptDefVal as bare even when the next argument is a value. Normalize the two optional
+// action flags so their canonical --flag value spelling and their attached --flag=value spelling behave identically.
+func normalizeOptionalActionValues(args []string) []string {
+	normalized := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if (arg == "--enum-siblings" || arg == "--observables") && index+1 < len(args) &&
+			!strings.HasPrefix(args[index+1], "-") {
+			normalized = append(normalized, arg+"="+args[index+1])
+			index++
+			continue
+		}
+		normalized = append(normalized, arg)
+	}
+	return normalized
+}
+
 const (
 	flagValueNameAnnotation = "ocsf-toolkit/value-name"
-	flagBareUsageAnnotation = "ocsf-toolkit/bare-usage"
 )
 
 func newParser() (*cliParser, *cliOptions) {
@@ -72,7 +93,7 @@ func newParser() (*cliParser, *cliOptions) {
 		&options.General.ObservablePathNotation,
 		"observable-path-notation",
 		"STYLE",
-		"Notation for generated observable names and validation warnings:"+
+		"Notation for generated observable names and validation findings:"+
 			" simple, brackets, wildcard, indexed, or jsonpath",
 	)
 	general.boolVar(&options.General.Overwrite, "overwrite", "", "Allow replacing existing output files")
@@ -84,78 +105,61 @@ func newParser() (*cliParser, *cliOptions) {
 	mutation.actionVar(
 		&options.Mutation.EnumSiblings,
 		"enum-siblings",
-		"Add enum siblings",
-		"Set the enum sibling action: add, remove, or force-remove",
+		"Set the enum sibling action: add, remove, or force-remove; defaults to add",
 	)
 	mutation.actionVar(
 		&options.Mutation.Observables,
 		"observables",
-		"Add observables",
-		"Set the observable action: add, remove, or force-remove",
+		"Set the observable action: add, remove, or force-remove; defaults to add",
 	)
 	mutation.varValue(
 		&options.Mutation.ObservableIDs,
-		"observable-ids",
-		"OBSERVABLE_IDS",
-		"Add only the comma-separated observable type IDs",
-	)
-	mutation.varValueOptional(
-		&options.Mutation.SuppressIssues,
-		"suppress-issues",
-		"ISSUE_CODES",
-		"Suppress comma-separated tolerable issue codes, or all suppressible issues when given without a value",
+		"observable-id",
+		"ID",
+		"Add only the observable type ID; may be repeated",
 	)
 	mutation.boolVar(
 		&options.Mutation.Enrich,
 		"enrich",
 		"E",
-		"Add enum siblings and observables (shorthand for --enum-siblings=add --observables=add)",
+		"Add enum siblings and observables (shorthand for --enum-siblings add --observables add)",
 	)
+
 	mutation.boolVar(
 		&options.Mutation.Unenrich,
 		"unenrich",
 		"U",
-		"Safely remove enum siblings and observables (shorthand for --enum-siblings=remove --observables=remove)",
+		"Safely remove enum siblings and observables (shorthand for --enum-siblings remove --observables remove)",
 	)
 	mutation.boolVar(
 		&options.Mutation.ForceRemove,
 		"force-remove",
 		"",
 		"Force-remove enum siblings and observables"+
-			" (shorthand for --enum-siblings=force-remove --observables=force-remove)",
+			" (shorthand for --enum-siblings force-remove --observables force-remove)",
+	)
+
+	issues := parser.newGroup("Issue Options")
+	issues.varValue(
+		&options.Issues.Levels,
+		"issue-level",
+		"ISSUE_CODE=LEVEL",
+		"Set an issue level to ignored, warning, or error; repeat for additional codes, or set all=LEVEL",
 	)
 
 	validationGroup := parser.newGroup("Validation Options")
 	validationGroup.boolVar(&options.Validation.Validate, "validate", "V", "Validate events")
-	validationGroup.boolVar(
-		&options.Validation.WarnOnMissingRecommended,
-		"warn-on-missing-recommended",
-		"",
-		"Warn when recommended attributes are missing",
-	)
 	validationGroup.boolVar(
 		&options.Validation.FailOnValidationErrors,
 		"fail-on-validation-errors",
 		"",
 		"Exit non-zero when validation errors are found",
 	)
-	validationGroup.varValueOptional(
-		&options.Validation.Suppress,
-		"suppress-validations",
-		"VALIDATION_CODES",
-		"Suppress comma-separated validation codes, or all suppressible validation findings when given without a value",
-	)
-	validationGroup.varValueOptional(
-		&options.Validation.WarningsAsErrors,
-		"validation-warnings-as-errors",
-		"VALIDATION_CODES",
-		"Report comma-separated validation codes as errors, or all default-warning codes when given without a value",
-	)
-	validationGroup.varValueOptional(
-		&options.Validation.ErrorsAsWarnings,
-		"validation-errors-as-warnings",
-		"VALIDATION_CODES",
-		"Report comma-separated validation codes as warnings, or all default-error codes when given without a value",
+	validationGroup.varValue(
+		&options.Validation.Levels,
+		"validation-level",
+		"VALIDATION_CODE=LEVEL",
+		"Set a validation level to ignored, warning, or error; repeat for additional codes, or set all=LEVEL",
 	)
 
 	help := parser.newGroup("Help Options")
@@ -199,13 +203,6 @@ func (r cliFlagRegistration) varValue(target pflag.Value, name, valueName, usage
 	r.add(name, valueName)
 }
 
-func (r cliFlagRegistration) varValueOptional(target pflag.Value, name, valueName, usage string) {
-	nameOption(target, name)
-	r.parser.flags.Var(target, name, usage)
-	flag := r.add(name, valueName)
-	flag.NoOptDefVal = optionalCodesAllValue
-}
-
 // nameOption tells target its own flag name (as "--name"), if it implements namedOption, so its Set method's error
 // messages can name the flag without each call site duplicating that name as a literal string.
 func nameOption(target pflag.Value, name string) {
@@ -217,12 +214,10 @@ func nameOption(target pflag.Value, name string) {
 func (r cliFlagRegistration) actionVar(
 	target *enrichmentActionOption,
 	name string,
-	bareUsage string,
-	explicitUsage string,
+	usage string,
 ) {
 	nameOption(target, name)
-	r.parser.flags.Var(target, name, explicitUsage)
-	flag := r.add(name, "ACTION")
+	r.parser.flags.Var(target, name, usage)
+	flag := r.add(name, "[ACTION]")
 	flag.NoOptDefVal = string(enrichment.Add)
-	flag.Annotations[flagBareUsageAnnotation] = []string{bareUsage}
 }

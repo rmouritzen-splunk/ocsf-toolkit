@@ -6,6 +6,9 @@ import "github.com/ocsf/ocsf-toolkit/internal/coderegistry"
 // Code identifies an OCSF validation condition independently of its effective reporting level.
 type Code uint8
 
+// Code names and ordinals are public compatibility contracts. During v1, retain the name and ordinal of a code that
+// stops being emitted and add "Deprecated: this code is no longer emitted." to its documentation. Never reorder
+// existing codes; append new codes immediately before codeCount.
 const (
 	// None indicates the absence of a validation code and is not a valid reportable code.
 	None Code = iota
@@ -321,7 +324,7 @@ var codeInfos = [codeCount]codeInfo{
 	AttributeRecommendedMissing: {
 		"validation_attribute_recommended_missing",
 		"A recommended attribute is missing.",
-		LevelWarning,
+		LevelIgnored,
 	},
 	AttributeEnumSiblingSuspicious: {
 		"validation_attribute_enum_sibling_suspicious_other",
@@ -377,16 +380,13 @@ var codeInfos = [codeCount]codeInfo{
 
 var codeRegistry = coderegistry.New[Code]("validation code", codeRegistryInfos())
 
-// codeRegistryInfos projects codeInfos' name and description into the shared registry's table and marks mandatory
-// codes there. Default levels remain in codeInfos because the shared registry has no notion of validation levels.
+// codeRegistryInfos projects codeInfos' name and description into the shared registry's table. Default levels remain
+// in codeInfos because the shared registry has no notion of validation levels.
 func codeRegistryInfos() []coderegistry.Info {
 	infos := make([]coderegistry.Info, len(codeInfos))
 	for index, info := range codeInfos {
 		infos[index] = coderegistry.Info{Name: info.name, Description: info.description}
 	}
-	infos[ClassUIDMissing].Mandatory = true
-	infos[ClassUIDWrongType].Mandatory = true
-	infos[ClassUIDUnknown].Mandatory = true
 	return infos
 }
 
@@ -408,10 +408,10 @@ func (code Code) DefaultLevel() Level {
 	return codeInfos[code].defaultLevel
 }
 
-// Suppressible reports whether a finding with code may be omitted by validation policy. Class-resolution failures
-// are mandatory because they prevent every processor from doing further event work.
-func (code Code) Suppressible() bool {
-	return codeRegistry.Suppressible(code)
+// Ignorable reports whether validation-level policy may omit code. Every validation finding is ignorable; mandatory
+// processing issues independently report conditions such as class-resolution failures that prevent further work.
+func (code Code) Ignorable() bool {
+	return codeRegistry.Ignorable(code)
 }
 
 // String returns the stable external representation of code, or an empty string for an invalid code.
