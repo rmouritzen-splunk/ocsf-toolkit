@@ -52,7 +52,7 @@ Approach changes with senior engineering judgment. Consider the project's archit
 
 Read the surrounding implementation before proposing abstractions. Existing design, behavior, tests, and conventions are evidence of intent, not immutable constraints. Prefer existing project patterns and standard-library facilities when they remain sound, but do not preserve accidental complexity, weak abstractions, or incorrect behavior merely for consistency. When a material change improves correctness, simplicity, or maintainability, explain the tradeoff and deliberately update affected contracts, tests, and documentation. Add an abstraction only when it removes meaningful complexity or duplication.
 
-Keep the public API small and intentional. Public packages and exported identifiers require useful Go documentation. The principal public packages are `eventschema`, `jsonio`, and `jsonish`; implementation details should remain internal when library users do not need them.
+Keep the public API small and intentional. Public packages and exported identifiers require useful Go documentation. The principal public packages are `eventpipeline`, `jsonio`, and `jsonish`; implementation details should remain internal when library users do not need them.
 
 Use `jsonish.Map` for JSON objects in event-processing APIs. For JSON input, preserve numbers as `json.Number` when possible; the `jsonio` package provides the preferred decoding behavior. OCSF `integer_t` and `long_t` values are signed 64-bit integers.
 
@@ -120,7 +120,7 @@ Do not edit generated files in `build/`, `dist/`, or coverage outputs. Regenerat
 
 ### Performance and memory verification
 
-Run `go test ./eventschema -run '^$' -bench '.' -benchmem -benchtime 500ms -count 10` for a current-checkout snapshot of runtime, transient bytes per operation, and allocations per operation. Run `scripts/benchmark-compare.sh` for the preferred regression analysis: it benchmarks the current checkout and the newest eligible release tag on the same machine with the same Go environment, then compares the samples with `benchstat`. Use `--base vX.Y.Z` to select a specific reachable release, `--pattern 'regexp'` to focus the suite, and `--count N` or `--time DURATION` only when the defaults do not provide enough statistical confidence.
+Run `go test ./eventpipeline -run '^$' -bench '.' -benchmem -benchtime 500ms -count 10` for a current-checkout snapshot of runtime, transient bytes per operation, and allocations per operation. Run `scripts/benchmark-compare.sh` for the preferred regression analysis: it benchmarks the current checkout and the newest eligible release tag on the same machine with the same Go environment, then compares the samples with `benchstat`. Use `--base vX.Y.Z` to select a specific reachable release, `--pattern 'regexp'` to focus the suite, and `--count N` or `--time DURATION` only when the defaults do not provide enough statistical confidence.
 
 Use the ordinary tests to enforce allocation ceilings; `make test` includes the representative `ProcessEvent` allocation budgets. Do not infer retained heap size from benchmark `B/op`. The dedicated `BenchmarkSchemaRetained` and `BenchmarkValidationMetadataRetained` benchmarks force garbage collection and report retained schema and validation-cache memory separately from transient construction allocations.
 

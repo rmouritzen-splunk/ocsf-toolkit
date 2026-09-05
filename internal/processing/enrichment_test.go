@@ -50,8 +50,8 @@ func TestEnrichmentDoesNotAddStringEnumSibling(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	siblingName := "state_name"
-	schema.compiled.Classes[int64(1)].Attributes["state"].Sibling = &siblingName
-	schema.compiled.Classes[int64(1)].Attributes[siblingName] = &itemAttributeDefinition{
+	schema.Classes[int64(1)].Attributes["state"].Sibling = &siblingName
+	schema.Classes[int64(1)].Attributes[siblingName] = &itemAttributeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{Type: "string_t"},
 	}
 	event := validValidationEvent()
@@ -72,7 +72,7 @@ func TestEnrichmentDoesNotAddStringEnumSibling(t *testing.T) {
 func TestEnrichmentDoesNotAddEmptyStringEnumSibling(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	activityID := schema.compiled.Classes[int64(1)].Attributes["activity_id"]
+	activityID := schema.Classes[int64(1)].Attributes["activity_id"]
 	activityID.Type = "string_t"
 	activityID.Enum = map[string]*enumDefinition{"": {Caption: "Empty"}}
 	event := validValidationEvent()
@@ -221,7 +221,7 @@ func TestEnrichmentAddsParallelIntegralEnumArraySiblingContainingOther(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			assert := require.New(t)
 			schema := makeValidationTestSchema(assert)
-			schema.compiled.Classes[int64(1)].Attributes["status_ids"].Enum["99"] =
+			schema.Classes[int64(1)].Attributes["status_ids"].Enum["99"] =
 				&enumDefinition{Caption: "Other"}
 			event := validValidationEvent()
 			event["status_ids"] = []any{json.Number("1"), json.Number("99"), json.Number("2")}
@@ -245,7 +245,7 @@ func TestEnrichmentAddsParallelIntegralEnumArraySiblingContainingOther(t *testin
 func TestEnrichmentDoesNotAddStringEnumArraySibling(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	statusIDs := schema.compiled.Classes[int64(1)].Attributes["status_ids"]
+	statusIDs := schema.Classes[int64(1)].Attributes["status_ids"]
 	statusIDs.Type = "string_t"
 	statusIDs.Enum = map[string]*enumDefinition{"99": {Caption: "Ninety-nine"}}
 	event := validValidationEvent()
@@ -281,7 +281,7 @@ func TestEnrichmentAddsObjectObservableDefinedOnAttribute(t *testing.T) {
 	assert := require.New(t)
 	schema := makeTestSchema(assert)
 	observableTypeID := int64(2000)
-	schema.compiled.Classes[int64(1)].Attributes["ball"].Observable = &observableTypeID
+	schema.Classes[int64(1)].Attributes["ball"].Observable = &observableTypeID
 	event := jsonish.Map{
 		"class_uid": json.Number("1"),
 		"ball":      jsonish.Map{"green": "go"},
@@ -302,26 +302,26 @@ func TestEnrichmentFiltersEveryObservableDeclarationSourceByTypeID(t *testing.T)
 	schema := makeTestSchema(assert)
 	selectedTypeID := int64(2000)
 	excludedTypeID := int64(1000)
-	schema.compiled.ObservableTypes[selectedTypeID] = "Selected"
-	schema.compiled.Objects["ball"].Observable = &selectedTypeID
-	schema.compiled.Dictionary.Attributes["dictionary_observable"] = &commonAttributeDefinition{
+	schema.ObservableTypes[selectedTypeID] = "Selected"
+	schema.Objects["ball"].Observable = &selectedTypeID
+	schema.Dictionary.Attributes["dictionary_observable"] = &commonAttributeDefinition{
 		Type:       "string_t",
 		Observable: &selectedTypeID,
 	}
-	schema.compiled.Dictionary.Attributes["direct_observable"] = &commonAttributeDefinition{Type: "string_t"}
-	schema.compiled.Dictionary.Attributes["typed_observable"] = &commonAttributeDefinition{Type: "observable_string_t"}
-	schema.compiled.Dictionary.Types.Attributes["observable_string_t"] = &typeDefinition{
+	schema.Dictionary.Attributes["direct_observable"] = &commonAttributeDefinition{Type: "string_t"}
+	schema.Dictionary.Attributes["typed_observable"] = &commonAttributeDefinition{Type: "observable_string_t"}
+	schema.Dictionary.Types.Attributes["observable_string_t"] = &typeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{Type: "string_t", Observable: &excludedTypeID},
 	}
-	class := schema.compiled.Classes[int64(1)]
+	class := schema.Classes[int64(1)]
 	class.Attributes["dictionary_observable"] = &itemAttributeDefinition{
-		CommonAttributeDefinition: *schema.compiled.Dictionary.Attributes["dictionary_observable"],
+		CommonAttributeDefinition: *schema.Dictionary.Attributes["dictionary_observable"],
 	}
 	class.Attributes["direct_observable"] = &itemAttributeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{Type: "string_t", Observable: &excludedTypeID},
 	}
 	class.Attributes["typed_observable"] = &itemAttributeDefinition{
-		CommonAttributeDefinition: *schema.compiled.Dictionary.Attributes["typed_observable"],
+		CommonAttributeDefinition: *schema.Dictionary.Attributes["typed_observable"],
 	}
 	event := jsonish.Map{
 		"class_uid":             json.Number("1"),
@@ -350,7 +350,7 @@ func TestEnrichmentDoesNotReportMalformedExcludedObservableSources(t *testing.T)
 	assert := require.New(t)
 	schema := makeTestSchema(assert)
 	selectedTypeID := int64(2000)
-	schema.compiled.ObservableTypes[selectedTypeID] = "Selected"
+	schema.ObservableTypes[selectedTypeID] = "Selected"
 	event := jsonish.Map{
 		"class_uid": json.Number("1"),
 		"ball":      "not an object",
@@ -372,7 +372,7 @@ func TestEnrichmentReportsObservableArrayWithWrongType(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	observableTypeID := int64(1000)
-	schema.compiled.Classes[int64(1)].Attributes["statuses"].Observable = &observableTypeID
+	schema.Classes[int64(1)].Attributes["statuses"].Observable = &observableTypeID
 	event := validValidationEvent()
 	event["statuses"] = "not an array"
 
@@ -391,7 +391,7 @@ func TestEnrichmentAddsObservableForEmptyString(t *testing.T) {
 			assert := require.New(t)
 			schema := makeValidationTestSchema(assert)
 			observableTypeID := int64(1000)
-			attribute := schema.compiled.Classes[int64(1)].Attributes["name"]
+			attribute := schema.Classes[int64(1)].Attributes["name"]
 			attribute.Type = attributeType
 			attribute.Observable = &observableTypeID
 			event := validValidationEvent()
@@ -426,7 +426,7 @@ func TestEnrichmentReportsStructuredScalarObservableValue(t *testing.T) {
 			assert := require.New(t)
 			schema := makeValidationTestSchema(assert)
 			observableTypeID := int64(1000)
-			schema.compiled.Classes[int64(1)].Attributes["name"].Observable = &observableTypeID
+			schema.Classes[int64(1)].Attributes["name"].Observable = &observableTypeID
 			event := validValidationEvent()
 			event["name"] = test.value
 
@@ -460,7 +460,7 @@ func TestEnrichmentSkipsJSONTypeObservableDeclarations(t *testing.T) {
 			assert := require.New(t)
 			schema := makeValidationTestSchema(assert)
 			observableTypeID := int64(1000)
-			attribute := schema.compiled.Classes[int64(1)].Attributes["name"]
+			attribute := schema.Classes[int64(1)].Attributes["name"]
 			attribute.Type = "json_t"
 			attribute.Observable = &observableTypeID
 			event := validValidationEvent()
@@ -616,7 +616,7 @@ func TestEnrichmentDistinguishesNullValueFromOmittedValueForDuplicates(t *testin
 	assert := require.New(t)
 	schema := makeTestSchema(assert)
 	objectObservableTypeID := int64(2000)
-	schema.compiled.Classes[int64(1)].Attributes["ball"].Observable = &objectObservableTypeID
+	schema.Classes[int64(1)].Attributes["ball"].Observable = &objectObservableTypeID
 	existing := jsonish.Map{"name": "ball", "type_id": objectObservableTypeID, "value": nil}
 	event := jsonish.Map{
 		"class_uid":   json.Number("1"),
@@ -747,7 +747,7 @@ func TestEnrichmentStopsWithoutResolvedClass(t *testing.T) {
 func TestValidationProcessesScalarEnumAndSiblingTogether(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	schema.Compiled().Classes[1].Attributes["mode"].Requirement = "recommended"
+	schema.Classes[1].Attributes["mode"].Requirement = "recommended"
 
 	t.Run("enrichment satisfies earlier sibling requirement", func(t *testing.T) {
 		assert := require.New(t)
@@ -879,7 +879,7 @@ func TestEnrichmentAddsObservableFromEnumSibling(t *testing.T) {
 			assert := require.New(t)
 			schema := makeValidationTestSchema(assert)
 			observableTypeID := int64(2000)
-			schema.compiled.Classes[int64(1)].Attributes["mode"].Observable = &observableTypeID
+			schema.Classes[int64(1)].Attributes["mode"].Observable = &observableTypeID
 
 			result, err := mustNewEventProcessorPipeline(assert, schema, NewEnrichment()).ProcessEvent(test.event)
 

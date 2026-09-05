@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import "github.com/ocsf/ocsf-toolkit/internal/schema"
 
@@ -16,5 +16,5 @@ type profileDefinition = schema.ProfileDefinition
 type schemaDefinition = schema.Definition
 
 func (s *Schema) compiledForTest() *schema.Compiled {
-	return s.pipelineFactory.Compiled()
+	return s.compiled
 }

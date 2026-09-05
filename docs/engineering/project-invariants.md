@@ -148,7 +148,7 @@ Authority: explicit maintainer decision on 2026-08-22; `AGENTS.md`; `docs/archit
 
 Class IDs, enum values, constraints, and other integral semantics accept a representation only when its mathematical value is finite, in signed-64-bit range, and exactly integral. Decimal or exponent spellings must not be rounded, truncated, underflowed, or overflowed into a different integer. JSON input should retain `json.Number` when possible.
 
-Authority: toolkit numeric contract; `eventschema/invariant_test.go`; `TestInvariantScalarConversionsPreserveEquivalentValues`; and `TestInvariantValueConstraintsUseTypedEquality`.
+Authority: toolkit numeric contract; `eventpipeline/invariant_test.go`; `TestInvariantScalarConversionsPreserveEquivalentValues`; and `TestInvariantValueConstraintsUseTypedEquality`.
 
 ### TOOLKIT-STRING-001: `max_len` counts Unicode code points
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/ocsf/ocsf-toolkit/enrichment"
+	"github.com/ocsf/ocsf-toolkit/eventpipeline"
 	"github.com/ocsf/ocsf-toolkit/eventresult"
-	"github.com/ocsf/ocsf-toolkit/eventschema"
 	"github.com/ocsf/ocsf-toolkit/internal/fserror"
 	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonio"
@@ -52,7 +52,7 @@ type eventReport struct {
 
 func processEvents(
 	config processConfig,
-	pipeline *eventschema.Pipeline,
+	pipeline *eventpipeline.Pipeline,
 	initializationIssues []schemaresult.InitializationIssue,
 	suppressedInitializationIssues int,
 	destinations processingDestinations,
@@ -145,52 +145,53 @@ func processEvents(
 	return summary, false, nil
 }
 
-func newPipeline(config processConfig) (*eventschema.Pipeline, []schemaresult.InitializationIssue, int, error) {
-	schema, initializationIssues, err := eventschema.Load(config.schemaPath)
+func newPipeline(config processConfig) (*eventpipeline.Pipeline, []schemaresult.InitializationIssue, int, error) {
+	schema, initializationIssues, err := eventpipeline.NewSchema(config.schemaPath)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	options := make([]eventschema.PipelineOption, 0, 4)
+	options := make([]eventpipeline.PipelineOption, 0, 4)
 	if config.enrich || config.enrichmentRemoval {
 		options = append(options,
-			eventschema.WithEnumSiblings(config.enumSiblingsAction),
-			eventschema.WithObservables(config.observablesAction, config.observableTypeIDs...),
+			eventpipeline.WithEnumSiblings(config.enumSiblingsAction),
+			eventpipeline.WithObservables(config.observablesAction, config.observableTypeIDs...),
 		)
 		if config.observablePathNotation != "" && config.observablesAction == enrichment.Add {
-			options = append(options, eventschema.WithEnrichmentObservablePathNotation(
+			options = append(options, eventpipeline.WithEnrichmentObservablePathNotation(
 				pathstyle.Style(config.observablePathNotation),
 			))
 		}
 	}
 	if config.validate {
-		validationOptions := make([]eventschema.ValidationOption, 0, 6)
+		validationOptions := make([]eventpipeline.ValidationOption, 0, 6)
 		if config.warnOnMissingRecommended {
-			validationOptions = append(validationOptions, eventschema.WithWarnOnMissingRecommended())
+			validationOptions = append(validationOptions, eventpipeline.WithWarnOnMissingRecommended())
 		}
 		if config.observablePathNotation != "" {
-			validationOptions = append(validationOptions, eventschema.WithValidationObservablePathNotation(
+			validationOptions = append(validationOptions, eventpipeline.WithValidationObservablePathNotation(
 				pathstyle.Style(config.observablePathNotation),
 			))
 		}
 		if config.suppressValidation.configured {
 			validationOptions = append(validationOptions,
-				eventschema.WithSuppressValidation(config.suppressValidation.codes...))
+				eventpipeline.WithSuppressValidation(config.suppressValidation.codes...))
 		}
 		if config.validationWarningsAsErrors.configured {
 			validationOptions = append(validationOptions,
-				eventschema.WithValidationWarningsAsErrors(config.validationWarningsAsErrors.codes...))
+				eventpipeline.WithValidationWarningsAsErrors(config.validationWarningsAsErrors.codes...))
 		}
 		if config.validationErrorsAsWarnings.configured {
 			validationOptions = append(validationOptions,
-				eventschema.WithValidationErrorsAsWarnings(config.validationErrorsAsWarnings.codes...))
+				eventpipeline.WithValidationErrorsAsWarnings(config.validationErrorsAsWarnings.codes...))
 		}
-		options = append(options, eventschema.WithValidation(validationOptions...))
+		options = append(options, eventpipeline.WithValidation(validationOptions...))
 	}
 	if config.suppressIssuesConfigured {
-		options = append(options, eventschema.WithSuppressIssuesByStrings(config.suppressIssueCodes...))
+		options = append(options, eventpipeline.WithSuppressIssuesByStrings(config.suppressIssueCodes...))
 	}
-	pipeline, err := schema.NewPipeline(options...)
+	options = append(options, eventpipeline.WithSchema(schema))
+	pipeline, err := eventpipeline.NewPipeline(options...)
 	if err != nil {
 		return nil, nil, 0, &commandConfigurationError{
 			cause: fmt.Errorf("configure event processor pipeline: %w", err),
@@ -228,7 +229,7 @@ func suppressInitializationIssues(
 
 func processOneEvent(
 	config processConfig,
-	pipeline *eventschema.Pipeline,
+	pipeline *eventpipeline.Pipeline,
 	input inputEvent,
 	eventOutput *outputDestination,
 	reportOutput *outputDestination,
@@ -302,7 +303,7 @@ func processOneEvent(
 func buildEventReport(
 	config processConfig,
 	input inputEvent,
-	result eventschema.ProcessingResult,
+	result eventpipeline.ProcessingResult,
 	fileResult fileSummary,
 ) eventReport {
 	report := eventReport{

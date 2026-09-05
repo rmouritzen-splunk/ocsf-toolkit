@@ -1,47 +1,38 @@
-package validationcache
+package schema
 
 import (
 	"fmt"
 	"math"
 	"regexp"
 	"slices"
-	"sync"
 
 	"github.com/ocsf/ocsf-toolkit/internal/eventvalue"
-	"github.com/ocsf/ocsf-toolkit/internal/schema"
-	internalversion "github.com/ocsf/ocsf-toolkit/internal/semver"
+	"github.com/ocsf/ocsf-toolkit/internal/semver"
 )
 
-// Lazy owns a validation cache that is initialized at most once. Get is safe for concurrent use.
-// Cache construction occurs while pipelines are built, never while an event is processed.
-type Lazy struct {
-	cacheGuard sync.Once
-	cache      Cache
-	err        error
-}
-
-// Get returns the immutable cache derived from compiled, building it on the first call.
-// Subsequent calls return the same cache or construction error.
-func (l *Lazy) Get(compiled *schema.Compiled) (*Cache, error) {
-	l.cacheGuard.Do(func() {
-		l.cache, l.err = Build(compiled)
+// ValidationCache returns immutable schema-derived constraints, building them at most once. Construction occurs
+// while pipelines are built, never while an event is processed. The method is safe for concurrent use and returns
+// the same cache or construction error to every caller.
+func (s *Compiled) ValidationCache() (*ValidationCache, error) {
+	s.validationCacheOnce.Do(func() {
+		s.validationCache, s.validationCacheErr = buildValidationCache(s)
 	})
-	if l.err != nil {
-		return nil, l.err
+	if s.validationCacheErr != nil {
+		return nil, s.validationCacheErr
 	}
-	return &l.cache, nil
+	return &s.validationCache, nil
 }
 
-// Cache contains immutable schema-derived constraints shared by validation pipelines.
-type Cache struct {
+// ValidationCache contains immutable schema-derived constraints shared by validation pipelines.
+type ValidationCache struct {
 	VersionOK bool
-	Version   internalversion.Version
+	Version   semver.Version
 	Types     map[string]*TypeValidation
 }
 
 // TypeValidation contains the resolved definition and constraints for one schema type.
 type TypeValidation struct {
-	Definition    *schema.TypeDefinition
+	Definition    *TypeDefinition
 	PrimitiveType string
 	Regex         RegexConstraint
 	Value         ValueConstraint
@@ -92,10 +83,10 @@ type RegexConstraint struct {
 	Err      error
 }
 
-// Build compiles validation constraints from a normalized schema.
-func Build(compiled *schema.Compiled) (Cache, error) {
-	version, versionOK := internalversion.Parse(compiled.Version)
-	cache := Cache{
+// buildValidationCache compiles validation constraints from a normalized schema.
+func buildValidationCache(compiled *Compiled) (ValidationCache, error) {
+	version, versionOK := semver.Parse(compiled.Version)
+	cache := ValidationCache{
 		Version:   version,
 		VersionOK: versionOK,
 		Types:     make(map[string]*TypeValidation, len(compiled.Dictionary.Types.Attributes)),
@@ -107,16 +98,17 @@ func Build(compiled *schema.Compiled) (Cache, error) {
 	}
 	for typeName := range compiled.Dictionary.Types.Attributes {
 		if _, err := resolver.resolve(typeName); err != nil {
-			return Cache{}, err
+			return ValidationCache{}, err
 		}
 	}
 	return cache, nil
 }
 
 // typeResolver builds final TypeValidation values while using completed ancestors as temporary memoized results.
-// visiting exists only during Build; resolved becomes the immutable Cache.Types map returned to the caller.
+// visiting exists only during buildValidationCache; resolved becomes the immutable ValidationCache.Types map returned
+// to the caller.
 type typeResolver struct {
-	types    map[string]*schema.TypeDefinition
+	types    map[string]*TypeDefinition
 	resolved map[string]*TypeValidation
 	visiting map[string]struct{}
 }
@@ -166,7 +158,7 @@ func (r *typeResolver) resolve(typeName string) (*TypeValidation, error) {
 
 func resolveTypeValidation(
 	typeName string,
-	definition *schema.TypeDefinition,
+	definition *TypeDefinition,
 	inherited *TypeValidation,
 ) (*TypeValidation, error) {
 	resolved := &TypeValidation{Definition: definition, PrimitiveType: inherited.PrimitiveType}
@@ -200,16 +192,7 @@ func resolveTypeValidation(
 	return resolved, nil
 }
 
-func isPrimitiveTypeName(typeName string) bool {
-	switch typeName {
-	case "boolean_t", "float_t", "integer_t", "long_t", "string_t", "json_t":
-		return true
-	default:
-		return false
-	}
-}
-
-func compileValueConstraint(typeName, primitiveType string, typeDef *schema.TypeDefinition) (ValueConstraint, error) {
+func compileValueConstraint(typeName, primitiveType string, typeDef *TypeDefinition) (ValueConstraint, error) {
 	constraint := ValueConstraint{TypeName: typeName}
 	for index, value := range typeDef.Values {
 		var err error

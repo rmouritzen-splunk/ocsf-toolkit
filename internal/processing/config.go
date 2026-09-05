@@ -52,7 +52,7 @@ type ObservablesConfig struct {
 	PathNotationConfigured bool
 }
 
-// PipelineConfig is the fully resolved configuration for one Schema.NewPipeline call. The public facade collects
+// PipelineConfig is the fully resolved configuration for one eventpipeline.NewPipeline call. The public facade collects
 // options into exactly one PipelineConfig, so each component and each processor kind appears at most once by
 // construction; there is no cross-processor duplication to detect here. Fields are grouped by which processor
 // they configure: EnumSiblingsAction/ObservablesAction/Observables/IssueSuppression are shared by the mutation

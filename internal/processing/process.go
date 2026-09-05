@@ -18,9 +18,9 @@ import (
 )
 
 var errNilEvent = errors.New("event is nil")
-var errUninitializedSchema = errors.New("schema is not initialized; create it with eventschema.Load")
+var errUninitializedSchema = errors.New("schema is not initialized; create it with eventpipeline.NewSchema")
 var errUninitializedPipeline = errors.New(
-	"event processor pipeline is not initialized; create it with Schema.NewPipeline",
+	"event processor pipeline is not initialized; create it with eventpipeline.NewPipeline",
 )
 
 type enumLookupStatus uint8
@@ -57,7 +57,7 @@ type processContext struct {
 	jsonNumberUsesFloatSyntax bool
 }
 
-// Result is the internal mutable result accumulated while processing an event. The public eventschema result wraps
+// Result is the internal mutable result accumulated while processing an event. The public eventpipeline result wraps
 // these values in an opaque concrete value after traversal completes.
 type Result struct {
 	Validation        eventresult.ValidationResult
@@ -199,8 +199,8 @@ const (
 // processors are enabled, the event may be partially modified if ProcessEvent returns an error.
 // Callers that need to preserve the original event should deep-copy it before processing.
 //
-// Invalid events are reported in the returned Result. The public eventschema pipeline exposes it as an opaque
-// eventschema.ProcessingResult. The error return is for an
+// Invalid events are reported in the returned Result. The public eventpipeline pipeline exposes it as an opaque
+// eventpipeline.ProcessingResult. The error return is for an
 // uninitialized pipeline, processor failures, or unusable caller input, not OCSF validation
 // failures. Results and errors do not repeat event values in diagnostic text or details.
 func (p *Pipeline) ProcessEvent(event jsonish.Map) (Result, error) {

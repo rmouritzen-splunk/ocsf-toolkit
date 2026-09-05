@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import (
 	"encoding/json"
@@ -22,7 +22,7 @@ import (
 	"github.com/ocsf/ocsf-toolkit/validation"
 )
 
-const testSchemaFilePath = "../test/schema_v1.9.0.json"
+const testSchemaFilePath = "../test/ocsf-schema-v1.9.0.json"
 const testSchemaVersion = "1.9.0"
 
 func newSchemaFromDefinition(definition *schema.Definition) (*Schema, error) {
@@ -37,74 +37,81 @@ func testPtrTo[T any](value T) *T {
 	return &value
 }
 
+func newPipelineForSchema(schema *Schema, options ...PipelineOption) (*Pipeline, error) {
+	configured := make([]PipelineOption, 0, len(options)+1)
+	configured = append(configured, WithSchema(schema))
+	configured = append(configured, options...)
+	return NewPipeline(configured...)
+}
+
 func mustNewPipeline(
 	assert *require.Assertions,
 	schema *Schema,
 	options ...PipelineOption,
 ) *Pipeline {
-	pipeline, err := schema.NewPipeline(options...)
+	pipeline, err := newPipelineForSchema(schema, options...)
 	assert.NoError(err)
 	return pipeline
 }
 
-func TestLoadSchemaFromFile(t *testing.T) {
+func TestNewSchemaFromFile(t *testing.T) {
 	assert := require.New(t)
-	schema, _, err := Load(testSchemaFilePath)
+	schema, _, err := NewSchema(testSchemaFilePath)
 	assert.NoError(err)
 	checkSchema(assert, schema)
 }
 
-func TestLoadSchemaFromReader(t *testing.T) {
+func TestNewSchemaFromReader(t *testing.T) {
 	assert := require.New(t)
 	testSchemaFile, err := os.Open(testSchemaFilePath)
 	assert.NoError(err)
 	defer func(f *os.File) { _ = f.Close() }(testSchemaFile)
-	schema, _, err := LoadReader(testSchemaFile)
+	schema, _, err := NewSchemaFromReader(testSchemaFile)
 	assert.NoError(err)
 	checkSchema(assert, schema)
 }
 
-func TestLoadSchemaFromBytes(t *testing.T) {
+func TestNewSchemaFromBytes(t *testing.T) {
 	assert := require.New(t)
 	data, err := os.ReadFile(testSchemaFilePath)
 	assert.NoError(err)
 
-	schema, _, err := LoadBytes(data)
+	schema, _, err := NewSchemaFromBytes(data)
 	assert.NoError(err)
 	checkSchema(assert, schema)
 }
 
-func TestLoadSchemaFromFS(t *testing.T) {
+func TestNewSchemaFromFS(t *testing.T) {
 	data, err := os.ReadFile(testSchemaFilePath)
 	require.NoError(t, err)
 	filesystem := fstest.MapFS{"schema.json": {Data: data}}
 
-	schema, _, err := LoadFS(filesystem, "schema.json")
+	schema, _, err := NewSchemaFromFS(filesystem, "schema.json")
 	require.NoError(t, err)
 	checkSchema(require.New(t), schema)
 }
 
-func TestLoadSchemaFromFSRejectsMissingFile(t *testing.T) {
-	schema, _, err := LoadFS(fstest.MapFS{}, "missing.json")
+func TestNewSchemaFromFSRejectsMissingFile(t *testing.T) {
+	schema, _, err := NewSchemaFromFS(fstest.MapFS{}, "missing.json")
 
 	require.Nil(t, schema)
 	require.ErrorContains(t, err, `failed to open schema file "missing.json"`)
 }
 
-func TestLoadSchemaFromFSRejectsNilFilesystem(t *testing.T) {
-	schema, _, err := LoadFS(nil, "schema.json")
+func TestNewSchemaFromFSRejectsNilFilesystem(t *testing.T) {
+	schema, _, err := NewSchemaFromFS(nil, "schema.json")
 
 	require.Nil(t, schema)
 	require.EqualError(t, err, "failed to open schema file: filesystem is nil")
 }
 
-func TestLoadSchemaFromBytesDoesNotRetainInput(t *testing.T) {
+func TestNewSchemaFromBytesDoesNotRetainInput(t *testing.T) {
 	data := []byte(`{
 		"compile_version": 1,
 		"version": "1.2.3",
 		"classes": {"alpha": {"name": "alpha", "uid": 1}}
 	}`)
-	schema, _, err := LoadBytes(data)
+	schema, _, err := NewSchemaFromBytes(data)
 	require.NoError(t, err)
 
 	clear(data)
@@ -113,9 +120,9 @@ func TestLoadSchemaFromBytesDoesNotRetainInput(t *testing.T) {
 	require.Equal(t, "alpha", schema.compiledForTest().Classes[1].Name)
 }
 
-func TestLoadSchemaFromReaderPreservesTypeValueNumbers(t *testing.T) {
+func TestNewSchemaFromReaderPreservesTypeValueNumbers(t *testing.T) {
 	assert := require.New(t)
-	schema, _, err := LoadReader(strings.NewReader(`{
+	schema, _, err := NewSchemaFromReader(strings.NewReader(`{
 		"compile_version": 1,
 		"version": "1.0.0",
 		"classes": {"base_event": {"name": "base_event", "uid": 0}},
@@ -131,8 +138,8 @@ func TestLoadSchemaFromReaderPreservesTypeValueNumbers(t *testing.T) {
 	)
 }
 
-func TestLoadSchemaReportsUnsupportedEnumSiblingAtInitialization(t *testing.T) {
-	loaded, issues, err := LoadReader(strings.NewReader(`{
+func TestNewSchemaReportsUnsupportedEnumSiblingAtInitialization(t *testing.T) {
+	loaded, issues, err := NewSchemaFromReader(strings.NewReader(`{
 		"compile_version": 1,
 		"version": "1.0.0",
 		"classes": {
@@ -157,7 +164,7 @@ func TestLoadSchemaReportsUnsupportedEnumSiblingAtInitialization(t *testing.T) {
 	require.Equal(t, "message", issues[0].Details["sibling"])
 }
 
-func TestLoadSchemaFromReaderRejectsInvalidInput(t *testing.T) {
+func TestNewSchemaFromReaderRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name          string
 		input         string
@@ -173,7 +180,7 @@ func TestLoadSchemaFromReaderRejectsInvalidInput(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			schema, _, err := LoadReader(strings.NewReader(test.input))
+			schema, _, err := NewSchemaFromReader(strings.NewReader(test.input))
 
 			require.Nil(t, schema)
 			require.ErrorContains(t, err, test.errorContains)
@@ -181,21 +188,21 @@ func TestLoadSchemaFromReaderRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestLoadSchemaFromReaderRejectsReadFailure(t *testing.T) {
-	schema, _, err := LoadReader(iotest.ErrReader(errors.New("read failed")))
+func TestNewSchemaFromReaderRejectsReadFailure(t *testing.T) {
+	schema, _, err := NewSchemaFromReader(iotest.ErrReader(errors.New("read failed")))
 
 	require.Nil(t, schema)
 	require.ErrorContains(t, err, "failed to decode schema from reader: read failed")
 }
 
-func TestLoadSchemaFromReaderRejectsNilReader(t *testing.T) {
-	schema, _, err := LoadReader(nil)
+func TestNewSchemaFromReaderRejectsNilReader(t *testing.T) {
+	schema, _, err := NewSchemaFromReader(nil)
 
 	require.Nil(t, schema)
 	require.EqualError(t, err, "failed to read schema from reader: reader is nil")
 }
 
-func TestLoadSchemaFromFilePreservesTypeValueNumbers(t *testing.T) {
+func TestNewSchemaFromFilePreservesTypeValueNumbers(t *testing.T) {
 	assert := require.New(t)
 	path := filepath.Join(t.TempDir(), "schema.json")
 	assert.NoError(os.WriteFile(path, []byte(`{
@@ -213,7 +220,7 @@ func TestLoadSchemaFromFilePreservesTypeValueNumbers(t *testing.T) {
 		}
 	}`), 0o600))
 
-	schema, _, err := Load(path)
+	schema, _, err := NewSchema(path)
 
 	assert.NoError(err)
 	assert.Equal(
@@ -222,7 +229,7 @@ func TestLoadSchemaFromFilePreservesTypeValueNumbers(t *testing.T) {
 	)
 }
 
-func TestLoadSchemaFromFileRejectsTrailingJSONValue(t *testing.T) {
+func TestNewSchemaFromFileRejectsTrailingJSONValue(t *testing.T) {
 	assert := require.New(t)
 	path := filepath.Join(t.TempDir(), "schema.json")
 	assert.NoError(os.WriteFile(path, []byte(`{
@@ -231,13 +238,13 @@ func TestLoadSchemaFromFileRejectsTrailingJSONValue(t *testing.T) {
 		"classes": {"base_event": {"name": "base_event", "uid": 0}}
 	} {}`), 0o600))
 
-	schema, _, err := Load(path)
+	schema, _, err := NewSchema(path)
 
 	assert.Nil(schema)
 	assert.ErrorContains(err, "failed to decode schema file")
 }
 
-func TestLoadSchemaFromFileRejectsNonArrayTypeValues(t *testing.T) {
+func TestNewSchemaFromFileRejectsNonArrayTypeValues(t *testing.T) {
 	assert := require.New(t)
 	path := filepath.Join(t.TempDir(), "schema.json")
 	assert.NoError(os.WriteFile(path, []byte(`{
@@ -249,7 +256,7 @@ func TestLoadSchemaFromFileRejectsNonArrayTypeValues(t *testing.T) {
 		}
 	}`), 0o600))
 
-	schema, _, err := Load(path)
+	schema, _, err := NewSchema(path)
 
 	assert.Nil(schema)
 	assert.ErrorContains(err, "failed to decode schema file")
@@ -282,7 +289,7 @@ func checkSchema(assert *require.Assertions, schema *Schema) {
 	)
 	assert.Equal(jsonish.Map{}, emptyEvent, "empty event should remain empty after error")
 
-	pipeline, err = schema.NewPipeline()
+	pipeline, err = newPipelineForSchema(schema)
 	assert.EqualError(err, "at least one event processing action is required")
 	assert.Nil(pipeline)
 
@@ -1267,7 +1274,7 @@ func TestPipelineZeroValueCannotProcessEvent(t *testing.T) {
 	var pipeline Pipeline
 	result, err := pipeline.ProcessEvent(jsonish.Map{})
 
-	require.EqualError(t, err, "event processor pipeline is not initialized; create it with Schema.NewPipeline")
+	require.EqualError(t, err, "event processor pipeline is not initialized; create it with eventpipeline.NewPipeline")
 	require.Empty(t, result)
 }
 
@@ -1276,7 +1283,7 @@ func TestPipelineNilReceiverCannotProcessEvent(t *testing.T) {
 
 	result, err := pipeline.ProcessEvent(jsonish.Map{})
 
-	require.EqualError(t, err, "event processor pipeline is not initialized; create it with Schema.NewPipeline")
+	require.EqualError(t, err, "event processor pipeline is not initialized; create it with eventpipeline.NewPipeline")
 	require.Empty(t, result.Validation().Findings)
 }
 

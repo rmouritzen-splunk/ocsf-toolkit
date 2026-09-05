@@ -1,35 +1,34 @@
-package validationcache
+package schema
 
 import (
 	"encoding/json"
 	"strconv"
 	"testing"
 
-	"github.com/ocsf/ocsf-toolkit/internal/schema"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBuildCompilesAndResolvesSchemaConstraints(t *testing.T) {
 	regex := `^[a-z]+$`
 	maxLen := int64(12)
-	compiled := &schema.Compiled{
+	compiled := &Compiled{
 		Version: "1.2.3",
-		Dictionary: &schema.DictionaryDefinition{Types: &schema.TypesDefinition{
-			Attributes: map[string]*schema.TypeDefinition{
+		Dictionary: &DictionaryDefinition{Types: &TypesDefinition{
+			Attributes: map[string]*TypeDefinition{
 				"integer_t": {Range: []int64{0, 100}},
 				"level_t": {
-					CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "integer_t"},
+					CommonAttributeDefinition: CommonAttributeDefinition{Type: "integer_t"},
 					Values:                    []any{json.Number("1"), json.Number("2")},
 				},
-				"alias_level_t": {CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "level_t"}},
+				"alias_level_t": {CommonAttributeDefinition: CommonAttributeDefinition{Type: "level_t"}},
 				"string_t":      {RegEx: &regex, MaxLen: &maxLen},
-				"name_t":        {CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "string_t"}},
-				"alias_t":       {CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "name_t"}},
+				"name_t":        {CommonAttributeDefinition: CommonAttributeDefinition{Type: "string_t"}},
+				"alias_t":       {CommonAttributeDefinition: CommonAttributeDefinition{Type: "name_t"}},
 			},
 		}},
 	}
 
-	cache, err := Build(compiled)
+	cache, err := buildValidationCache(compiled)
 	require.NoError(t, err)
 	require.True(t, cache.VersionOK)
 
@@ -76,18 +75,18 @@ func TestBuildCompilesAndResolvesSchemaConstraints(t *testing.T) {
 func TestEngineeringInvariantBuildRejectsCyclicTypeDefinitions(t *testing.T) {
 	// Engineering invariant test: cache construction must reject cyclic type inheritance
 	// regardless of which type is used as the starting point for cycle detection.
-	compiled := &schema.Compiled{
+	compiled := &Compiled{
 		Version: "1.2.3",
-		Dictionary: &schema.DictionaryDefinition{Types: &schema.TypesDefinition{
-			Attributes: map[string]*schema.TypeDefinition{
-				"alias_t":  {CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "first_t"}},
-				"first_t":  {CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "second_t"}},
-				"second_t": {CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "first_t"}},
+		Dictionary: &DictionaryDefinition{Types: &TypesDefinition{
+			Attributes: map[string]*TypeDefinition{
+				"alias_t":  {CommonAttributeDefinition: CommonAttributeDefinition{Type: "first_t"}},
+				"first_t":  {CommonAttributeDefinition: CommonAttributeDefinition{Type: "second_t"}},
+				"second_t": {CommonAttributeDefinition: CommonAttributeDefinition{Type: "first_t"}},
 			},
 		}},
 	}
 
-	_, err := Build(compiled)
+	_, err := buildValidationCache(compiled)
 	require.ErrorContains(t, err, "type inheritance for")
 	require.ErrorContains(t, err, "contains a cycle at")
 }
@@ -98,7 +97,7 @@ func TestEngineeringInvariantBuildMemoizesTypeInheritanceResolution(t *testing.T
 	allocations := func(typeCount int) float64 {
 		compiled := compiledTypeChain(typeCount)
 		return testing.AllocsPerRun(3, func() {
-			_, err := Build(compiled)
+			_, err := buildValidationCache(compiled)
 			require.NoError(t, err)
 		})
 	}
@@ -109,60 +108,60 @@ func TestEngineeringInvariantBuildMemoizesTypeInheritanceResolution(t *testing.T
 		"doubling type inheritance depth grew allocations from %.0f to %.0f", small, large)
 }
 
-func compiledTypeChain(typeCount int) *schema.Compiled {
-	types := make(map[string]*schema.TypeDefinition, typeCount)
-	types["integer_t"] = &schema.TypeDefinition{}
+func compiledTypeChain(typeCount int) *Compiled {
+	types := make(map[string]*TypeDefinition, typeCount)
+	types["integer_t"] = &TypeDefinition{}
 	parent := "integer_t"
 	for index := 1; index < typeCount; index++ {
 		name := "alias_" + strconv.Itoa(index) + "_t"
-		types[name] = &schema.TypeDefinition{
-			CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: parent},
+		types[name] = &TypeDefinition{
+			CommonAttributeDefinition: CommonAttributeDefinition{Type: parent},
 		}
 		parent = name
 	}
-	return &schema.Compiled{
+	return &Compiled{
 		Version: "1.2.3",
-		Dictionary: &schema.DictionaryDefinition{Types: &schema.TypesDefinition{
+		Dictionary: &DictionaryDefinition{Types: &TypesDefinition{
 			Attributes: types,
 		}},
 	}
 }
 
 func TestBuildReportsTerminalUnknownPrimitiveType(t *testing.T) {
-	compiled := &schema.Compiled{
+	compiled := &Compiled{
 		Version: "1.2.3",
-		Dictionary: &schema.DictionaryDefinition{Types: &schema.TypesDefinition{
-			Attributes: map[string]*schema.TypeDefinition{
+		Dictionary: &DictionaryDefinition{Types: &TypesDefinition{
+			Attributes: map[string]*TypeDefinition{
 				"alias_t": {
-					CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "custom_t"},
+					CommonAttributeDefinition: CommonAttributeDefinition{Type: "custom_t"},
 				},
 				"custom_t": {
-					CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "missing_t"},
+					CommonAttributeDefinition: CommonAttributeDefinition{Type: "missing_t"},
 				},
 			},
 		}},
 	}
 
-	cache, err := Build(compiled)
+	cache, err := buildValidationCache(compiled)
 	require.NoError(t, err)
 	require.Equal(t, "missing_t", cache.Types["alias_t"].PrimitiveType)
 	require.Equal(t, "missing_t", cache.Types["custom_t"].PrimitiveType)
 }
 
 func TestBuildRejectsInvalidAllowedValues(t *testing.T) {
-	compiled := &schema.Compiled{
+	compiled := &Compiled{
 		Version: "1.2.3",
-		Dictionary: &schema.DictionaryDefinition{Types: &schema.TypesDefinition{
-			Attributes: map[string]*schema.TypeDefinition{
+		Dictionary: &DictionaryDefinition{Types: &TypesDefinition{
+			Attributes: map[string]*TypeDefinition{
 				"bad_t": {
-					CommonAttributeDefinition: schema.CommonAttributeDefinition{Type: "integer_t"},
+					CommonAttributeDefinition: CommonAttributeDefinition{Type: "integer_t"},
 					Values:                    []any{"not an integer"},
 				},
 			},
 		}},
 	}
 
-	_, err := Build(compiled)
+	_, err := buildValidationCache(compiled)
 	require.EqualError(t, err, `type "bad_t" allowed value at index 0 is not a signed 64-bit integer`)
 }
 
@@ -215,7 +214,7 @@ func TestInvariantValueConstraintsUseTypedEquality(t *testing.T) {
 			constraint, err := compileValueConstraint(
 				"allowed_t",
 				test.primitiveType,
-				&schema.TypeDefinition{Values: []any{test.allowed}},
+				&TypeDefinition{Values: []any{test.allowed}},
 			)
 			require.NoError(t, err)
 			for _, value := range test.equivalent {
@@ -237,7 +236,7 @@ func TestCompileValueConstraintIndexesOnlyLargerSets(t *testing.T) {
 		constraint, err := compileValueConstraint(
 			"indexed_t",
 			"integer_t",
-			&schema.TypeDefinition{Values: values},
+			&TypeDefinition{Values: values},
 		)
 		require.NoError(t, err)
 		return constraint
@@ -252,18 +251,16 @@ func TestCompileValueConstraintIndexesOnlyLargerSets(t *testing.T) {
 	require.True(t, large.ContainsInt64(valueIndexThreshold-1))
 }
 
-func TestLazyGetReusesBuiltCache(t *testing.T) {
-	compiled := &schema.Compiled{
+func TestValidationCacheReusesBuiltCache(t *testing.T) {
+	compiled := &Compiled{
 		Version: "1.2.3",
-		Dictionary: &schema.DictionaryDefinition{Types: &schema.TypesDefinition{
-			Attributes: map[string]*schema.TypeDefinition{},
+		Dictionary: &DictionaryDefinition{Types: &TypesDefinition{
+			Attributes: map[string]*TypeDefinition{},
 		}},
 	}
-	var lazy Lazy
-
-	first, err := lazy.Get(compiled)
+	first, err := compiled.ValidationCache()
 	require.NoError(t, err)
-	second, err := lazy.Get(compiled)
+	second, err := compiled.ValidationCache()
 	require.NoError(t, err)
 
 	require.Same(t, first, second)
@@ -278,7 +275,7 @@ func BenchmarkValueConstraintContainsInt64(b *testing.B) {
 		constraint, err := compileValueConstraint(
 			"benchmark_t",
 			"integer_t",
-			&schema.TypeDefinition{Values: values},
+			&TypeDefinition{Values: values},
 		)
 		require.NoError(b, err)
 		candidate := int64(size - 1)

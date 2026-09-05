@@ -55,7 +55,7 @@ Reconsider only through a deliberate public-API redesign; ordinary compatibility
 
 Status: established by the pre-1.0 public API design.
 
-Decision: keep `Schema.NewPipeline` extensible through sealed, toolkit-owned `PipelineOption` values and keep its resolved configuration private. A new processor family must own its action or mode types, finding-code types, and suppression policy rather than reuse types whose semantics belong to another family. Keep `ProcessingResult` an opaque concrete value with private value storage, adding a typed accessor for each new result family. This design reserves additive growth for the toolkit; it does not expose a third-party processor plug-in interface.
+Decision: keep `eventpipeline.NewPipeline` extensible through sealed, toolkit-owned `PipelineOption` values, including `WithSchema`, and keep its resolved configuration private. A new processor family must own its action or mode types, finding-code types, and suppression policy rather than reuse types whose semantics belong to another family. Keep `ProcessingResult` an opaque concrete value with private value storage, adding a typed accessor for each new result family. This design reserves additive growth for the toolkit; it does not expose a third-party processor plug-in interface.
 
 Rationale and authority: toolkit-owned options allow new configuration to be added without changing the `NewPipeline` signature or exposing internal processor configuration. Family-scoped types keep semantics such as `enrichment.Action`'s schema-verified removal distinct from unrelated operations. Private result storage permits additive typed accessors without exposing internal layout, requiring interface dispatch, or making callers construct a result representation that must anticipate future families.
 
@@ -68,6 +68,24 @@ Derived requirements and test implications:
 - Tests protecting this design should verify the public shape and observable allocation behavior rather than private field names or internal processor decomposition.
 
 Reconsider if callers need to register third-party processors, if additive accessors become impractical at demonstrated scale, or if benchmark evidence supports a different representation without weakening type safety or hot-loop allocation behavior.
+
+### DECISION-API-004: pipelines own schema use while schemas remain reusable
+
+Status: established by the maintainer on 2026-08-24.
+
+Decision: construct each logical schema independently with `eventpipeline.NewSchema`, then supply it to `eventpipeline.NewPipeline` through `WithSchema`. A `Schema` owns reusable compiled-schema data; a `Pipeline` owns processor configuration and how it uses its supplied schema. `WithSchema` accepts sealed, toolkit-owned `SchemaPipelineOption` values even though no such options are currently implemented. These nested options configure the schema-to-pipeline relationship rather than changing the reusable schema itself.
+
+Rationale and authority: the earlier schema-owned pipeline construction model expressed the current one-schema implementation as an ownership restriction. Inverting that relationship makes a loaded schema reusable across pipelines and lets a future pipeline register multiple schemas without making any schema own pipeline-specific processing policy. Reserving the variadic `SchemaPipelineOption` parameter before 1.0 also preserves the exact `WithSchema` function type for SemVer 1.x callers, including callers that assign the function itself rather than invoking it directly. Potential future calls such as `WithSchema(schema, AsDefault())` and `WithSchema(schema, IgnoreExtensionVersion("aws"))` illustrate why association-level options may be needed; neither option nor its behavior is established by this decision.
+
+Derived requirements and test implications:
+
+- A constructed `Schema` must remain immutable, safe for concurrent use, and reusable by more than one pipeline; schema-derived caches remain schema-owned rather than being rebuilt for each pipeline.
+- Pipeline-specific schema selection, dispatch, fallback, and compatibility policy belong to pipeline construction rather than `NewSchema` options or mutable schema state.
+- `SchemaPipelineOption` must remain distinct from options that configure schema loading and from top-level `PipelineOption` values. It remains sealed unless third-party extension becomes an explicit requirement.
+- The current implementation still selects exactly one schema and repeated `WithSchema` calls use last-option-wins semantics. Multiple registration, ambiguity detection, default selection, and extension-version policy require separate product decisions and implementation.
+- Public API tests should protect the `func(*Schema, ...SchemaPipelineOption) PipelineOption` shape even while the nested option set is empty.
+
+Reconsider the nested option name before 1.0 if implementing the first association-level option shows that it does not describe the abstraction. Reconsider the sealed boundary only if callers need to define schema-to-pipeline behavior outside the toolkit.
 
 ### DECISION-DATA-001: event-processing APIs use `jsonish.Map`
 

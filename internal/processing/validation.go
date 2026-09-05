@@ -14,7 +14,6 @@ import (
 	"github.com/ocsf/ocsf-toolkit/internal/observablepath"
 	"github.com/ocsf/ocsf-toolkit/internal/schema"
 	"github.com/ocsf/ocsf-toolkit/internal/semver"
-	"github.com/ocsf/ocsf-toolkit/internal/validationcache"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 	"github.com/ocsf/ocsf-toolkit/pathstyle"
 	"github.com/ocsf/ocsf-toolkit/validation"
@@ -22,7 +21,7 @@ import (
 
 type validationProcessor struct {
 	config ValidationConfig
-	cache  *validationcache.Cache
+	cache  *schema.ValidationCache
 	policy validationPolicy
 }
 
@@ -1237,7 +1236,7 @@ func (p *validationProcessor) validateTypeValues(
 	path *eventpath.Path,
 	attributeName string,
 	attributeTypeName string,
-	typeValidation *validationcache.TypeValidation,
+	typeValidation *schema.TypeValidation,
 ) {
 	if !typeValidation.HasValue {
 		return
@@ -1273,7 +1272,7 @@ func (p *validationProcessor) validateNumberRange(
 	path *eventpath.Path,
 	attributeName string,
 	attributeTypeName string,
-	typeValidation *validationcache.TypeValidation,
+	typeValidation *schema.TypeValidation,
 ) {
 	if !typeValidation.HasRange {
 		return
@@ -1326,7 +1325,7 @@ func (p *validationProcessor) validateFloatRange(
 	path *eventpath.Path,
 	attributeName string,
 	attributeTypeName string,
-	typeValidation *validationcache.TypeValidation,
+	typeValidation *schema.TypeValidation,
 ) {
 	if !typeValidation.HasRange {
 		return
@@ -1381,7 +1380,7 @@ func (p *validationProcessor) validateStringMaxLen(
 	path *eventpath.Path,
 	attributeName string,
 	attributeTypeName string,
-	typeValidation *validationcache.TypeValidation,
+	typeValidation *schema.TypeValidation,
 ) {
 	if !typeValidation.HasMaxLen {
 		return
@@ -1423,7 +1422,7 @@ func (p *validationProcessor) validateStringRegex(
 	path *eventpath.Path,
 	attributeName string,
 	attributeTypeName string,
-	typeValidation *validationcache.TypeValidation,
+	typeValidation *schema.TypeValidation,
 ) {
 	if !typeValidation.HasRegex {
 		return

@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import (
 	"github.com/ocsf/ocsf-toolkit/enrichment"
@@ -7,10 +7,18 @@ import (
 	"github.com/ocsf/ocsf-toolkit/validation"
 )
 
-// PipelineOption configures a Pipeline created by Schema.NewPipeline.
+// PipelineOption configures a Pipeline created by NewPipeline.
 type PipelineOption interface {
 	applyPipeline(*pipelineConfig)
 }
+
+// SchemaPipelineOption configures how a pipeline uses a schema supplied through WithSchema. Schema-pipeline options
+// are reserved for future use.
+type SchemaPipelineOption interface {
+	applySchemaPipeline(*schemaPipelineConfig)
+}
+
+type schemaPipelineConfig struct{}
 
 type pipelineOptionFunc func(*pipelineConfig)
 
@@ -160,8 +168,11 @@ func validationPolicyOption(
 }
 
 // pipelineConfig is the fully resolved public-facing pipeline configuration, folded into a processing.PipelineConfig
-// by Schema.NewPipeline.
+// by NewPipeline.
 type pipelineConfig struct {
+	schema           *Schema
+	schemaConfigured bool
+
 	enumSiblingsAction     enrichment.Action
 	observablesAction      enrichment.Action
 	observableTypeIDs      []int64
@@ -176,7 +187,7 @@ type pipelineConfig struct {
 // WithEnumSiblings controls the action taken on supported scalar and array enum siblings: enrichment.Add adds them,
 // enrichment.Remove or enrichment.ForceRemove removes them, and enrichment.None (the default) leaves them alone. When
 // WithEnumSiblings is used more than once for a pipeline, the last option wins. Regardless of the order options are
-// passed to Schema.NewPipeline, enum-sibling work always runs before observable work.
+// passed to NewPipeline, enum-sibling work always runs before observable work.
 func WithEnumSiblings(action enrichment.Action) PipelineOption {
 	return pipelineOptionFunc(func(config *pipelineConfig) {
 		config.enumSiblingsAction = action
@@ -189,7 +200,7 @@ func WithEnumSiblings(action enrichment.Action) PipelineOption {
 // all observable types. The option copies the supplied IDs; pipeline construction deduplicates them and reports every
 // ID absent from the schema. Supplying IDs when action is not enrichment.Add is invalid. When WithObservables is used
 // more than once for a pipeline, the last option wins. Regardless of the order options are passed to
-// Schema.NewPipeline, observable work always runs after enum-sibling work; see WithEnumSiblings.
+// NewPipeline, observable work always runs after enum-sibling work; see WithEnumSiblings.
 func WithObservables(action enrichment.Action, observableTypeIDs ...int64) PipelineOption {
 	ids := append([]int64(nil), observableTypeIDs...)
 	return pipelineOptionFunc(func(config *pipelineConfig) {

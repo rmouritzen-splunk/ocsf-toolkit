@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ocsf/ocsf-toolkit/internal/schema"
 	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 	"github.com/ocsf/ocsf-toolkit/pathstyle"
@@ -42,7 +43,7 @@ func TestRecordEnumSiblingRetentionRejectsUnexpectedReason(t *testing.T) {
 func TestEnrichmentRemovalSafelyRemovesScalarAndArrayEnumSiblings(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	schema.compiled.Classes[int64(1)].Attributes["mode_id"].Enum["99"] = &enumDefinition{Caption: "Other"}
+	schema.Classes[int64(1)].Attributes["mode_id"].Enum["99"] = &enumDefinition{Caption: "Other"}
 
 	event := validValidationEvent()
 	event["class_name"] = "Alpha"
@@ -89,8 +90,8 @@ func TestEnrichmentRemovalRetainsStringEnumSibling(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
 	siblingName := "state_name"
-	schema.compiled.Classes[int64(1)].Attributes["state"].Sibling = &siblingName
-	schema.compiled.Classes[int64(1)].Attributes[siblingName] = &itemAttributeDefinition{
+	schema.Classes[int64(1)].Attributes["state"].Sibling = &siblingName
+	schema.Classes[int64(1)].Attributes[siblingName] = &itemAttributeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{Type: "string_t"},
 	}
 	event := validValidationEvent()
@@ -127,7 +128,7 @@ func TestEnrichmentSafeRemovalRetainsMismatchedIntegralEnumArraySibling(t *testi
 func TestEnrichmentForceRemovalRetainsIntegralEnumArraySiblingContainingOther(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	schema.compiled.Classes[int64(1)].Attributes["status_ids"].Enum["99"] = &enumDefinition{Caption: "Other"}
+	schema.Classes[int64(1)].Attributes["status_ids"].Enum["99"] = &enumDefinition{Caption: "Other"}
 	event := validValidationEvent()
 	event["status_ids"] = []any{json.Number("1"), json.Number("99")}
 	event["statuses"] = []any{"Open", "Source-specific"}
@@ -145,7 +146,7 @@ func TestEnrichmentForceRemovalRetainsIntegralEnumArraySiblingContainingOther(t 
 func TestEnrichmentSafeRemovalRetainsIntegralEnumArraySiblingContainingOther(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	schema.compiled.Classes[int64(1)].Attributes["status_ids"].Enum["99"] = &enumDefinition{Caption: "Other"}
+	schema.Classes[int64(1)].Attributes["status_ids"].Enum["99"] = &enumDefinition{Caption: "Other"}
 	event := validValidationEvent()
 	event["status_ids"] = []any{json.Number("1"), json.Number("99")}
 	event["statuses"] = []any{"Open", "Source-specific"}
@@ -199,7 +200,7 @@ func TestEnrichmentSafeRemovalRetainsEnumArraysWithDifferentLengths(t *testing.T
 func TestEnrichmentSafeRemovalRetainsStringEnumArraySibling(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	statusIDs := schema.compiled.Classes[int64(1)].Attributes["status_ids"]
+	statusIDs := schema.Classes[int64(1)].Attributes["status_ids"]
 	statusIDs.Type = "string_t"
 	statusIDs.Enum = map[string]*enumDefinition{"99": {Caption: "Ninety-nine"}}
 	event := validValidationEvent()
@@ -316,14 +317,14 @@ func TestEnrichmentRemovalIssueUsesIndexedNestedPath(t *testing.T) {
 	schema := makeValidationTestSchema(assert)
 	addObservableArrayTestAttributes(schema)
 	modeSibling := "mode"
-	schema.compiled.Objects["ball"].Attributes["mode_id"] = &itemAttributeDefinition{
+	schema.Objects["ball"].Attributes["mode_id"] = &itemAttributeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{
 			Type:    "integer_t",
 			Sibling: &modeSibling,
 			Enum:    map[string]*enumDefinition{"1": {Caption: "Known"}},
 		},
 	}
-	schema.compiled.Objects["ball"].Attributes["mode"] = &itemAttributeDefinition{
+	schema.Objects["ball"].Attributes["mode"] = &itemAttributeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{Type: "string_t"},
 	}
 	event := validValidationEvent()
@@ -375,7 +376,7 @@ func TestEnrichmentRemovalForceRetainsEnumID99Sibling(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			assert := require.New(t)
 			schema := makeValidationTestSchema(assert)
-			schema.compiled.Classes[int64(1)].Attributes["mode_id"].Enum["99"] = &enumDefinition{Caption: "Other"}
+			schema.Classes[int64(1)].Attributes["mode_id"].Enum["99"] = &enumDefinition{Caption: "Other"}
 			event := validValidationEvent()
 			event["mode_id"] = json.Number("99")
 			event["mode"] = test.sibling
@@ -1318,17 +1319,17 @@ func TestEnrichmentRemovalForceRemovesEnumSiblingsBeforeObservablesAreAnalyzed(t
 	assert.Equal("observables[0].name", issues[0].Details["attribute_path"])
 }
 
-func addObservableArrayTestAttributes(schema *PipelineFactory) {
+func addObservableArrayTestAttributes(compiled *schema.Compiled) {
 	trueValue := true
 	ballType := "ball"
-	schema.compiled.Classes[int64(1)].Attributes["balls"] = &itemAttributeDefinition{
+	compiled.Classes[int64(1)].Attributes["balls"] = &itemAttributeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{
 			Type:       "object_t",
 			ObjectType: &ballType,
 			IsArray:    &trueValue,
 		},
 	}
-	schema.compiled.Objects["ball"].Attributes["children"] = &itemAttributeDefinition{
+	compiled.Objects["ball"].Attributes["children"] = &itemAttributeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{
 			Type:       "object_t",
 			ObjectType: &ballType,

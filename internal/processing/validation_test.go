@@ -13,15 +13,15 @@ import (
 
 // TestValidationSkipsTypesDerivedFromJSONType exercises an attribute whose type derives from json_t (rather than
 // being literally named "json_t") to confirm validation classifies it as json_t via the same schema-derivation-aware
-// PrimitiveType the validationcache already computes for every other primitive kind, not via a separate check tied
-// to the attribute's own unresolved type name.
+// PrimitiveType the schema validation cache already computes for every other primitive kind, not via a separate
+// check tied to the attribute's own unresolved type name.
 func TestValidationSkipsTypesDerivedFromJSONType(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	schema.compiled.Dictionary.Types.Attributes["custom_json_t"] = &typeDefinition{
+	schema.Dictionary.Types.Attributes["custom_json_t"] = &typeDefinition{
 		CommonAttributeDefinition: commonAttributeDefinition{Type: "json_t"},
 	}
-	schema.compiled.Classes[int64(1)].Attributes["count"].Type = "custom_json_t"
+	schema.Classes[int64(1)].Attributes["count"].Type = "custom_json_t"
 
 	event := validValidationEvent()
 	event["count"] = jsonish.Map{"key": "value"}
@@ -95,8 +95,7 @@ func TestEngineeringInvariantIgnoredEnumSiblingTargetRetainsOrdinaryEnumValidati
 		"issue_at_init_schema_enum_sibling_target_is_enum",
 		compiled.InitializationIssues()[0].Code.String(),
 	)
-	factory := NewPipelineFactory(compiled)
-	pipeline := mustNewEventProcessorPipeline(require.New(t), factory, NewValidation())
+	pipeline := mustNewEventProcessorPipeline(require.New(t), compiled, NewValidation())
 
 	result, err := pipeline.ProcessEvent(jsonish.Map{
 		"class_uid": json.Number("1"),

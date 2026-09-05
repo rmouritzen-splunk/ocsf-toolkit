@@ -1,11 +1,11 @@
-package eventschema_test
+package eventpipeline_test
 
 import (
 	"encoding/json"
 	"testing"
 
 	"github.com/ocsf/ocsf-toolkit/enrichment"
-	"github.com/ocsf/ocsf-toolkit/eventschema"
+	"github.com/ocsf/ocsf-toolkit/eventpipeline"
 	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 	"github.com/ocsf/ocsf-toolkit/validation"
@@ -14,13 +14,14 @@ import (
 
 // Invariant test: a class_uid that is not exactly integral must not resolve a class or permit event mutation.
 func TestInvariantNonIntegralClassUIDCannotResolveOrMutateEvent(t *testing.T) {
-	schema, initializationIssues, err := eventschema.Load("../test/schema_v1.9.0.json")
+	schema, initializationIssues, err := eventpipeline.NewSchema("../test/ocsf-schema-v1.9.0.json")
 	require.NoError(t, err)
 	require.Empty(t, initializationIssues)
-	pipeline, err := schema.NewPipeline(
-		eventschema.WithEnumSiblings(enrichment.Add),
-		eventschema.WithObservables(enrichment.Add),
-		eventschema.WithValidation(),
+	pipeline, err := eventpipeline.NewPipeline(
+		eventpipeline.WithSchema(schema),
+		eventpipeline.WithEnumSiblings(enrichment.Add),
+		eventpipeline.WithObservables(enrichment.Add),
+		eventpipeline.WithValidation(),
 	)
 	require.NoError(t, err)
 	event := jsonish.Map{
@@ -46,12 +47,13 @@ func TestInvariantNonIntegralClassUIDCannotResolveOrMutateEvent(t *testing.T) {
 // Invariant test: profile activation applies independently to each enum and sibling attribute, and pair-specific
 // processing occurs only while both attributes are active.
 func TestInvariantEnumSiblingProfilesActivateEachAttributeIndependently(t *testing.T) {
-	loaded, initializationIssues, err := eventschema.Load("testdata/enum_sibling_profiles.json")
+	loaded, initializationIssues, err := eventpipeline.NewSchema("testdata/enum_sibling_profiles.json")
 	require.NoError(t, err)
 	require.Empty(t, initializationIssues)
-	pipeline, err := loaded.NewPipeline(
-		eventschema.WithEnumSiblings(enrichment.Add),
-		eventschema.WithValidation(),
+	pipeline, err := eventpipeline.NewPipeline(
+		eventpipeline.WithSchema(loaded),
+		eventpipeline.WithEnumSiblings(enrichment.Add),
+		eventpipeline.WithValidation(),
 	)
 	require.NoError(t, err)
 

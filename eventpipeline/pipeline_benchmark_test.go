@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 
 	"github.com/ocsf/ocsf-toolkit/enrichment"
 	"github.com/ocsf/ocsf-toolkit/internal/observablepath"
-	internalversion "github.com/ocsf/ocsf-toolkit/internal/semver"
+	"github.com/ocsf/ocsf-toolkit/internal/semver"
 	"github.com/ocsf/ocsf-toolkit/issue"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 	"github.com/ocsf/ocsf-toolkit/validation"
@@ -579,7 +579,7 @@ func BenchmarkProcessEventScalarConstraints(b *testing.B) {
 func BenchmarkParseVersionRepeated(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, ok := internalversion.Parse("1.7.0-custom.1"); !ok {
+		if _, ok := semver.Parse("1.7.0-custom.1"); !ok {
 			b.Fatal("version was not parsed")
 		}
 	}
@@ -593,7 +593,7 @@ func BenchmarkParseVersionRotating(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; b.Loop(); index++ {
-		if _, ok := internalversion.Parse(versions[index%len(versions)]); !ok {
+		if _, ok := semver.Parse(versions[index%len(versions)]); !ok {
 			b.Fatal("version was not parsed")
 		}
 	}
@@ -642,7 +642,7 @@ func BenchmarkProcessEventConstraintPath(b *testing.B) {
 func BenchmarkLoadSchema(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		schema, _, err := Load(testSchemaFilePath)
+		schema, _, err := NewSchema(testSchemaFilePath)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -658,7 +658,7 @@ func BenchmarkLoadSchemaFromReader(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		schema, _, err := LoadReader(bytes.NewReader(data))
+		schema, _, err := NewSchemaFromReader(bytes.NewReader(data))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -674,7 +674,7 @@ func BenchmarkLoadSchemaFromBytes(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		schema, _, err := LoadBytes(data)
+		schema, _, err := NewSchemaFromBytes(data)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -685,11 +685,11 @@ func BenchmarkLoadSchemaFromBytes(b *testing.B) {
 func BenchmarkLoadSchemaWithValidationPipeline(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		schema, _, err := Load(testSchemaFilePath)
+		schema, _, err := NewSchema(testSchemaFilePath)
 		if err != nil {
 			b.Fatal(err)
 		}
-		pipeline, err := schema.NewPipeline(WithValidation())
+		pipeline, err := newPipelineForSchema(schema, WithValidation())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -710,7 +710,7 @@ func BenchmarkSchemaRetained(b *testing.B) {
 		var before runtime.MemStats
 		runtime.ReadMemStats(&before)
 
-		schema, _, err := LoadBytes(data)
+		schema, _, err := NewSchemaFromBytes(data)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -729,7 +729,7 @@ func BenchmarkValidationMetadataRetained(b *testing.B) {
 	var retainedBytes int64
 	b.ReportAllocs()
 	for b.Loop() {
-		schema, _, err := Load(testSchemaFilePath)
+		schema, _, err := NewSchema(testSchemaFilePath)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -737,7 +737,7 @@ func BenchmarkValidationMetadataRetained(b *testing.B) {
 		var before runtime.MemStats
 		runtime.ReadMemStats(&before)
 
-		pipeline, err := schema.NewPipeline(WithValidation())
+		pipeline, err := newPipelineForSchema(schema, WithValidation())
 		if err != nil {
 			b.Fatal(err)
 		}

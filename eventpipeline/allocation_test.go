@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import (
 	"encoding/json"

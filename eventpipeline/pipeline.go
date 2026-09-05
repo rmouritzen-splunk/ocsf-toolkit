@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import (
 	"encoding/json"
@@ -11,9 +11,12 @@ import (
 	"github.com/ocsf/ocsf-toolkit/pathstyle"
 )
 
-var errUninitializedSchema = errors.New("schema is not initialized; create it with eventschema.Load")
+var (
+	errSchemaNotConfigured = errors.New("pipeline schema is not configured; use eventpipeline.WithSchema")
+	errUninitializedSchema = errors.New("schema is not initialized; create it with eventpipeline.NewSchema")
+)
 
-// Pipeline processes OCSF events in place. Pipeline values must be created with Schema.NewPipeline and are safe for
+// Pipeline processes OCSF events in place. Pipeline values must be created with NewPipeline and are safe for
 // concurrent use when each call receives a distinct event map.
 type Pipeline struct {
 	state *processing.Pipeline
@@ -109,9 +112,26 @@ func (p *Pipeline) ProcessEvent(event jsonish.Map) (ProcessingResult, error) {
 	}}, err
 }
 
-// NewPipeline builds a reusable pipeline from the requested options. Validation runs after mutating processors
-// regardless of the supplied option order.
-func (s *Schema) NewPipeline(options ...PipelineOption) (*Pipeline, error) {
+// WithSchema configures the schema used by a pipeline. Schema-pipeline options are reserved for future use. When
+// WithSchema is used more than once, the last option wins. The Schema must have been created by one of the NewSchema
+// functions.
+func WithSchema(schema *Schema, options ...SchemaPipelineOption) PipelineOption {
+	config := schemaPipelineConfig{}
+	for _, option := range options {
+		if option != nil {
+			option.applySchemaPipeline(&config)
+		}
+	}
+
+	return pipelineOptionFunc(func(config *pipelineConfig) {
+		config.schema = schema
+		config.schemaConfigured = true
+	})
+}
+
+// NewPipeline builds a reusable pipeline from the requested options. Exactly one schema must be configured with
+// WithSchema. Validation runs after mutating processors regardless of the supplied option order.
+func NewPipeline(options ...PipelineOption) (*Pipeline, error) {
 	config := pipelineConfig{
 		enumSiblingsAction: enrichment.None,
 		observablesAction:  enrichment.None,
@@ -153,13 +173,19 @@ func (s *Schema) NewPipeline(options ...PipelineOption) (*Pipeline, error) {
 		}
 	}
 
-	if s == nil || s.pipelineFactory == nil {
+	if !config.schemaConfigured {
+		if err := internalConfig.Validate(); err != nil {
+			return nil, err
+		}
+		return nil, errSchemaNotConfigured
+	}
+	if config.schema == nil || config.schema.compiled == nil {
 		if err := internalConfig.Validate(); err != nil {
 			return nil, err
 		}
 		return nil, errUninitializedSchema
 	}
-	pipeline, err := s.pipelineFactory.NewPipeline(internalConfig)
+	pipeline, err := processing.NewPipeline(config.schema.compiled, internalConfig)
 	if err != nil {
 		return nil, err
 	}

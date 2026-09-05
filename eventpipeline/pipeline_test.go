@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import (
 	"encoding/json"
@@ -88,9 +88,9 @@ func TestProcessingResultJSONMarshalPreservesStableShape(t *testing.T) {
 	}`, string(encoded))
 }
 
-func TestSchemaUsesInternalProcessingSchemaDirectly(t *testing.T) {
-	schema := &Schema{}
-	require.IsType(t, (*processing.PipelineFactory)(nil), schema.pipelineFactory)
+func TestSchemaRetainsCompiledSchemaDirectly(t *testing.T) {
+	loaded := &Schema{}
+	require.IsType(t, (*schema.Compiled)(nil), loaded.compiled)
 }
 
 func TestNewPipelineRejectsInvalidConfigurations(t *testing.T) {
@@ -196,7 +196,7 @@ func TestNewPipelineRejectsInvalidConfigurations(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pipeline, err := (&Schema{}).NewPipeline(test.options...)
+			pipeline, err := newPipelineForSchema(&Schema{}, test.options...)
 
 			require.EqualError(t, err, test.wantErr)
 			require.Nil(t, pipeline)
@@ -416,7 +416,7 @@ func TestNewPipelineValidatesSelectedObservableTypeIDs(t *testing.T) {
 	assert := require.New(t)
 	schema := makeTestSchema(assert)
 
-	pipeline, err := schema.NewPipeline(
+	pipeline, err := newPipelineForSchema(schema,
 		WithEnumSiblings(enrichment.None),
 		WithObservables(enrichment.Add, 3000, 1000, -1, 3000),
 	)
@@ -432,7 +432,7 @@ func TestWithObservablesCopiesIDsAndLastOptionWins(t *testing.T) {
 	selection := WithObservables(enrichment.Add, selected...)
 	selected[0] = 3000
 
-	pipeline, err := schema.NewPipeline(
+	pipeline, err := newPipelineForSchema(schema,
 		WithObservables(enrichment.Add, 3000),
 		selection,
 	)
@@ -446,14 +446,41 @@ func TestWithObservablesCopiesIDsAndLastOptionWins(t *testing.T) {
 
 func TestSchemaZeroValueCannotBuildPipeline(t *testing.T) {
 	var schema Schema
-	pipeline, err := schema.NewPipeline(WithValidation())
+	pipeline, err := newPipelineForSchema(&schema, WithValidation())
 
 	require.ErrorIs(t, err, errUninitializedSchema)
 	require.Nil(t, pipeline)
 }
 
+func TestNewPipelineRequiresSchema(t *testing.T) {
+	pipeline, err := NewPipeline(WithValidation())
+
+	require.ErrorIs(t, err, errSchemaNotConfigured)
+	require.Nil(t, pipeline)
+}
+
+func TestWithSchemaLastOptionWins(t *testing.T) {
+	valid := makeValidationTestSchema(require.New(t))
+
+	pipeline, err := NewPipeline(
+		WithSchema(&Schema{}),
+		WithSchema(valid),
+		WithValidation(),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, pipeline)
+
+	pipeline, err = NewPipeline(
+		WithSchema(valid),
+		WithSchema(&Schema{}),
+		WithValidation(),
+	)
+	require.ErrorIs(t, err, errUninitializedSchema)
+	require.Nil(t, pipeline)
+}
+
 func TestNewPipelineReportsAllConfigurationProblems(t *testing.T) {
-	pipeline, err := newSchema(&schema.Compiled{}).NewPipeline(
+	pipeline, err := newPipelineForSchema(newSchema(&schema.Compiled{}),
 		WithObservables(enrichment.None, 1000),
 		WithEnrichmentObservablePathNotation(pathstyle.ArrayIndexed),
 		WithSuppressIssues(issue.IssueCode(255)),
@@ -470,7 +497,7 @@ func TestNewPipelineReportsAllConfigurationProblems(t *testing.T) {
 }
 
 func TestNewPipelineAllowsDifferentEnumSiblingsAndObservablesActions(t *testing.T) {
-	pipeline, err := newSchema(&schema.Compiled{}).NewPipeline(
+	pipeline, err := newPipelineForSchema(newSchema(&schema.Compiled{}),
 		WithEnumSiblings(enrichment.Remove),
 		WithObservables(enrichment.Add),
 	)
@@ -714,7 +741,7 @@ func TestPipelineConstructionIsConcurrent(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			<-start
-			_, err := schema.NewPipeline(
+			_, err := newPipelineForSchema(schema,
 				WithEnumSiblings(enrichment.Add),
 				WithObservables(enrichment.Add),
 				WithValidation(),
@@ -774,7 +801,7 @@ func TestNewPipelineRejectsInvalidAllowedValues(t *testing.T) {
 			schema := makeValidationTestSchema(assert)
 			schema.compiledForTest().Dictionary.Types.Attributes[test.typeName] = test.typeDef
 
-			pipeline, err := schema.NewPipeline(WithValidation())
+			pipeline, err := newPipelineForSchema(schema, WithValidation())
 
 			assert.Nil(pipeline)
 			assert.EqualError(err, test.wantError)

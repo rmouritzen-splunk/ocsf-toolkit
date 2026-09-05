@@ -7,29 +7,8 @@ import (
 	"github.com/ocsf/ocsf-toolkit/internal/eventvalue"
 	"github.com/ocsf/ocsf-toolkit/internal/observable"
 	"github.com/ocsf/ocsf-toolkit/internal/schema"
-	"github.com/ocsf/ocsf-toolkit/internal/validationcache"
 	"github.com/ocsf/ocsf-toolkit/jsonish"
 )
-
-// PipelineFactory owns immutable compiled schema data and lazily constructed processing caches used by the pipelines
-// it creates.
-type PipelineFactory struct {
-	compiled   *schema.Compiled
-	validation validationcache.Lazy
-}
-
-// NewPipelineFactory creates a pipeline factory for a compiled schema.
-func NewPipelineFactory(compiled *schema.Compiled) *PipelineFactory {
-	return &PipelineFactory{compiled: compiled}
-}
-
-// Compiled returns the compiled schema owned by this pipeline factory.
-func (f *PipelineFactory) Compiled() *schema.Compiled {
-	if f == nil {
-		return nil
-	}
-	return f.compiled
-}
 
 // Pipeline is the concrete internal event-processing engine.
 type Pipeline struct {
@@ -45,7 +24,7 @@ type Pipeline struct {
 // type's union, in place of a separate tag field. A concrete union here, rather than an interface field, measurably
 // avoids one heap allocation per ProcessEvent call: an interface-based version of this type (same methods, one
 // mutationHooks interface field instead of three concrete pointer fields) adds exactly 1 alloc/640 B per op to
-// every mutation-touching benchmark (confirmed via `go test ./eventschema/... -bench
+// every mutation-touching benchmark (confirmed via `go test ./eventpipeline/... -bench
 // BenchmarkProcessEventEnrichment -benchmem`: 0 B/op here vs 640 B/op through an interface). This is not because
 // these methods inline into their caller — escape analysis (`go build -gcflags="-m -m"`) shows most of them do not,
 // exceeding the inlining cost budget — the concrete union still avoids the allocation an interface forces
@@ -196,19 +175,19 @@ func (d *mutationDispatcher) onEventDone(c *processContext, event jsonish.Map) e
 // Observable safe-removal analyzes the whole event once. Enum-sibling work occurs during the attribute walk, so an
 // observables-only safe-removal dispatcher must defer analysis until class completion whenever another dispatcher
 // handles enum siblings. Force-removing observables never analyzes sibling data and does not need this deferral.
-func (f *PipelineFactory) NewPipeline(config PipelineConfig) (*Pipeline, error) {
+func NewPipeline(compiled *schema.Compiled, config PipelineConfig) (*Pipeline, error) {
 	compiledValidationPolicy, err := config.validate()
 	if err != nil {
 		return nil, err
 	}
-	if f == nil || f.compiled == nil {
+	if compiled == nil {
 		return nil, errUninitializedSchema
 	}
-	f.compiled.EnsureTraversalCache()
+	compiled.EnsureTraversalCache()
 
-	var validationCache *validationcache.Cache
+	var validationCache *schema.ValidationCache
 	if config.ValidationEnabled {
-		cache, err := f.validation.Get(f.compiled)
+		cache, err := compiled.ValidationCache()
 		if err != nil {
 			return nil, err
 		}
@@ -221,7 +200,7 @@ func (f *PipelineFactory) NewPipeline(config PipelineConfig) (*Pipeline, error) 
 	// action" gate in config.go; the two conditions are not the same predicate (observable removal, for instance,
 	// counts as an action there but does not require the event walk here).
 	pipeline := &Pipeline{
-		compiled: f.compiled,
+		compiled: compiled,
 		requiresEventWalk: config.EnumSiblingsAction != enrichment.None ||
 			config.ObservablesAction == enrichment.Add ||
 			config.ValidationEnabled,
@@ -235,7 +214,7 @@ func (f *PipelineFactory) NewPipeline(config PipelineConfig) (*Pipeline, error) 
 	if config.EnumSiblingsAction == config.ObservablesAction {
 		if config.EnumSiblingsAction != enrichment.None {
 			dispatcher, err := newMutationDispatcher(
-				f.compiled,
+				compiled,
 				config.EnumSiblingsAction,
 				true,
 				true,
@@ -252,7 +231,7 @@ func (f *PipelineFactory) NewPipeline(config PipelineConfig) (*Pipeline, error) 
 		var enumDispatcher, observablesDispatcher *mutationDispatcher
 		if config.EnumSiblingsAction != enrichment.None {
 			dispatcher, err := newMutationDispatcher(
-				f.compiled,
+				compiled,
 				config.EnumSiblingsAction,
 				true,
 				false,
@@ -267,7 +246,7 @@ func (f *PipelineFactory) NewPipeline(config PipelineConfig) (*Pipeline, error) 
 		}
 		if config.ObservablesAction != enrichment.None {
 			dispatcher, err := newMutationDispatcher(
-				f.compiled,
+				compiled,
 				config.ObservablesAction,
 				false,
 				true,

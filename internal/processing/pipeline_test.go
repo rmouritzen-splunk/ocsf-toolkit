@@ -16,22 +16,22 @@ import (
 func TestPipelineInitializesSharedCachesLazily(t *testing.T) {
 	assert := require.New(t)
 	processingSchema := makeValidationTestSchema(assert)
-	assert.Nil(processingSchema.compiled.Classes[1].OrderedAttributes)
+	assert.Nil(processingSchema.Classes[1].OrderedAttributes)
 
 	enrichmentPipeline := mustNewEventProcessorPipeline(assert, processingSchema, NewEnrichment())
 	assert.Nil(enrichmentPipeline.validation)
-	for _, class := range processingSchema.compiled.Classes {
+	for _, class := range processingSchema.Classes {
 		assert.True(slices.IsSortedFunc(class.OrderedAttributes, func(left, right schema.OrderedAttribute) int {
 			return strings.Compare(left.Name, right.Name)
 		}))
-		assertOrderedAttributesResolved(assert, processingSchema.compiled, &class.ItemDefinition)
+		assertOrderedAttributesResolved(assert, processingSchema, &class.ItemDefinition)
 		assert.True(sort.StringsAreSorted(class.OrderedConstraintKeys))
 	}
-	for _, object := range processingSchema.compiled.Objects {
+	for _, object := range processingSchema.Objects {
 		assert.True(slices.IsSortedFunc(object.OrderedAttributes, func(left, right schema.OrderedAttribute) int {
 			return strings.Compare(left.Name, right.Name)
 		}))
-		assertOrderedAttributesResolved(assert, processingSchema.compiled, &object.ItemDefinition)
+		assertOrderedAttributesResolved(assert, processingSchema, &object.ItemDefinition)
 		assert.True(sort.StringsAreSorted(object.OrderedConstraintKeys))
 	}
 
@@ -44,7 +44,7 @@ func TestPipelineTraversalCacheInitializesNumericEnumsForEveryPipeline(t *testin
 	assert := require.New(t)
 
 	observablesFactory := makeValidationTestSchema(assert)
-	observablesAttribute := observablesFactory.compiled.Classes[1].Attributes["activity_id"]
+	observablesAttribute := observablesFactory.Classes[1].Attributes["activity_id"]
 	observablesDefinition := observablesAttribute.Enum["1"]
 	observablesOnly := mustNewEventProcessorPipeline(
 		assert,
@@ -55,7 +55,7 @@ func TestPipelineTraversalCacheInitializesNumericEnumsForEveryPipeline(t *testin
 	assert.Same(observablesDefinition, observablesAttribute.NumericEnumDefinition(1))
 
 	forceFactory := makeValidationTestSchema(assert)
-	forceAttribute := forceFactory.compiled.Classes[1].Attributes["activity_id"]
+	forceAttribute := forceFactory.Classes[1].Attributes["activity_id"]
 	forceDefinition := forceAttribute.Enum["1"]
 	forceRemoval := mustNewEventProcessorPipeline(
 		assert,
@@ -72,7 +72,7 @@ func TestInvariantNumericEnumLookupNormalizesEquivalentRepresentations(t *testin
 	assert := require.New(t)
 	factory := makeValidationTestSchema(assert)
 	mustNewEventProcessorPipeline(assert, factory, NewEnrichment(WithAddObservables(false)))
-	attribute := factory.compiled.Classes[1].Attributes["activity_id"]
+	attribute := factory.Classes[1].Attributes["activity_id"]
 	want := attribute.Enum["1"]
 
 	integerFirst := processContext{}
@@ -179,7 +179,7 @@ func TestPipelineCompilesClassObservableTriesOnlyWhenAddingObservables(t *testin
 	assert.NotNil(withoutObservablesAdd)
 	assert.Nil(withoutObservablesAdd.classObservableTries)
 
-	schema.compiled.Classes[1].Observables = nil
+	schema.Classes[1].Observables = nil
 	withoutDeclarations := mustNewEventProcessorPipeline(assert, schema, NewEnrichment())
 	withoutDeclarationsAdd := withoutDeclarations.mutations[0].add
 	assert.NotNil(withoutDeclarationsAdd)
@@ -189,7 +189,7 @@ func TestPipelineCompilesClassObservableTriesOnlyWhenAddingObservables(t *testin
 func TestObservableEnrichmentWithoutClassDeclarationsDoesNotAllocatePerEvent(t *testing.T) {
 	assert := require.New(t)
 	schema := makeValidationTestSchema(assert)
-	schema.compiled.Classes[1].Observables = nil
+	schema.Classes[1].Observables = nil
 	pipeline := mustNewEventProcessorPipeline(assert, schema, NewEnrichment(WithAddEnumSiblings(false)))
 	event := validValidationEvent()
 	result, err := pipeline.ProcessEvent(event)

@@ -1,4 +1,4 @@
-package eventschema
+package eventpipeline
 
 import (
 	"strconv"
@@ -24,7 +24,7 @@ import (
 const benchmarkEvidenceCount = 20
 
 func makeRealSchema(assert *require.Assertions) *Schema {
-	schema, _, err := Load(testSchemaFilePath)
+	schema, _, err := NewSchema(testSchemaFilePath)
 	assert.NoError(err)
 	return schema
 }
