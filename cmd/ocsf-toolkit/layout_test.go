@@ -130,6 +130,7 @@ func TestProcessDirectoryAcceptsEmptyInputDirectory(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--output-dir", outputDir,
 		"--validate",
+		"--summary", "-",
 	)
 
 	assert.Equal(0, exitCode, stderr)
@@ -156,6 +157,7 @@ func TestProcessDirectoryIgnoresSymlinksWithinInputTree(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--output-dir", outputDir,
 		"--validate",
+		"--summary", "-",
 	)
 
 	assert.Equal(0, exitCode, stderr)
@@ -563,7 +565,8 @@ func TestProcessRejectsSummaryInsideReservedNamespace(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--enrich",
 		"--output-dir", outputDir,
-		"--summary-json", filepath.Join(outputDir, "events", "summary.json"),
+		"--summary", filepath.Join(outputDir, "events", "summary.json"),
+		"--summary-format", "json",
 	)
 
 	assert.Equal(1, exitCode)
@@ -584,7 +587,8 @@ func TestProcessRejectsSummaryContainingReservedNamespace(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--enrich",
 		"--output-dir", outputDir,
-		"--summary-json", destination,
+		"--summary", destination,
+		"--summary-format", "json",
 	)
 
 	assert.Equal(1, exitCode)
@@ -610,27 +614,6 @@ func TestProcessRejectsSummaryInsideInputDirectory(t *testing.T) {
 
 	assert.Equal(1, exitCode)
 	assert.Contains(stderr, "conflicts with the input event directory")
-}
-
-func TestProcessRejectsSameFileForBothSummaries(t *testing.T) {
-	assert := require.New(t)
-	dir := t.TempDir()
-	schemaPath := writeTestSchema(assert, dir)
-	eventsDir := filepath.Join(dir, "events")
-	summaryPath := filepath.Join(dir, "summary")
-	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
-
-	exitCode, _, stderr := runCLI(
-		"--schema", schemaPath,
-		"--events-dir", eventsDir,
-		"--validate",
-		"--output-dir", filepath.Join(dir, "output"),
-		"--summary", summaryPath,
-		"--summary-json", summaryPath,
-	)
-
-	assert.Equal(1, exitCode)
-	assert.Contains(stderr, "is selected for both human-readable summary and JSON summary")
 }
 
 func TestPathsOverlapUsesResolvedSymlinks(t *testing.T) {

@@ -2,7 +2,9 @@
 
 Validation compares one logical OCSF event with a compiled schema and returns errors and warnings. It does not require JSON input or generic maps; it can operate on any encoding and in-memory representation that exposes the logical event operations described in [Event Processing Model](event-processing.md).
 
-This guide describes the validation areas implemented by OCSF Toolkit. Detailed parity notes with OCSF Server are maintained in [OCSF Server Validation](ocsf-server-validation.md).
+This guide describes the validation areas implemented by OCSF Toolkit.
+
+OCSF Toolkit validation is based on the [OCSF Server v2 validator](https://schema.ocsf.io/api/v2/validate) and has since evolved independently with additional and more precise checks. See [Comparison with the OCSF Server v2 validator](ocsf-server-v2-validator-comparison.md) for the important differences.
 
 ## Class And Profiles
 
@@ -79,7 +81,7 @@ The `observables` attribute must have the schema-defined array and element struc
 - a string `value` that matches a scalar at the named event path after stable scalar-to-string conversion; or
 - no `value`, in which case the name must resolve to an object.
 
-Validate observable names against both the active schema and the actual event. Support bare array traversal, `[]`, `[*]`, numeric indexes, nested arrays, and an optional root marker as described in [Enrichment Removal](enrichment-removal.md#observable-names).
+Validate observable names against both the active schema and the actual event. Support bare array traversal, `[]`, `[*]`, numeric indexes, nested arrays, and an optional root marker as described in [observable names in Enrichment Removal](enrichment-removal.md#observable-names).
 
 Validation may be configured with a preferred observable path notation. A valid name using another supported notation remains resolvable and does not become a validation error, but produces a warning identifying the preferred style. For paths without arrays, the simple, bracket, wildcard, and indexed styles have the same spelling; root-relative JSONPath remains distinct because of its `$` prefix.
 
@@ -91,7 +93,7 @@ When observable enrichment and validation run in the same operation, generated e
 
 Duplicate identity validation is an optional, potentially expensive check over the final `observables` array. `validation_observable_duplicate` defaults to ignored. When enabled, it reports each entry whose semantic identity duplicates an earlier final-array entry and identifies both indexes. If observable enrichment in the same operation also enables `issue_observable_duplicate`, the issue owns duplicate reporting and this validation is omitted to avoid duplicate work and duplicate diagnostics.
 
-Reaching the shared recursive-object traversal boundary means validation is incomplete but does not establish that the event is invalid. Report this as the top-level `issue_event_traversal_limited` processing issue described in [Event Processing](event-processing.md#recursive-objects), not as a validation warning or error.
+Reaching the shared recursive-object traversal boundary means validation is incomplete but does not establish that the event is invalid. Report this as the top-level `issue_event_traversal_limited` processing issue described in [recursive object definitions in the Event Processing Model](event-processing.md#recursive-object-definitions), not as a validation warning or error.
 
 ## Finding Codes, Levels, And Processing Failures
 
@@ -108,23 +110,32 @@ A processing error is different: the validator could not perform its work becaus
 ```text
 resolve class_uid
 if it is missing, malformed, or unknown:
-    report the class error and stop schema-guided validation
+    report the mandatory class-resolution processing issue
+    report the corresponding validation finding if its policy enables it
+    stop all event processing
 
-validate metadata.profiles and determine active attributes
+determine active profiles
+report class deprecation and unknown profile names when their policies enable those checks
 walk the active class and nested objects:
-    validate requirements and value shapes
-    validate primitive values, enum values, and siblings
-    validate applicable type constraints and deprecations
-    validate completed-object and completed-class constraints
-    report non-null attributes outside the active schema
+    for each schema attribute in schema order:
+        if it is inactive but has a value, report its required profiles and shallowly validate the value
+        if it is active and absent, validate its requirement
+        if it is active and present, validate shape, primitive value, enum and sibling semantics, constraints, and deprecations
+        recursively validate active object and array contents
+    after known attributes, report non-null attributes outside the active schema
+    after each nested object, validate its object constraints
 
 validate event version and type_uid relationships
-validate retained observable entries against schema paths and event values
-return ordered findings with effective levels
+validate class constraints
+validate the final observables array:
+    optionally report duplicate identities across the complete final array
+    semantically validate existing or retained entries against schema paths and event values
+    a generated suffix may be trusted by construction, but still enforce configured path notation
+return findings in deterministic processing order with their effective levels
 ```
 
 Implementations may combine these checks into one traversal, use separate passes, validate columns in batches, or generate specialized code for concrete event classes. Compatibility depends on the observable rules and results, not on reproducing this project's internal architecture.
 
 ## Reference Implementation
 
-`internal/processing/validation.go` is a fully functioning, tested example of this algorithm. `validation/code.go` lists every error and warning code it can produce, including the exact stable name behind each one. Read both directly for anything this guide leaves out. The public API and internal design built on top of this algorithm are described in [architecture.md](architecture.md), not here.
+`internal/processing/validation.go` is a fully functioning, tested example of this algorithm. `validation/code.go` lists every error and warning code it can produce, including the exact stable name behind each one. Read both directly for anything this guide leaves out. The public API and internal design built on top of this algorithm are described in [Architecture](architecture.md), not here.

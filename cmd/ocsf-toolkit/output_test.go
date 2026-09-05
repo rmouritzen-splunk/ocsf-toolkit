@@ -417,7 +417,8 @@ func TestInvariantProcessAllowsJSONSummaryOnStdout(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--validate",
 		"--output-dir", outputDir,
-		"--summary-json", "-",
+		"--summary", "-",
+		"--summary-format", "json",
 	)
 
 	assert.Equal(0, exitCode, stderr)
@@ -427,23 +428,20 @@ func TestInvariantProcessAllowsJSONSummaryOnStdout(t *testing.T) {
 	assert.Equal(1, summary.EventFilesProcessed)
 }
 
-func TestInvariantProcessRejectsBothSummariesOnStdout(t *testing.T) {
-	// Invariant test: human-readable and JSON summaries cannot both select stdout.
+func TestInvariantProcessRejectsMultipleOutputsOnStdout(t *testing.T) {
+	// Invariant test: stdout contains at most one selected output representation.
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
-	eventsDir := filepath.Join(dir, "events")
-	eventPath := filepath.Join(eventsDir, "event.json")
-	outputDir := filepath.Join(dir, "out")
+	eventPath := filepath.Join(dir, "event.json")
 	writeJSONFile(assert, eventPath, validCLIEvent())
 
 	exitCode, stdout, stderr := runCLI(
 		"--schema", schemaPath,
-		"--events-dir", eventsDir,
+		"--event", eventPath,
 		"--validate",
-		"--output-dir", outputDir,
+		"--report-output", "-",
 		"--summary", "-",
-		"--summary-json", "-",
 	)
 
 	assert.Equal(2, exitCode)
@@ -471,16 +469,14 @@ func TestProcessRejectsSingleEventSummaryFile(t *testing.T) {
 	assert.Contains(stderr, "summary options require --events-dir")
 }
 
-func TestProcessDirectoryDefaultSummaryBehavior(t *testing.T) {
+func TestProcessDirectorySummaryBehavior(t *testing.T) {
 	tests := []struct {
 		name         string
 		summaryArgs  []string
 		summaryCount int
 	}{
-		{name: "default", summaryCount: 1},
+		{name: "default", summaryCount: 0},
 		{name: "explicit stdout", summaryArgs: []string{"--summary", "-"}, summaryCount: 1},
-		{name: "explicit stdout with quiet", summaryArgs: []string{"--summary", "-", "--quiet"}, summaryCount: 1},
-		{name: "quiet", summaryArgs: []string{"--quiet"}, summaryCount: 0},
 	}
 
 	for _, test := range tests {

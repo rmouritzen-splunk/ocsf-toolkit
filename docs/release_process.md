@@ -1,14 +1,10 @@
 # Release Process
 
-OCSF Toolkit releases are Git tag driven. A release is created by pushing a version tag such as
-`v0.1.0`; GitHub Actions builds the release artifacts and publishes the GitHub Release.
+OCSF Toolkit releases are Git tag driven. A release is created by pushing a version tag such as `v0.1.0`; GitHub Actions builds the release artifacts and publishes the GitHub Release.
 
 ## Access
 
-The person creating a release must be able to push tags to the repository. In GitHub's standard
-repository roles, this means Write, Maintain, or Admin access. When this repository moves to
-`github.com/ocsf/ocsf-toolkit`, prefer protecting `v*` tags with a repository ruleset so only the
-release-maintainer group can create release tags.
+The person creating a release must be able to push tags to the repository at <https://github.com/ocsf/ocsf-toolkit>. In GitHub's standard repository roles, this means Write, Maintain, or Admin access. Protect `v*` tags with a repository ruleset so only the release-maintainer group can create release tags.
 
 Recommended repository policy:
 
@@ -61,7 +57,7 @@ git push origin v0.1.0
 GitHub Actions runs `.github/workflows/release.yml`. The workflow:
 
 - Rejects an obvious mistyped release tag unless it begins with `v` followed by a digit. This is a typo guard, not full semantic-version validation.
-- Sets up the pinned release Go toolchain, currently Go 1.27.0.
+- Sets up the release Go toolchain, currently Go 1.27.x (latest Go 1.27).
 - Installs the pinned verification tools.
 - Runs `make package VERSION="${GITHUB_REF_NAME}"`, including all checks, tests, and cross-platform builds.
 - Creates the GitHub Release.
@@ -69,8 +65,7 @@ GitHub Actions runs `.github/workflows/release.yml`. The workflow:
 
 The development-tools module also declares Go 1.27 so local verification, CI verification, benchmark tooling, and release tooling share one current toolchain baseline. The separately supported Go 1.25 baseline applies to the main library and CLI module; CI checks it with a focused `go test ./...` run that disables automatic toolchain switching.
 
-Do not create the GitHub Release manually before pushing the tag. The workflow creates the release;
-if a release already exists, publishing may fail.
+Do not create the GitHub Release manually before pushing the tag. The workflow creates the release; if a release already exists, publishing may fail.
 
 ## After Publishing
 
@@ -107,5 +102,4 @@ git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 ```
 
-For a release that has already been consumed, do not replace the tag. Publish a new patch version
-instead.
+For a release that has already been consumed, do not replace the tag. Publish a new patch version instead.

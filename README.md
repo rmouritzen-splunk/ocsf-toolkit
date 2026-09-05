@@ -2,6 +2,8 @@
 
 OCSF Toolkit provides a Go library and a command line tool for processing [OCSF](https://schema.ocsf.io/) events with a compiled OCSF schema.
 
+OCSF Toolkit follows [Semantic Versioning](https://semver.org/). While the project remains pre-1.0, minor releases may include intentional breaking changes as its public contracts mature. Before v1.0, the project will define its public API and compatibility surface; after that baseline is established, incompatible changes to the declared public API will require a major release. See the [version 1.0 compatibility gate](docs/roadmap.md#version-10-compatibility-gate) and the [Changelog](CHANGELOG.md) for release-specific guidance.
+
 The current processors support:
 
 - Enrichment: add enum siblings and observables.
@@ -14,13 +16,324 @@ Event mutations run before validation, so validation checks the final processed 
 
 The processing algorithms are documented independently of this project's Go implementation. The same logical behavior can be implemented for generic maps, concrete structs or classes, columnar rows, or other in-memory forms, and for encodings such as JSON, Parquet, or Avro when the logical OCSF values are preserved:
 
-- [Event processing model](docs/event-processing.md): shared schema traversal, profiles, null semantics, encoding independence, and operation ordering.
+- [Event Processing Model](docs/event-processing.md): shared schema traversal, profiles, null semantics, encoding independence, and operation ordering.
 - [Enrichment](docs/enrichment.md): adding enum siblings and observables.
-- [Enrichment removal](docs/enrichment-removal.md): safe and forced removal of redundant enrichment.
+- [Enrichment Removal](docs/enrichment-removal.md): safe and forced removal of redundant enrichment.
 - [Validation](docs/validation.md): structural, type, constraint, metadata, and observable validation.
 - [Frequently asked questions](docs/FAQ.md): operational behavior, limitations, and report codes such as `issue_event_traversal_limited`.
 
 These guides are intended both for toolkit users and for developers implementing compatible processing in another language or software ecosystem.
+
+## Event processors
+
+An event pipeline combines one or more processors. Enum-sibling and observable processing are configured independently, and validation always runs after any event mutation:
+
+| Processor | Description |
+|---|---|
+| Add enum siblings | Adds missing string captions for supported integral enum values. It can be enabled independently of observable generation; processing issue levels control how conditions that prevent or qualify enrichment are handled. |
+| Add observables | Appends observables derived from schema declarations. Options can restrict generated observable type IDs, choose their path notation, deduplicate generated candidates, and report duplicate identities. |
+| Remove enum siblings | Removes supported enum siblings in safe or force mode. Safe removal deletes a scalar sibling only when it exactly matches the schema caption for its enum value; it deletes an array sibling only when the arrays have equal lengths and every sibling matches the caption for the enum value at the same index. Force removal skips these caption comparisons. Both modes always retain existing sibling text for integral enum ID `99` (`Other`). See [Enum siblings in the Enrichment Removal document](docs/enrichment-removal.md#enum-siblings) for the complete rules. |
+| Remove observables | Removes the top-level observables enrichment in safe or force mode. In safe mode, an entry with a string `value` is removed only when its `name` resolves to an event value with the same stable string representation; an entry without a logical `value` is removed only when its `name` resolves to an object. Entries with a missing or unresolvable `name`, a nonmatching or malformed `value`, or another condition that prevents this proof are retained, although such unrelated observables are not recommended. Force removal deletes the entire attribute. See [Observable matching in the Enrichment Removal document](docs/enrichment-removal.md#observable-matching) for the complete rules. |
+| Validation | Checks the final event after any mutation without modifying it. Options control which checks run and their finding levels, preferred observable path notation, and observable duplicate detection. |
+
+See [Tuning event processing: safety, diagnostics, and performance](#tuning-event-processing-safety-diagnostics-and-performance) for guidance on choosing among these options.
+
+## Tuning event processing: safety, diagnostics, and performance
+
+Choose event-processing options according to the needs of the consuming environment:
+
+| Processor or concern | Choices | Meaning and trade-offs |
+|---|---|---|
+| Add observables | Generated-observable deduplication disabled or generated-only; duplicate reporting ignored, warning, or error | By default, addition appends every generated candidate without tracking identities. Generated-only deduplication changes the event by retaining the first generated identity and omitting later generated duplicates; it does not compare generated candidates with existing observables. Duplicate reporting is separate, does not change the event, and can compare existing and generated identities, with additional processing cost. Validation can independently check the final observable array for duplicates. See [Existing observables and duplicates in the Enrichment document](docs/enrichment.md#existing-observables-and-duplicates) for behavior and [Observable duplicate detection and deduplication in the FAQ](docs/FAQ.md#observable-duplicate-detection-and-deduplication) for performance considerations. |
+| Remove enum siblings | Safe or force removal | Safe removal preserves a sibling unless it is proven redundant, retaining potentially valuable data at the cost of comparison work and possibly incomplete removal. The proof requires an exact schema-caption match for a scalar, or equal array lengths and a caption match at every corresponding index for an array. Force removal skips these comparisons and may discard a non-redundant sibling. Both modes always retain existing sibling text for integral enum ID `99` (`Other`), because it may carry source-specific meaning. See [Enum siblings in the Enrichment Removal document](docs/enrichment-removal.md#enum-siblings) for the exact rules and [Safe enum-sibling removal in the FAQ](docs/FAQ.md#safe-enum-sibling-removal) for performance considerations. |
+| Remove observables | Safe or force removal | Safe removal preserves an entry unless it is proven redundant, retaining potentially valuable data at the cost of resolving it against the event. The proof requires either a string `value` matching the stable string representation of a value selected by `name`, or no logical `value` and a `name` that resolves to an object. Force removal deletes the complete `observables` attribute and may discard entries that cannot be reproduced. See [Observable matching in the Enrichment Removal document](docs/enrichment-removal.md#observable-matching) for the exact rules and [Safe observable removal in the FAQ](docs/FAQ.md#safe-observable-removal) for performance considerations. |
+| Processing issues | Default levels, an all-code baseline, and per-code ignored, warning, or error overrides | Ignoring an optional issue suppresses its diagnostic and can skip related work; warning reports it and continues, while error stops processing. `issue_at_init_*` codes describe schema initialization, while the other codes describe event processing. Go schema loaders return initialization issues before pipeline construction; CLI issue-level rules apply to both initialization and event codes. `issue_event_traversal_limited`, `issue_class_uid_missing`, `issue_class_uid_wrong_type`, and `issue_class_uid_unknown` report incomplete processing and cannot be ignored. |
+| Validation | Disabled, default levels, or an all-code baseline followed by per-code ignored, warning, or error overrides | Disabling validation avoids all validation work but provides no schema-conformance findings. Ignoring an individual noisy or locally acceptable check skips that check while retaining others. Warning and error classify findings rather than stopping library processing; the CLI can optionally use error findings to produce an unsuccessful final status. An enabled validator must retain at least one non-ignored check. |
+
+`ProcessingResult` supports reporting and logging. Its fixed enrichment and enrichment-removal counters are inexpensive to collect and do not need separate controls. Processing issues and validation findings are different: simply discarding the result does not avoid the enabled checks or diagnostic construction. If processing issues will not be logged or otherwise inspected, configure all ignorable issue codes as ignored. Configure unneeded validation codes the same way so their avoidable work is skipped rather than discarded.
+
+See [Pipeline Options](#pipeline-options) for Go configuration and [CLI Examples](#cli-examples) for command-line configuration.
+
+## High-throughput event pipeline recommendations
+
+Construct a pipeline once and reuse it. A `Pipeline` is safe for concurrent use, and multiple goroutines may call `ProcessEvent` concurrently when each call receives a distinct event map. For CPU-bound processing, start with approximately one worker goroutine per logical CPU, as reported by `runtime.GOMAXPROCS(0)`, and benchmark the representative workload; additional workers may help when the surrounding pipeline performs I/O but generally do not improve CPU-bound processing.
+
+Enrichment and removal mutate the event map and its nested maps and slices in place. Do not read, modify, or pass the same event to another `ProcessEvent` call until processing returns. Processing is not transactional, so an error may leave an event partially modified. Deep-copy an event before processing when the original must be preserved, recognizing that copying adds CPU and allocation cost. Validation alone does not mutate the event.
+
+For throughput-critical pipelines:
+
+- Do not validate every event unless the application requires it. Validation adds substantial per-event schema and cross-field work. Prefer validating a representative sample in a separate validation-enabled pipeline after any mutation completes; the library caller or surrounding CLI workflow is responsible for selecting that sample.
+- When sampled validation needs only selected checks, set the all-code baseline to ignored and then enable the required codes as warnings or errors. Selective validation reduces unnecessary work, although omitting validation remains faster.
+- Apply the same baseline-and-override pattern to processing issues when optional diagnostics are not needed. An ignored all-code baseline leaves the four mandatory incomplete-processing issues at their default warning level. Ignoring issues is most beneficial when their conditions occur or when a code controls additional analysis; it may make little difference on a clean path.
+- Preserve diagnostic coverage outside the production hot path. In continuous integration, run the compiled schema used in production and a representative event sample with default issue levels, then review both schema initialization issues and the processing issues returned for those events.
+- Leave observable duplicate reporting and generated-observable deduplication disabled unless duplicate detection or removal is required. Both require identity comparison work, and final-array validation may scan existing observables that ordinary generation can otherwise leave untouched.
+
+The library and CLI examples below demonstrate the all-ignored baseline followed by selective per-code overrides.
+
+## Library Usage
+
+Import the pipeline, enrichment actions, issue and validation codes, and JSON helpers:
+
+```go
+import (
+    "fmt"
+    "log"
+
+    "github.com/ocsf/ocsf-toolkit/enrichment"
+    "github.com/ocsf/ocsf-toolkit/eventpipeline"
+    "github.com/ocsf/ocsf-toolkit/issue"
+    "github.com/ocsf/ocsf-toolkit/jsonio"
+    "github.com/ocsf/ocsf-toolkit/pathstyle"
+    "github.com/ocsf/ocsf-toolkit/validation"
+)
+```
+
+Load a compiled schema, build a pipeline, and process an event:
+
+```go
+schema, initializationIssues, err := eventpipeline.NewSchema("ocsf-schema-v1.9.0.json")
+if err != nil {
+    return err
+}
+for _, issue := range initializationIssues {
+    log.Printf("%s: %s", issue.Code, issue.Message)
+}
+
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithEnumSiblings(enrichment.Add),
+    eventpipeline.WithObservables(enrichment.Add),
+    eventpipeline.WithValidation(),
+)
+if err != nil {
+    return err
+}
+
+event, err := jsonio.ReadObject("event.json")
+if err != nil {
+    return err
+}
+
+result, err := pipeline.ProcessEvent(event)
+if err != nil {
+    return err
+}
+
+if count := result.Validation().Count(validation.LevelError); count > 0 {
+    fmt.Printf("event has %d validation error(s)\n", count)
+}
+```
+
+Use `NewSchemaFromFS` when the schema is in an `fs.FS`; its path must satisfy `fs.ValidPath`. `NewSchemaFromBytes` avoids copying schemas that are already available as byte slices, including embedded schemas. An embedded `[]byte` can instead be wrapped in a reader and passed to `NewSchemaFromReader`, but `NewSchemaFromBytes` is more memory-efficient because the reader path requires an additional input-sized buffer. Use `NewSchemaFromReader` when the schema is exposed only as an `io.Reader`, such as a decompressor or network response body; the caller remains responsible for closing the source. For example, embed a compiled schema while continuing to use `jsonio` for number-preserving event input:
+
+```go
+import (
+    _ "embed"
+
+    "github.com/ocsf/ocsf-toolkit/eventpipeline"
+    "github.com/ocsf/ocsf-toolkit/jsonio"
+)
+
+//go:embed ocsf-schema-v1.9.0.json
+var compiledSchema []byte
+
+schema, initializationIssues, err := eventpipeline.NewSchemaFromBytes(compiledSchema)
+if err != nil {
+    return err
+}
+_ = initializationIssues // Log, suppress, or otherwise handle nonfatal initialization issues.
+
+event, err := jsonio.ReadObject("event.json")
+if err != nil {
+    return err
+}
+```
+
+`Schema` and `Pipeline` are concrete handles with private state. Create schemas with `eventpipeline.NewSchema`, `eventpipeline.NewSchemaFromFS`, `eventpipeline.NewSchemaFromBytes`, or `eventpipeline.NewSchemaFromReader`, and create pipelines with `eventpipeline.NewPipeline` and `eventpipeline.WithSchema`; their zero values return initialization errors. `NewSchemaFromBytes` does not retain its input. `NewSchemaFromReader` consumes the reader through EOF but does not close it. Constructed values are safe for concurrent use when each `ProcessEvent` call receives a distinct event map. The event map and its nested maps or slices must not be accessed or mutated concurrently while processing is running.
+
+**NOTE:** Use of `GOEXPERIMENT=jsonv2` is recommended for faster schema loading (see below).
+
+```sh
+GOEXPERIMENT=jsonv2 go build ./...
+GOEXPERIMENT=jsonv2 go test ./...
+```
+
+Schema loading is dominated by JSON decoding. With the OCSF 1.9 test schema, JSON v2 reduced median loading time and allocation count by approximately one-third. It requires no newer toolchain than the module's existing Go 1.25 baseline. The default decoder remains appropriate when schema initialization is not performance-sensitive. The setting applies to the complete build, so test with it as well; the resulting binary does not need the environment variable at runtime. JSON v2 remains experimental and outside the Go 1 compatibility guarantee. See the [Go 1.25 release notes](https://go.dev/doc/go1.25).
+
+`ProcessEvent` mutates the event in place when enrichment or enrichment removal is enabled. Processing is not transactional: if `ProcessEvent` returns an error, the event may already be partially modified. Callers that need to preserve the original event should deep-copy it before processing.
+
+Validation failures are reported in `eventpipeline.ProcessingResult`; warning-level and error-level validation findings do not make `ProcessEvent` return a Go `error`. The error return is reserved for an uninitialized pipeline, processing failures, unusable caller input, and processing issues configured at `issue.LevelError`. An error-level processing issue is returned as an `*eventpipeline.ProcessingIssueError` and is accompanied by the zero `ProcessingResult`.
+
+For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` file and object helpers do this automatically. Use `jsonio.NewDecoder` when decoding another JSON shape, such as a typed structure, with the same number-preserving behavior. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
+
+The JSON helpers use Go's active standard JSON implementation. The default `encoding/json` decoder accepts duplicate object member names, with later values replacing or merging into earlier values according to its rules; `GOEXPERIMENT=jsonv2` rejects duplicates by default. Applications that require a different duplicate-name policy should enforce it in their decoding boundary before calling `ProcessEvent`.
+
+Array attributes may use JSON-native `[]any` values or typed Go slices such as `[]int64`, `[]float64`, and `[]jsonish.Map`, as well as fixed-length arrays. Defined container types are accepted and traversed like their unnamed equivalents. Every element is validated using the same scalar and object rules regardless of its container representation; defined element types remain unsupported, while type aliases remain identical to their aliased representations.
+
+### Pipeline Options
+
+`eventpipeline.NewPipeline` takes a list of `eventpipeline.PipelineOption` values. Configure its schema with `eventpipeline.WithSchema`. Each single-valued option, including `WithSchema`, `WithEnumSiblings`, `WithObservables`, `WithObservableDeduplication`, `WithEnrichmentObservablePathNotation`, and `WithValidation`, may be passed once; repeating one is a configuration error rather than an override. The same rule applies to `WithValidationObservablePathNotation` within `WithValidation`.
+
+Add enum siblings and observables:
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithEnumSiblings(enrichment.Add),
+    eventpipeline.WithObservables(enrichment.Add),
+    eventpipeline.WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
+)
+```
+
+Validate only:
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithValidation(),
+)
+```
+
+Safely remove enum siblings and observables:
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithEnumSiblings(enrichment.Remove),
+    eventpipeline.WithObservables(enrichment.Remove),
+)
+```
+
+Safe removal preserves enum siblings and observables that cannot be proven redundant. Force removal is explicit, and each component can select a different action:
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithEnumSiblings(enrichment.ForceRemove),
+    eventpipeline.WithObservables(enrichment.ForceRemove),
+)
+```
+
+Build a pipeline that enriches and then validates; enum-sibling work always runs before observable work, and mutation always runs before validation, regardless of option order:
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithEnumSiblings(enrichment.Add),
+    eventpipeline.WithObservables(enrichment.Add),
+    eventpipeline.WithValidation(),
+)
+```
+
+`WithValidation` takes its own nested `ValidationOption` values:
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithEnumSiblings(enrichment.Add),
+    eventpipeline.WithObservables(enrichment.Add, 1, 2, 4),
+    eventpipeline.WithEnrichmentObservablePathNotation(pathstyle.ArrayIndexed),
+    eventpipeline.WithValidation(
+        eventpipeline.WithValidationLevel(
+            validation.AttributeRecommendedMissing,
+            validation.LevelWarning,
+        ),
+        eventpipeline.WithValidationObservablePathNotation(pathstyle.ArrayIndexed),
+    ),
+)
+```
+
+`WithEnumSiblings` takes an `enrichment.Action`: `enrichment.Add` adds enum siblings, `enrichment.Remove` or `enrichment.ForceRemove` removes them, and `enrichment.None` (the default when the option is omitted) leaves them alone. `WithObservables` works the same way for observables, and when its action is `enrichment.Add`, an optional list of observable type IDs restricts generation to those types; an empty list means all types, duplicate IDs are harmless, and pipeline construction reports every selected ID absent from the schema. Supplying IDs when the action is not `enrichment.Add` is invalid. `WithObservableDeduplication` accepts `enrichment.ObservableDeduplicationIgnored` (the default) or `enrichment.ObservableDeduplicationGenerated`; generated mode requires observable addition and removes only later generated candidates that duplicate earlier generated candidates. It never compares generated candidates with existing observable entries. Use `WithEnrichmentObservablePathNotation` with a `pathstyle.Style` value to select generated observable name notation; it has no effect unless observables are added. Generated enum sibling arrays are parallel to their enum arrays, with one caption at each matching index. When integral enum ID 99 has no sibling value, including at an integral enum-array position, enrichment adds the schema caption, typically `Other`, and reports that synthesized value as an enrichment issue so a corresponding validation warning has clear provenance. String enum key `"99"` has no special meaning.
+
+`eventpipeline.NewPipeline` returns the first detected problem in deterministic validation order. It first checks structural option errors such as repeated single-valued options and invalid level-rule ordering, then requires an initialized schema selected through exactly one `WithSchema`, and finally validates the resolved processing configuration, including empty or no-op configurations, invalid actions, observable path notation or type IDs configured without adding observables, invalid path notation, and invalid issue or validation level rules. CLI flag validation reports equivalent conflicts using the relevant flag names.
+
+Across event processing, an object attribute whose value is null is treated as missing. Null array elements remain invalid because no OCSF array element type permits null.
+
+Enrichment preserves existing observable entries and appends generated entries in traversal order. Scalar values, including empty strings, produce a string `value`; object observables omit `value`. Structured content found where the schema declares an observable scalar is skipped and reported as an enrichment issue. Duplicate identity uses the exact `name`, the integral `type_id`, and an optional exact string `value`; omitted and nil-valued map entries both represent no logical value. The derived `type` caption and unrelated fields do not affect identity. Generated-only deduplication is a silent, opt-in optimization and excluded candidates are not included in `ObservablesAdded`. The independent `issue.ObservableDuplicate` diagnostic detects existing-existing, generated-existing, and generated-generated duplicates during observable addition; `validation.ObservableDuplicate` detects duplicates in the final observable array. Both default to ignored. When both are enabled during observable addition, only the issue is produced. After the event class resolves and observable enrichment or removal runs, an empty `observables` array is removed. Other malformed structure that prevents requested enrichment is also reported through issue policy; enrichment does not attempt to duplicate general validation. Warning-level issues appear in `eventpipeline.ProcessingResult.Issues()`, ignored issues are omitted, and error-level issues stop processing with an `*eventpipeline.ProcessingIssueError`.
+
+Safe removal (`enrichment.Remove`) removes supported scalar and array enum siblings whose source has direct type `integer_t` or `long_t` and whose same-shaped target has direct type `string_t`, plus redundant observables that can be proven safe. Enum and sibling arrays must have equal lengths, and safe removal compares every value with the caption at the same index before removing the sibling array. Validation reports unequal enum/sibling array lengths with `validation_attribute_enum_array_sibling_length_mismatch`. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using the toolkit's stable scalar-to-string formatting. An omitted or nil-valued observable `value` denotes an object observable, which is removed only when its path resolves to an object.
+
+`WithValidation` reports findings at each code's toolkit default level. Missing recommended attributes are not checked while their code remains at its `validation.LevelIgnored` default; configure `validation.AttributeRecommendedMissing` as warning or error to enable that validation. Use `WithValidationObservablePathNotation` to report when a valid observable name does not use the preferred notation; this preference never prevents resolution of another supported notation.
+
+Control of which event validation issues to check is immutable pipeline configuration. `WithValidationLevel(code, level)` sets one code to `validation.LevelIgnored`, `validation.LevelWarning`, or `validation.LevelError`; `WithAllValidationLevels(level)` sets the level for every code. The `all` setting may appear once and must precede specific settings; each specific code may appear once. Every validation code may be ignored, including class-resolution findings; mandatory processing issues independently report class-resolution failures. `NewPipeline` rejects `WithValidation` configurations that ignore every validation code.
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithValidation(
+        eventpipeline.WithAllValidationLevels(validation.LevelIgnored),
+        eventpipeline.WithValidationLevel(validation.AttributeRequiredMissing, validation.LevelError),
+        eventpipeline.WithValidationLevel(validation.AttributeWrongType, validation.LevelError),
+    ),
+)
+```
+
+Enrichment and enrichment removal report processing conditions according to immutable pipeline issue policy. `WithIssueLevel(code, level)` sets one code to `issue.LevelIgnored`, `issue.LevelWarning`, or `issue.LevelError`; `WithAllIssueLevels(level)` sets the level for every issue. The `all` setting may appear once and must precede specific settings; each specific code may appear once. Mandatory diagnostics reporting class-resolution failure or limited event traversal cannot be ignored. An error-level issue stops processing and returns an `eventpipeline.ProcessingIssueError`; ignored and warning-level issues do not change the mutation that led to the condition.
+
+```go
+pipeline, err := eventpipeline.NewPipeline(
+    eventpipeline.WithSchema(schema),
+    eventpipeline.WithEnumSiblings(enrichment.Add),
+    eventpipeline.WithObservables(enrichment.Add),
+    eventpipeline.WithAllIssueLevels(issue.LevelIgnored),
+    eventpipeline.WithIssueLevel(issue.EnrichmentEnumSiblingNotAdded, issue.LevelWarning),
+)
+```
+
+#### Observable Path Notation
+
+Observable generation, safe removal, and validation support five path styles. Array-wide styles select every matching element, while indexed and JSONPath styles identify concrete elements:
+
+| Style | Go value | CLI value | Example |
+|---|---|---|---|
+| Simple | `pathstyle.Simple` | `simple` | `resources.uid` |
+| Empty brackets | `pathstyle.ArrayBrackets` | `brackets` | `resources[].uid` |
+| Wildcard | `pathstyle.ArrayWildcard` | `wildcard` | `resources[*].uid` |
+| Indexed | `pathstyle.ArrayIndexed` | `indexed` | `resources[3].uid` |
+| JSONPath | `pathstyle.JSONPath` | `jsonpath` | `$.resources[3].uid` |
+
+`WithEnrichmentObservablePathNotation` selects the style used for generated observable names. `WithValidationObservablePathNotation` optionally reports valid names that do not use a preferred style; it does not prevent validation or removal from resolving another supported style. The CLI's `--observable-path-notation` option configures generated names, preferred validation notation, or both according to the selected operations.
+
+### Result Model
+
+`eventpipeline.ProcessingResult` is an opaque concrete value with typed accessors for processor-specific results and warning-level processing issues:
+
+```go
+result.Validation()
+result.Enrichment()
+result.EnrichmentRemoval()
+result.Issues()
+```
+
+The private value representation lets future toolkit releases add processor families through new accessor methods without changing the public structure. Compiler diagnostics confirm that the supported Go toolchain inlines every simple accessor across package boundaries, reducing calls to direct private-state access and making the abstraction zero-cost without interface boxing or an inherently necessary allocation. The zero value is a valid empty result. `ProcessingResult` preserves its processor-section JSON representation when marshaled but does not support JSON unmarshalling. The processor-specific structs in `eventresult` remain field-oriented and support keyed literals, but intentionally reject positional literals so future releases can add fields compatibly.
+
+Validation findings have a severity-neutral stable `validation.Code`, an explicit effective `validation.Level`, a human-readable message, and code-specific structured details. Codes use the `validation_` prefix. `Code.Description()` returns a short description and `Code.DefaultLevel()` reports the toolkit's default level independently of the effective level recorded on a finding. Findings remain in reporting order in one slice:
+
+```go
+result.Validation().Findings
+result.Validation().Count(validation.LevelError)
+result.Validation().Count(validation.LevelWarning)
+```
+
+Enrichment counters report what was added:
+
+```go
+result.Enrichment().EnumSiblingsAdded
+result.Enrichment().ObservablesAdded
+```
+
+Enrichment-removal counters report what was removed or retained:
+
+```go
+result.EnrichmentRemoval().EnumSiblingsRemoved
+result.EnrichmentRemoval().EnumSiblingsRetained
+result.EnrichmentRemoval().ObservablesRemoved
+result.EnrichmentRemoval().ObservablesRetained
+```
+
+`ProcessingResult.Issues()` returns warning-level processing diagnostics with a typed `issue.Source` identifying the broad part of processing that reported the issue and a stable `issue.Code` whose string begins with `issue_` identifying the precise condition. They are separate from OCSF validation findings and include enrichment and enrichment-removal problems as well as shared processing limitations, so an issue can be reported even by a validation-only pipeline. Ignored issues are omitted without a count. An error-level issue makes `ProcessEvent` return a zero result and an `*eventpipeline.ProcessingIssueError`; callers can use `errors.As` to recover its structured `eventresult.ProcessingIssue`. Validation findings appear only in the `Findings` slice returned by `Validation()`.
+
+For a complete working example of library usage, see the CLI implementation in `cmd/ocsf-toolkit`.
 
 ## CLI Usage
 
@@ -40,8 +353,7 @@ ocsf-toolkit_v0.9.0_windows_arm64.zip
 ocsf-toolkit_v0.9.0_windows_amd64.zip
 ```
 
-For macOS, choose the `darwin` OS archive. Modern Apple Silicon machines such as M1, M2, M3,
-and newer use `arm64`. Older Intel Macs use `amd64`.
+For macOS, choose the `darwin` OS archive. Modern Apple Silicon machines such as M1, M2, M3, and newer use `arm64`. Older Intel Macs use `amd64`.
 
 Extract the archive and check the binary:
 
@@ -51,10 +363,7 @@ cd ocsf-toolkit_v0.9.0_darwin_arm64
 ./ocsf-toolkit --version
 ```
 
-macOS may block downloaded unsigned binaries with a warning that Apple could not verify the tool is
-free of malware. OCSF Toolkit does not currently provide signed or notarized macOS binaries. OCSF is
-an unfunded project, and signing/notarization requires an Apple Developer account and CI secrets. To
-run a downloaded macOS binary, remove the quarantine attribute:
+macOS may block downloaded unsigned binaries with a warning that Apple could not verify the tool is free of malware. OCSF Toolkit does not currently provide signed or notarized macOS binaries. OCSF is an unfunded project, and signing/notarization requires an Apple Developer account and CI secrets. To run a downloaded macOS binary, remove the quarantine attribute:
 
 ```sh
 xattr -d com.apple.quarantine ./ocsf-toolkit
@@ -174,7 +483,8 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.9.0.json \
   --events-dir events \
   --enrich \
-  --issue-level issue_observable_duplicate=warning \
+  --issue-level all=ignored \
+  --issue-level issue_enrichment_enum_sibling_not_added=warning \
   --output-dir out
 ```
 
@@ -187,8 +497,9 @@ ocsf-toolkit \
   --schema ocsf-schema-v1.9.0.json \
   --events-dir events \
   --validate \
-  --validation-level all=error \
-  --validation-level validation_attribute_unknown=ignored \
+  --validation-level all=ignored \
+  --validation-level validation_attribute_required_missing=error \
+  --validation-level validation_attribute_wrong_type=error \
   --output-dir out
 ```
 
@@ -254,9 +565,7 @@ Overlap checking applies to the `--events-dir`/`--output-dir` trees as a whole, 
 - Validation-only processing creates `reports/`.
 - Any mutation action combined with validation creates both namespaces.
 
-Processing reports include the source event, the destination event when one was written, and the applicable processor results:
-
-Enrichment reports include counts for added enum siblings and observables plus any issues explaining requested additions that could not be performed safely.
+Processing reports include the source event, the destination event when one was written, and the applicable processor results. For example, a combined enrichment and validation report includes counts for added enum siblings and observables plus any validation findings and processing issues:
 
 ```json
 {
@@ -270,11 +579,15 @@ Enrichment reports include counts for added enum siblings and observables plus a
         "code": "validation_attribute_required_missing",
         "message": "Required attribute \"time\" is missing.",
         "details": {
-          "attribute_path": "time",
-          "attribute": "time"
+          "attribute": "time",
+          "attribute_path": "time"
         }
       }
     ]
+  },
+  "enrichment": {
+    "enum_siblings_added": 7,
+    "observables_added": 3
   }
 }
 ```
@@ -295,8 +608,25 @@ When unenrichment is selected, the same report can contain removal counts and is
   "issues": [
     {
       "source": "enrichment_removal",
+      "code": "issue_enrichment_removal_enum_sibling_not_removed",
+      "message": "Enum sibling \"severity\" was not removed because its value does not match schema caption \"Informational\".",
+      "details": {
+        "attribute": "severity",
+        "attribute_path": "severity",
+        "enum_attribute": "severity_id",
+        "enum_attribute_path": "severity_id",
+        "expected_value": "Informational",
+        "reason": "sibling_value_mismatch"
+      }
+    },
+    {
+      "source": "enrichment_removal",
       "code": "issue_observable_value_not_found",
-      "message": "The observable value is not present at its name path."
+      "message": "Observable index 3 value is not present at its named event path.",
+      "details": {
+        "attribute": "value",
+        "attribute_path": "observables[3].value"
+      }
     }
   ]
 }
@@ -334,253 +664,6 @@ Run full help:
 ```sh
 ocsf-toolkit --help
 ```
-
-## Library Usage
-
-Import the event schema, enrichment action type, validation result types, and JSON helpers:
-
-```go
-import (
-	"fmt"
-	"log"
-
-	"github.com/ocsf/ocsf-toolkit/enrichment"
-	"github.com/ocsf/ocsf-toolkit/eventpipeline"
-	"github.com/ocsf/ocsf-toolkit/jsonio"
-	"github.com/ocsf/ocsf-toolkit/validation"
-)
-```
-
-Load a compiled schema, build a pipeline, and process an event:
-
-```go
-schema, initializationIssues, err := eventpipeline.NewSchema("ocsf-schema-v1.9.0.json")
-if err != nil {
-	return err
-}
-for _, issue := range initializationIssues {
-	log.Printf("%s: %s", issue.Code, issue.Message)
-}
-
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithEnumSiblings(enrichment.Add),
-	eventpipeline.WithObservables(enrichment.Add),
-	eventpipeline.WithValidation(),
-)
-if err != nil {
-	return err
-}
-
-event, err := jsonio.ReadObject("event.json")
-if err != nil {
-	return err
-}
-
-result, err := pipeline.ProcessEvent(event)
-if err != nil {
-	return err
-}
-
-if count := result.Validation().Count(validation.LevelError); count > 0 {
-	fmt.Printf("event has %d validation error(s)\n", count)
-}
-```
-
-Use `NewSchemaFromFS` when the schema is in an `fs.FS`; its path must satisfy `fs.ValidPath`. `NewSchemaFromBytes` avoids copying schemas that are already available as byte slices, including embedded schemas. An embedded `[]byte` can instead be wrapped in a reader and passed to `NewSchemaFromReader`, but `NewSchemaFromBytes` is more memory-efficient because the reader path requires an additional input-sized buffer. Use `NewSchemaFromReader` when the schema is exposed only as an `io.Reader`, such as a decompressor or network response body; the caller remains responsible for closing the source. For example, embed a compiled schema while continuing to use `jsonio` for number-preserving event input:
-
-```go
-import (
-	_ "embed"
-
-	"github.com/ocsf/ocsf-toolkit/eventpipeline"
-	"github.com/ocsf/ocsf-toolkit/jsonio"
-)
-
-//go:embed ocsf-schema-v1.9.0.json
-var compiledSchema []byte
-
-schema, initializationIssues, err := eventpipeline.NewSchemaFromBytes(compiledSchema)
-if err != nil {
-	return err
-}
-_ = initializationIssues // Log, suppress, or otherwise handle nonfatal initialization issues.
-
-event, err := jsonio.ReadObject("event.json")
-if err != nil {
-	return err
-}
-```
-
-`Schema` and `Pipeline` are concrete handles with private state. Create schemas with `eventpipeline.NewSchema`, `eventpipeline.NewSchemaFromFS`, `eventpipeline.NewSchemaFromBytes`, or `eventpipeline.NewSchemaFromReader`, and create pipelines with `eventpipeline.NewPipeline` and `eventpipeline.WithSchema`; their zero values return initialization errors. `NewSchemaFromBytes` does not retain its input. `NewSchemaFromReader` consumes the reader through EOF but does not close it. Constructed values are safe for concurrent use when each `ProcessEvent` call receives a distinct event map. The event map and its nested maps or slices must not be accessed or mutated concurrently while processing is running.
-
-**NOTE:** Use of `GOEXPERIMENT=jsonv2` is recommended for faster schema loading (see below).
-
-```sh
-GOEXPERIMENT=jsonv2 go build ./...
-GOEXPERIMENT=jsonv2 go test ./...
-```
-
-Schema loading is dominated by JSON decoding. With the OCSF 1.9 test schema, JSON v2 reduced median loading time and allocation count by approximately one-third. It requires no newer toolchain than the module's existing Go 1.25 baseline. The default decoder remains appropriate when schema initialization is not performance-sensitive. The setting applies to the complete build, so test with it as well; the resulting binary does not need the environment variable at runtime. JSON v2 remains experimental and outside the Go 1 compatibility guarantee. See the [Go 1.25 release notes](https://go.dev/doc/go1.25).
-
-`ProcessEvent` mutates the event in place when enrichment or enrichment removal is enabled. Processing is not transactional: if `ProcessEvent` returns an error, the event may already be partially modified. Callers that need to preserve the original event should deep-copy it before processing.
-
-Validation failures are reported in `eventpipeline.ProcessingResult`; warning-level and error-level validation findings do not make `ProcessEvent` return a Go `error`. The error return is reserved for an uninitialized pipeline, processing failures, unusable caller input, and processing issues configured at `issue.LevelError`. An error-level processing issue is returned as an `*eventpipeline.ProcessingIssueError` and is accompanied by the zero `ProcessingResult`.
-
-For JSON-encoded events, preserving numbers as `json.Number` is safer than decoding into `float64`, especially for OCSF integer values. The `jsonio` file and object helpers do this automatically. Use `jsonio.NewDecoder` when decoding another JSON shape, such as a typed structure, with the same number-preserving behavior. Events built from other sources can use normal Go values such as signed integer types, `float32`, `float64`, `bool`, `string`, slices, and nested `jsonish.Map` values.
-
-The JSON helpers use Go's active standard JSON implementation. The default `encoding/json` decoder accepts duplicate object member names, with later values replacing or merging into earlier values according to its rules; `GOEXPERIMENT=jsonv2` rejects duplicates by default. Applications that require a different duplicate-name policy should enforce it in their decoding boundary before calling `ProcessEvent`.
-
-Array attributes may use JSON-native `[]any` values or typed Go slices such as `[]int64`, `[]float64`, and `[]jsonish.Map`, as well as fixed-length arrays. Defined container types are accepted and traversed like their unnamed equivalents. Every element is validated using the same scalar and object rules regardless of its container representation; defined element types remain unsupported, while type aliases remain identical to their aliased representations.
-
-### Pipeline Options
-
-`eventpipeline.NewPipeline` takes a list of `eventpipeline.PipelineOption` values. Configure its schema with `eventpipeline.WithSchema`. Each single-valued option, including `WithSchema`, `WithEnumSiblings`, `WithObservables`, `WithObservableDeduplication`, `WithEnrichmentObservablePathNotation`, and `WithValidation`, may be passed once; repeating one is a configuration error rather than an override. The same rule applies to `WithValidationObservablePathNotation` within `WithValidation`.
-
-Add enum siblings and observables:
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithEnumSiblings(enrichment.Add),
-	eventpipeline.WithObservables(enrichment.Add),
-	eventpipeline.WithObservableDeduplication(enrichment.ObservableDeduplicationGenerated),
-)
-```
-
-Validate only:
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithValidation(),
-)
-```
-
-Safely remove enum siblings and observables:
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithEnumSiblings(enrichment.Remove),
-	eventpipeline.WithObservables(enrichment.Remove),
-)
-```
-
-Safe removal preserves enum siblings and observables that cannot be proven redundant. Force removal is explicit, and each component can select a different action:
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithEnumSiblings(enrichment.ForceRemove),
-	eventpipeline.WithObservables(enrichment.ForceRemove),
-)
-```
-
-Build a pipeline that enriches and then validates; enum-sibling work always runs before observable work, and mutation always runs before validation, regardless of option order:
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithEnumSiblings(enrichment.Add),
-	eventpipeline.WithObservables(enrichment.Add),
-	eventpipeline.WithValidation(),
-)
-```
-
-`WithValidation` takes its own nested `ValidationOption` values:
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithEnumSiblings(enrichment.Add),
-	eventpipeline.WithObservables(enrichment.Add, 1, 2, 4),
-	eventpipeline.WithEnrichmentObservablePathNotation(pathstyle.ArrayIndexed),
-	eventpipeline.WithValidation(
-		eventpipeline.WithValidationLevel(
-			validation.AttributeRecommendedMissing,
-			validation.LevelWarning,
-		),
-		eventpipeline.WithValidationObservablePathNotation(pathstyle.ArrayIndexed),
-	),
-)
-```
-
-`WithEnumSiblings` takes an `enrichment.Action`: `enrichment.Add` adds enum siblings, `enrichment.Remove` or `enrichment.ForceRemove` removes them, and `enrichment.None` (the default when the option is omitted) leaves them alone. `WithObservables` works the same way for observables, and when its action is `enrichment.Add`, an optional list of observable type IDs restricts generation to those types; an empty list means all types, duplicate IDs are harmless, and pipeline construction reports every selected ID absent from the schema. Supplying IDs when the action is not `enrichment.Add` is invalid. `WithObservableDeduplication` accepts `enrichment.ObservableDeduplicationIgnored` (the default) or `enrichment.ObservableDeduplicationGenerated`; generated mode requires observable addition and removes only later generated candidates that duplicate earlier generated candidates. It never compares generated candidates with existing observable entries. Use `WithEnrichmentObservablePathNotation` with a `pathstyle.Style` value to select generated observable name notation; it has no effect unless observables are added. Generated enum sibling arrays are parallel to their enum arrays, with one caption at each matching index. When integral enum ID 99 has no sibling value, including at an integral enum-array position, enrichment adds the schema caption, typically `Other`, and reports that synthesized value as an enrichment issue so a corresponding validation warning has clear provenance. String enum key `"99"` has no special meaning.
-
-`eventpipeline.NewPipeline` returns the first detected problem in deterministic validation order. It first checks structural option errors such as repeated single-valued options and invalid level-rule ordering, then requires an initialized schema selected through exactly one `WithSchema`, and finally validates the resolved processing configuration, including empty or no-op configurations, invalid actions, observable path notation or type IDs configured without adding observables, invalid path notation, and invalid issue or validation level rules. CLI flag validation reports equivalent conflicts using the relevant flag names.
-
-Across event processing, an object attribute whose value is null is treated as missing. Null array elements remain invalid because no OCSF array element type permits null.
-
-Enrichment preserves existing observable entries and appends generated entries in traversal order. Scalar values, including empty strings, produce a string `value`; object observables omit `value`. Structured content found where the schema declares an observable scalar is skipped and reported as an enrichment issue. Duplicate identity uses the exact `name`, the integral `type_id`, and an optional exact string `value`; omitted and nil-valued map entries both represent no logical value. The derived `type` caption and unrelated fields do not affect identity. Generated-only deduplication is a silent, opt-in optimization and excluded candidates are not included in `ObservablesAdded`. The independent `issue.ObservableDuplicate` diagnostic detects existing-existing, generated-existing, and generated-generated duplicates during observable addition; `validation.ObservableDuplicate` detects duplicates in the final observable array. Both default to ignored. When both are enabled during observable addition, only the issue is produced. After the event class resolves and observable enrichment or removal runs, an empty `observables` array is removed. Other malformed structure that prevents requested enrichment is also reported through issue policy; enrichment does not attempt to duplicate general validation. Warning-level issues appear in `eventpipeline.ProcessingResult.Issues()`, ignored issues are omitted, and error-level issues stop processing with an `*eventpipeline.ProcessingIssueError`.
-
-Safe removal (`enrichment.Remove`) removes supported scalar and array enum siblings whose source has direct type `integer_t` or `long_t` and whose same-shaped target has direct type `string_t`, plus redundant observables that can be proven safe. Enum and sibling arrays must have equal lengths, and safe removal compares every value with the caption at the same index before removing the sibling array. Validation reports unequal enum/sibling array lengths with `validation_attribute_enum_array_sibling_length_mismatch`. Observable names support bare, `[]`, `[*]`, numeric index, and `$`-rooted path forms. Scalar observable values are matched using the toolkit's stable scalar-to-string formatting. An omitted or nil-valued observable `value` denotes an object observable, which is removed only when its path resolves to an object.
-
-`WithValidation` reports findings at each code's toolkit default level. Missing recommended attributes are not checked while their code remains at its `validation.LevelIgnored` default; configure `validation.AttributeRecommendedMissing` as warning or error to enable that validation. Use `WithValidationObservablePathNotation` to report when a valid observable name does not use the preferred notation; this preference never prevents resolution of another supported notation.
-
-Validation policy is immutable pipeline configuration. `WithValidationLevel(code, level)` sets one code to `validation.LevelIgnored`, `validation.LevelWarning`, or `validation.LevelError`; `WithAllValidationLevels(level)` sets the level for every code. The `all` setting may appear once and must precede specific settings; each specific code may appear once. Every validation code may be ignored, including class-resolution findings; mandatory processing issues independently report class-resolution failures. `NewPipeline` rejects `WithValidation` configurations whose resolved policy ignores every validation code.
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithValidation(
-		eventpipeline.WithAllValidationLevels(validation.LevelError),
-		eventpipeline.WithValidationLevel(validation.AttributeUnknown, validation.LevelIgnored),
-	),
-)
-```
-
-Enrichment and enrichment removal report processing conditions according to immutable pipeline issue policy. `WithIssueLevel(code, level)` sets one code to `issue.LevelIgnored`, `issue.LevelWarning`, or `issue.LevelError`; `WithAllIssueLevels(level)` sets the level for every issue. The `all` setting may appear once and must precede specific settings; each specific code may appear once. Mandatory diagnostics reporting class-resolution failure or limited event traversal cannot be ignored. An error-level issue stops processing and returns an `eventpipeline.ProcessingIssueError`; ignored and warning-level issues do not change the mutation that led to the condition.
-
-```go
-pipeline, err := eventpipeline.NewPipeline(
-	eventpipeline.WithSchema(schema),
-	eventpipeline.WithEnumSiblings(enrichment.Add),
-	eventpipeline.WithObservables(enrichment.Add),
-	eventpipeline.WithIssueLevel(issue.ObservableDuplicate, issue.LevelWarning),
-)
-```
-
-### Result Model
-
-`eventpipeline.ProcessingResult` is an opaque concrete value with typed accessors for processor-specific results and warning-level processing issues:
-
-```go
-result.Validation()
-result.Enrichment()
-result.EnrichmentRemoval()
-result.Issues()
-```
-
-The private value representation lets future toolkit releases add processor families through new accessor methods without changing the public structure. Compiler diagnostics confirm that the supported Go toolchain inlines every simple accessor across package boundaries, reducing calls to direct private-state access and making the abstraction zero-cost without interface boxing or an inherently necessary allocation. The zero value is a valid empty result. `ProcessingResult` preserves its processor-section JSON representation when marshaled but does not support JSON unmarshalling. The processor-specific structs in `eventresult` remain field-oriented and support keyed literals, but intentionally reject positional literals so future releases can add fields compatibly.
-
-Validation findings have a severity-neutral stable `validation.Code`, an explicit effective `validation.Level`, a human-readable message, and code-specific structured details. Codes use the `validation_` prefix. `Code.Description()` returns a short description and `Code.DefaultLevel()` reports the toolkit's default level independently of the effective level recorded on a finding. Findings remain in reporting order in one slice:
-
-```go
-result.Validation().Findings
-result.Validation().Count(validation.LevelError)
-result.Validation().Count(validation.LevelWarning)
-```
-
-Enrichment counters report what was added:
-
-```go
-result.Enrichment().EnumSiblingsAdded
-result.Enrichment().ObservablesAdded
-```
-
-Enrichment-removal counters report what was removed or retained:
-
-```go
-result.EnrichmentRemoval().EnumSiblingsRemoved
-result.EnrichmentRemoval().EnumSiblingsRetained
-result.EnrichmentRemoval().ObservablesRemoved
-result.EnrichmentRemoval().ObservablesRetained
-```
-
-`ProcessingResult.Issues()` returns warning-level processing diagnostics with a typed `issue.Source` identifying the broad part of processing that reported the issue and a stable `issue.Code` whose string begins with `issue_` identifying the precise condition. They are separate from OCSF validation findings and include enrichment and enrichment-removal problems as well as shared processing limitations, so an issue can be reported even by a validation-only pipeline. Ignored issues are omitted without a count. An error-level issue makes `ProcessEvent` return a zero result and an `*eventpipeline.ProcessingIssueError`; callers can use `errors.As` to recover its structured `eventresult.ProcessingIssue`. Validation findings appear only in the `Findings` slice returned by `Validation()`.
-
-For a complete working example of library usage, see the CLI implementation in `cmd/ocsf-toolkit`.
 
 ## Development
 
@@ -653,7 +736,7 @@ Project design and maintenance documentation:
 - [Frequently asked questions](docs/FAQ.md)
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
-- [Release process](docs/release_process.md)
+- [Release Process](docs/release_process.md)
 
 ## Appendix: Compiled Schema
 

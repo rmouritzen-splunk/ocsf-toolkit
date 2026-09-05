@@ -109,4 +109,4 @@ An implementation may let callers assign ignored, warning, or error levels to pr
 
 ## Reference Implementation
 
-`internal/processing` is a fully functioning, tested example of this model: `process.go` implements schema-guided walking and the recursive-object boundary, and `pipeline.go` and `config.go` implement operation ordering. `issue.Code` (`issue/code.go`) lists every processing issue this implementation can produce. Read the code directly for anything this guide leaves out. The public API and internal design built on top of this model are described in [architecture.md](architecture.md), not here.
+`internal/processing` is a fully functioning, tested example of this model: `process.go` implements schema-guided walking and the recursive-object boundary, and `pipeline.go` and `config.go` implement operation ordering. `issue.Code` (`issue/code.go`) lists every processing issue this implementation can produce. Read the code directly for anything this guide leaves out. The public API and internal design built on top of this model are described in [Architecture](architecture.md), not here.

@@ -1,6 +1,6 @@
 # Frequently asked questions
 
-If OCSF Toolkit behavior does not meet your needs, open an issue at https://github.com/ocsf/ocsf-toolkit/issues with the relevant schema definitions and a minimal, non-sensitive example. This applies to the limitations and deliberate behavior described throughout this FAQ.
+If OCSF Toolkit behavior does not meet your needs, [open an issue on GitHub](https://github.com/ocsf/ocsf-toolkit/issues) with the relevant schema definitions and a minimal, non-sensitive example. This applies to the limitations and deliberate behavior described throughout this FAQ.
 
 ## Do diagnostics include event values?
 
@@ -20,9 +20,37 @@ An array position is different. A carrier representation can contain `[null]`, a
 
 ## How do issue and validation error levels differ?
 
-All processing issues default to `warning`. Warning-level issues are collected in the successful processing result. An ignorable issue may instead be omitted, while elevating an issue to `error` stops processing at the first matching issue and returns a `ProcessingIssueError`. As with any non-nil `ProcessEvent` error, the accompanying result is the zero value, although earlier in-place event mutations are not rolled back.
+Processing issues default to `warning` except `issue_observable_duplicate`, which defaults to `ignored`. Warning-level issues are collected in the successful processing result. An ignorable issue may instead be omitted, while elevating an issue to `error` stops processing at the first matching issue and returns a `ProcessingIssueError`. As with any non-nil `ProcessEvent` error, the accompanying result is the zero value, although earlier in-place event mutations are not rolled back.
 
 Validation findings are different. Their toolkit defaults vary by validation code, and warning-level and error-level findings are both accumulated in the validation result. An error-level validation finding does not make `ProcessEvent` return a Go error or stop validation at the first finding. This lets one pass report every validation problem it encounters. Library callers decide how to handle the collected levels; the CLI exits nonzero for collected error-level findings only when `--fail-on-validation-errors` is selected.
+
+## How does safe enrichment removal avoid data loss?
+
+Safe removal deletes enrichment only when the event and schema prove that another event value carries the same information. It retains malformed, unrelated, non-standard, or nonmatching enrichment rather than risking data loss. Force removal deliberately relaxes that guarantee.
+
+For enum siblings, safe removal requires exact schema-caption matches, including at every corresponding array position. Both safe and force removal retain existing sibling text for integral enum ID `99` (`Other`) because it may contain source-specific information. See the [enum-sibling removal rules in the Enrichment Removal document](enrichment-removal.md#enum-siblings) for supported shapes and all retention cases.
+
+For observables, safe removal requires `name` to resolve to matching event data: a scalar observable's string `value` must match, while a valueless observable must resolve to an object. Missing, unrelated, malformed, or nonmatching entries are retained, although producing observables unrelated to event information is not recommended. See the [observable-matching rules in the Enrichment Removal document](enrichment-removal.md#observable-matching) for path, value, and malformed-entry details.
+
+## Which processing options can be expensive?
+
+The cost depends on the event shape, schema, and selected operations. Three optional behaviors deserve particular attention in a high-throughput pipeline.
+
+### Observable duplicate detection and deduplication
+
+Ordinary observable generation appends candidates without tracking their semantic identities. Generated-only deduplication must instead track each generated identity so later generated duplicates can be omitted. Duplicate issue reporting during enrichment examines both existing and generated identities, while `validation_observable_duplicate` examines the final observable array. These options add comparison and temporary state proportional to the observables they examine. Leave duplicate reporting and generated-only deduplication disabled unless the consuming environment requires them.
+
+Deduplication changes the event; duplicate reporting does not. Generated-only deduplication never removes existing observables and does not omit a generated observable merely because an existing entry has the same identity. See [Existing observables and duplicates in the Enrichment document](enrichment.md#existing-observables-and-duplicates) for the distinction.
+
+### Safe enum-sibling removal
+
+Safe enum-sibling removal must look up schema captions and compare sibling values before removing them. Array removal additionally requires equal lengths and a successful caption comparison at every position, and any integral enum ID `99` retains the complete sibling. The additional work grows with the number and size of enum-sibling arrays. Force removal skips caption comparisons but accepts the risk of discarding sibling text that is not redundant; ID `99` siblings remain protected in either mode. See [Enum siblings in the Enrichment Removal document](enrichment-removal.md#enum-siblings) for the detailed behavior.
+
+### Safe observable removal
+
+Safe observable removal must inspect every candidate entry, interpret its path notation, verify the path against the active schema, resolve it against the actual event, and compare a scalar value or confirm an object reference. Array paths may select many values, and nested arrays can increase the amount of event data examined for one observable. Force removal deletes the complete `observables` attribute without analyzing its entries, but may discard observables that cannot be reconstructed from the event. See [Observable matching in the Enrichment Removal document](enrichment-removal.md#observable-matching) for the detailed behavior.
+
+These costs are the work that establishes whether removal is safe; changing issue levels cannot eliminate them. Select force removal only when its destructive semantics are acceptable. See [High-throughput event pipeline recommendations in the README](../README.md#high-throughput-event-pipeline-recommendations) for validation, issue-level, concurrency, and sampling guidance.
 
 ## What does `issue_event_traversal_limited` mean?
 
@@ -49,11 +77,11 @@ When an event reaches this boundary, the processing report contains at most one 
 }
 ```
 
-This issue describes an internal processing limitation, not proof that the event is invalid. It therefore appears in top-level `issues`, including for a validation-only operation, and is not duplicated in `validation.warnings` or `validation.errors`. Enrichment, enrichment removal, and validation may all be incomplete below the reported boundary.
+This issue describes an internal processing limitation, not proof that the event is invalid. It therefore appears in top-level `issues`, including for a validation-only operation, and is not duplicated in `validation.findings`. Enrichment, enrichment removal, and validation may all be incomplete below the reported boundary.
 
 Consumers can route this condition by its stable `issue_event_traversal_limited` code. The toolkit does not allow its level to be set to ignored because it reports incomplete processing rather than a tolerable processor-specific condition.
 
-See [Recursive objects](event-processing.md#recursive-objects) for the language-neutral traversal rule.
+See [recursive object definitions in the Event Processing Model](event-processing.md#recursive-object-definitions) for the language-neutral traversal rule.
 
 ## How do I report missing recommended attributes?
 
@@ -71,20 +99,20 @@ The corresponding Go configuration is:
 
 ```go
 eventpipeline.WithValidation(
-	eventpipeline.WithValidationLevel(
-		validation.AttributeRecommendedMissing,
-		validation.LevelWarning,
-	),
+    eventpipeline.WithValidationLevel(
+        validation.AttributeRecommendedMissing,
+        validation.LevelWarning,
+    ),
 )
 ```
 
 Use `error` instead of `warning` when absence should be an error-level validation finding. As with other validation errors, the CLI changes its exit status only when `--fail-on-validation-errors` is also selected.
 
-## With the CLI, why do I see initialization issues when I use `--quiet`?
+## Why does the CLI write initialization issues to stderr?
 
-`--quiet` suppresses the default directory summary on stdout. It does not suppress diagnostics written to stderr. Initialization issues describe nonfatal problems found while preparing the compiled schema for event processing, before any event is read, so the CLI writes each non-ignored issue to stderr in both single-event and directory modes. Summary files also include these issues as durable run-level diagnostics, but individual event reports do not because the condition belongs to the schema rather than an event.
+Initialization issues describe nonfatal problems found while preparing the compiled schema for event processing, before any event is read, so the CLI writes each non-ignored issue to stderr in both single-event and directory modes. Explicitly requested summary files also include these issues as durable run-level diagnostics, but individual event reports do not because the condition belongs to the schema rather than an event.
 
-To silence an initialization issue, set its stable `issue_at_init_*` code to ignored with `--issue-level ISSUE_CODE=ignored`. Enum-sibling initialization distinguishes an ineligible source (`issue_at_init_schema_enum_sibling_source_not_integral`), a missing target (`issue_at_init_schema_enum_sibling_target_not_found`), an enum target (`issue_at_init_schema_enum_sibling_target_is_enum`), and a target without the required direct string type and matching scalar/array shape (`issue_at_init_schema_enum_sibling_target_not_string`). For example, `--issue-level issue_at_init_schema_enum_sibling_target_not_string=ignored` accepts that known processing limitation. Level policy is explicit because quiet output and accepting a known limitation are separate choices; setting the code to error instead aborts schema setup.
+To silence an initialization issue, set its stable `issue_at_init_*` code to ignored with `--issue-level ISSUE_CODE=ignored`. Enum-sibling initialization distinguishes an ineligible source (`issue_at_init_schema_enum_sibling_source_not_integral`), a missing target (`issue_at_init_schema_enum_sibling_target_not_found`), an enum target (`issue_at_init_schema_enum_sibling_target_is_enum`), and a target without the required direct string type and matching scalar/array shape (`issue_at_init_schema_enum_sibling_target_not_string`). For example, `--issue-level issue_at_init_schema_enum_sibling_target_not_string=ignored` accepts that known processing limitation. Setting the code to error instead aborts schema setup.
 
 ## Why does directory output use separate `events/` and `reports/` subdirectories?
 
@@ -114,13 +142,13 @@ The toolkit intentionally does not add cross-file identity tracking to catch thi
 
 No. The recursive-object boundary prevents unbounded descent through repeated object relationships, but it does not limit the number of elements in an array, the number of separate arrays in an event, or breadth across nested arrays. OCSF 1.9.0 permits schema paths containing as many as seven nested arrays. The number of values in such a structure can grow geometrically with the cardinality at each level, but every visited value must be present in the input event: toolkit processing remains approximately linear in the size of the actual event structure.
 
-The toolkit does not currently impose a general event-size limit, a per-array limit, a limit on returned validation errors, warnings, or processing issues, or a limit on generated observables. A per-array limit alone would not bound total work across multiple or nested arrays. Callers processing untrusted data should enforce input limits appropriate to their environment. Configurable per-event processing and result limits are tracked as possible future work in the [roadmap](roadmap.md#validation-and-schema).
+The toolkit does not currently impose a general event-size limit, a per-array limit, a limit on returned validation errors, warnings, or processing issues, or a limit on generated observables. A per-array limit alone would not bound total work across multiple or nested arrays. Callers processing untrusted data should enforce input limits appropriate to their environment. Configurable per-event processing and result limits are tracked as possible future work in [Validation and schema in the Roadmap](roadmap.md#validation-and-schema).
 
 ## Why does the toolkit interpret `integer_t` as a signed 64-bit integer?
 
 The OCSF type definition describes `integer_t` as a signed integer but does not specify its bit width or range. It separately defines `long_t` as an 8-byte signed integer, giving `long_t` a signed 64-bit range. OCSF Toolkit uses one signed 64-bit representation and range for both types. This avoids platform-dependent Go `int` behavior, preserves every `long_t` value, and follows the conventional relationship that the range of an integer type should not exceed the range of its corresponding long type; the two ranges may be equal.
 
-This is a toolkit interpretation where OCSF leaves `integer_t` width open, not a claim that OCSF requires every implementation to accept 64-bit `integer_t` values. A downstream system that chooses a signed 32-bit `integer_t` range may reject values outside that range. A possible pipeline option and CLI flag for selecting signed 32-bit or signed 64-bit `integer_t` bounds is tracked in the [roadmap](roadmap.md#validation-and-schema); signed 64-bit remains the current behavior.
+This is a toolkit interpretation where OCSF leaves `integer_t` width open, not a claim that OCSF requires every implementation to accept 64-bit `integer_t` values. A downstream system that chooses a signed 32-bit `integer_t` range may reject values outside that range. A possible pipeline option and CLI flag for selecting signed 32-bit or signed 64-bit `integer_t` bounds is tracked in [Validation and schema in the Roadmap](roadmap.md#validation-and-schema); signed 64-bit remains the current behavior.
 
 ## How does `max_len` measure string length?
 

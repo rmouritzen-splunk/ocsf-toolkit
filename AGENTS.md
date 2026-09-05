@@ -37,8 +37,8 @@ Keep durable project context in the committed documentation:
 - `docs/engineering/project-invariants.md` records source-backed OCSF, compiled-schema, toolkit, and engineering invariants used to protect stable behavior.
 - `docs/engineering/project-decisions.md` records deliberate design choices and the derived requirements that should inform long-lived tests.
 - `docs/event-processing.md`, `docs/enrichment.md`, `docs/enrichment-removal.md`, and `docs/validation.md` describe language-neutral processing behavior for users and independent implementers.
+- `docs/ocsf-server-v2-validator-comparison.md` summarizes user-visible differences from the OCSF Server v2 validator.
 - `docs/roadmap.md` tracks active and future work.
-- `docs/ocsf-server-validation.md` retains historical validation-parity findings for OCSF Server; back-porting Toolkit behavior is not active work.
 - `docs/homebrew.md` records the planned Homebrew distribution approach.
 - `docs/release_process.md` documents the current release procedure.
 
@@ -106,7 +106,7 @@ Treat performance and allocation ceilings as regression budgets, not targets to 
 
 Keep tests deterministic and local. Prefer clear interfaces, small fakes, and dependency injection over mocking frameworks. Avoid tests that merely restate a thin adapter's implementation.
 
-Validation changes should include boundary cases and, where applicable, parity checks against OCSF Server's `validator2.ex` behavior. Enrichment tests should verify both event mutations and processing results.
+Validation changes should include boundary cases and, where applicable, parity checks against the OCSF Server v2 validator implemented in `lib/schema/validator2.ex`. Enrichment tests should verify both event mutations and processing results.
 
 If relevant tests or verification cannot be run, explain why.
 

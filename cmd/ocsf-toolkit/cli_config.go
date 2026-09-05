@@ -30,14 +30,13 @@ type processConfig struct {
 	observableDeduplication enrichment.ObservableDeduplication
 	issueLevels             issueLevelConfig
 
-	outputDir       string
-	eventOutput     string
-	reportOutput    string
-	summaryFile     string
-	summaryJSONFile string
-	overwrite       bool
-	prettyJSON      bool
-	quiet           bool
+	outputDir     string
+	eventOutput   string
+	reportOutput  string
+	summaryFile   string
+	summaryFormat string
+	overwrite     bool
+	prettyJSON    bool
 
 	observablePathNotation string
 }
@@ -118,10 +117,9 @@ func (options cliOptions) processConfig(
 		eventOutput:             options.General.EventOutput,
 		reportOutput:            options.General.ReportOutput,
 		summaryFile:             options.General.SummaryFile,
-		summaryJSONFile:         options.General.SummaryJSONFile,
+		summaryFormat:           options.General.SummaryFormat,
 		overwrite:               options.General.Overwrite,
 		prettyJSON:              options.General.PrettyJSON,
-		quiet:                   options.General.Quiet,
 		observablePathNotation:  options.General.ObservablePathNotation,
 	}
 }
@@ -137,6 +135,10 @@ func (options cliOptions) validateProcessConfig(config processConfig) []error {
 	}
 	if options.Mutation.ObservableIDs.configured && config.observablesAction != enrichment.Add {
 		problems = append(problems, errors.New("--observable-id requires observable enrichment"))
+	}
+	if config.observableDeduplication == enrichment.ObservableDeduplicationGenerated &&
+		config.observablesAction != enrichment.Add {
+		problems = append(problems, errors.New("--deduplicate-observables=generated requires observable enrichment"))
 	}
 	if options.Validation.FailOnValidationErrors && !config.validate {
 		problems = append(problems, errors.New("--fail-on-validation-errors requires --validate"))
@@ -311,11 +313,8 @@ func validateOutputConfig(config processConfig, inputModeResolved bool) []error 
 	}
 
 	if inputModeResolved && config.eventPath != "" {
-		if config.summaryFile != "" || config.summaryJSONFile != "" {
+		if config.summaryFile != "" {
 			problems = append(problems, errors.New("summary options require --events-dir"))
-		}
-		if config.quiet {
-			problems = append(problems, errors.New("--quiet requires --events-dir"))
 		}
 		if config.mutatesEvent() {
 			if countSet(config.outputDir != "", config.eventOutput != "") != 1 {
@@ -340,11 +339,20 @@ func validateOutputConfig(config processConfig, inputModeResolved bool) []error 
 			problems = append(problems, errors.New("directory processing requires --output-dir DIR"))
 		}
 	}
+	if config.summaryFormat != "" && config.summaryFile == "" {
+		problems = append(problems, errors.New("--summary-format requires --summary"))
+	}
+	if config.summaryFormat != "" &&
+		config.summaryFormat != summaryFormatText &&
+		config.summaryFormat != summaryFormatJSON {
+		problems = append(problems, fmt.Errorf(
+			"invalid --summary-format value %q: expected text or json", config.summaryFormat,
+		))
+	}
 	if countSet(
 		config.eventOutput == stdioPath,
 		config.reportOutput == stdioPath,
 		config.summaryFile == stdioPath,
-		config.summaryJSONFile == stdioPath,
 	) > 1 {
 		problems = append(problems, errors.New("only one output option may use stdout"))
 	}

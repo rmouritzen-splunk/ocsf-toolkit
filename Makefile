@@ -2,7 +2,6 @@ coverage_out := coverage.out
 coverage_percentages_out := coverage-percentages.out
 VERSION ?= dev
 minimum_go_version := 1.25.13
-PACKAGE_GOEXPERIMENT := jsonv2
 
 export VERSION
 export GOEXPERIMENT
@@ -13,7 +12,7 @@ export GOEXPERIMENT
 
 .PHONY: build
 build:
-	@echo "Building ocsf-toolkit"
+	@echo "Building ocsf-toolkit with GOEXPERIMENT=${GOEXPERIMENT}"
 	@mkdir -p build
 	CGO_ENABLED=0 go build -C cmd/ocsf-toolkit -o "${CURDIR}/build" -trimpath
 
@@ -167,6 +166,7 @@ test-all: test-compatibility test-coverage test-race test-latest-release-tag tes
 # --- Orchestration ---
 
 .PHONY: dev
+dev: export GOEXPERIMENT := jsonv2
 dev: check test build
 
 .PHONY: all
@@ -175,7 +175,7 @@ all: check-all test-all build-all-platforms
 # --- Packaging ---
 
 .PHONY: package
-package: export GOEXPERIMENT = ${PACKAGE_GOEXPERIMENT}
+package: export GOEXPERIMENT := jsonv2
 package: all
 	@echo "Packaging release artifacts"
 	@scripts/package.sh

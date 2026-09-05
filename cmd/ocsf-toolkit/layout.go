@@ -54,11 +54,10 @@ type outputDestination struct {
 // processingDestinations contains command-wide output choices. Directory event destinations
 // are derived lazily from each path supplied by filepath.WalkDir.
 type processingDestinations struct {
-	outputRoot      *filesystemPath
-	eventOutput     *outputDestination
-	reportOutput    *outputDestination
-	summaryFiles    []*outputDestination
-	summaryJSONFile *outputDestination
+	outputRoot    *filesystemPath
+	eventOutput   *outputDestination
+	reportOutput  *outputDestination
+	summaryOutput *outputDestination
 }
 
 func newFilesystemPath(display string) (filesystemPath, error) {
@@ -277,70 +276,34 @@ func resolveSummaryDestinations(
 	destinations *processingDestinations,
 	reserved *[]reservedPath,
 ) error {
-	if config.summaryFile != "" {
-		summaryFile, resolveErr := resolveDistinctDestination(
-			config.summaryFile, "human-readable summary", reserved,
-		)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		destinations.summaryFiles = append(destinations.summaryFiles, summaryFile)
+	if config.summaryFile == "" {
+		return nil
 	}
-	if config.summaryJSONFile != "" {
-		var err error
-		destinations.summaryJSONFile, err = resolveDistinctDestination(
-			config.summaryJSONFile, "JSON summary", reserved,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	if config.eventsDir != "" && !config.quiet && config.summaryFile != stdioPath &&
-		config.summaryJSONFile != stdioPath {
-		destinations.summaryFiles = append(
-			[]*outputDestination{displayDestination(stdioPath)},
-			destinations.summaryFiles...,
-		)
-	}
-	return nil
+	var err error
+	destinations.summaryOutput, err = resolveDistinctDestination(config.summaryFile, "summary", reserved)
+	return err
 }
 
 func validateSummaryDestinations(destinations processingDestinations, inputRoot *filesystemPath) error {
-	if destinations.outputRoot != nil {
-		for _, summary := range summaryDestinations(destinations) {
-			if summary == nil || summary.path.display == stdioPath {
-				continue
-			}
-			if pathsOverlap(summary.path, outputNamespace(*destinations.outputRoot, eventsOutputDirectory)) ||
-				pathsOverlap(summary.path, outputNamespace(*destinations.outputRoot, reportsOutputDirectory)) {
-				return fmt.Errorf(
-					"summary output path %q conflicts with a reserved output namespace",
-					summary.path.display,
-				)
-			}
-		}
+	summary := destinations.summaryOutput
+	if summary == nil || summary.path.display == stdioPath {
+		return nil
 	}
-	if inputRoot != nil {
-		for _, summary := range summaryDestinations(destinations) {
-			if summary != nil && summary.path.display != stdioPath && pathsOverlap(*inputRoot, summary.path) {
-				return fmt.Errorf(
-					"summary output path %q conflicts with the input event directory",
-					summary.path.display,
-				)
-			}
-		}
+	if destinations.outputRoot != nil &&
+		(pathsOverlap(summary.path, outputNamespace(*destinations.outputRoot, eventsOutputDirectory)) ||
+			pathsOverlap(summary.path, outputNamespace(*destinations.outputRoot, reportsOutputDirectory))) {
+		return fmt.Errorf(
+			"summary output path %q conflicts with a reserved output namespace",
+			summary.path.display,
+		)
+	}
+	if inputRoot != nil && pathsOverlap(*inputRoot, summary.path) {
+		return fmt.Errorf(
+			"summary output path %q conflicts with the input event directory",
+			summary.path.display,
+		)
 	}
 	return nil
-}
-
-func summaryDestinations(destinations processingDestinations) []*outputDestination {
-	summaries := make([]*outputDestination, 0, len(destinations.summaryFiles)+1)
-	summaries = append(summaries, destinations.summaryFiles...)
-	if destinations.summaryJSONFile != nil {
-		summaries = append(summaries, destinations.summaryJSONFile)
-	}
-	return summaries
 }
 
 func validateOutputDirectory(config processConfig, outputRoot filesystemPath) error {

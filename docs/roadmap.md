@@ -1,6 +1,33 @@
 # Roadmap
 
-This file tracks unfinished or intentionally deferred work. Implemented architecture and design invariants are documented in [architecture.md](architecture.md).
+This file tracks unfinished or intentionally deferred work. Implemented architecture and design invariants are documented in [Architecture](architecture.md).
+
+## Version 0.9.0
+
+- Start a repository changelog with a v0.9.0 entry that summarizes the user-visible differences from v0.8.0, including intentional pre-1.0 changes to APIs, defaults, and processing behavior. Add subsequent releases above v0.9.0 in reverse chronological order.
+
+## Version 1.0 compatibility gate
+
+Before releasing v1.0.0, define and implement a compatibility gate for the public Go API, stable event-processing behavior, machine-readable output, and the intentionally stable portion of the CLI. This is the final release-readiness task after the intended pre-1.0 API and CLI changes are complete. The v1.0.0 release establishes the SemVer baseline for the 1.x series; compatibility with v0.8.0 or other pre-1.0 releases is not required unless adopted separately as an explicit contract.
+
+Ordinary unit and regression tests in this repository are necessary but are not independent compatibility authority when a candidate can change production behavior and its test expectations concurrently. The gate must compare a candidate with an authority the candidate cannot silently rewrite. Keep `internal` packages, unexported declarations, implementation structure, and incidental human-readable wording outside the compatibility surface.
+
+Before implementation, choose and document a proportionate enforcement model. Approaches to evaluate include:
+
+- Compare the candidate's exported Go API with the latest stable v1 release using a pinned API-difference or release-analysis tool. Exclude `internal` and command packages. This detects incompatible removals and declaration changes even when candidate tests change, but does not detect behavioral or CLI regressions.
+- Retain public black-box contract tests in this repository and execute the unchanged tests from an immutable stable v1 tag against the candidate implementation. This keeps the artifacts together but requires careful temporary-module orchestration and protection against weakening the compatibility workflow.
+- Maintain a separately protected compatibility repository whose tests consume only the public Go packages and built CLI. Candidate CI or release verification can clone that repository, replace its module dependency with the candidate checkout, and run its tests. Give ordinary coding agents read-only access to this repository and require independent maintainer approval for contract changes. This provides a clearer trust boundary at the cost of coordinating two repositories.
+- Rely on current-checkout invariant tests plus explicit human review of concurrent production and contract-test changes. This is the simplest approach but provides procedural rather than technical protection when an automated coding agent changes both sides together.
+
+The selected design may combine approaches. In particular, an exported-API comparison and an external behavioral compatibility suite address different risks and complement rather than replace one another. Any external or release-derived suite should contain only durable consumer contracts, such as processor ordering and mutation semantics, result and diagnostic identities, stable machine-readable fields, and selected CLI flags, defaults, output modes, and exit statuses. Keep implementation-detail, performance, allocation, and internal architecture tests in this repository.
+
+Complete the following before v1.0.0:
+
+- Inventory all importable packages and exported declarations and decide whether each is intentionally supported throughout 1.x; move or remove unintended public surface before the release.
+- Define the stable behavioral, serialized-output, CLI, deprecation, and minimum-Go-version commitments without freezing incidental presentation details.
+- Implement the selected compatibility checks in CI and release verification, including the required release-tag history or read-only access to a separate compatibility repository.
+- Protect the compatibility authority and its configuration from being changed alongside an implementation merely to make a candidate pass. Define the explicit maintainer process for correcting a contract test when a documented defect requires an intentional behavior change.
+- Verify the completed gate against the v1.0 release candidate, then make stable v1 releases the comparison baseline for subsequent 1.x development.
 
 ## Validation and schema
 
@@ -78,6 +105,6 @@ Design constraints:
 
 ## Distribution
 
-- Add source-built Homebrew formulae through a shared `ocsf/homebrew-tap`, starting with `ocsf-toolkit` and later adding `ocsf-schema-compiler`. See [homebrew.md](homebrew.md).
+- Add source-built Homebrew formulae through a shared `ocsf/homebrew-tap`, starting with `ocsf-toolkit` and later adding `ocsf-schema-compiler`. See [Homebrew Packaging](homebrew.md).
 - Consider release bottles after the source-built Homebrew formula is stable.
 - Consider Apple notarization and Windows code signing only if the project gains the necessary funding, identities, and secret-management infrastructure.

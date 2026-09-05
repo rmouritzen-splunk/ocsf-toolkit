@@ -28,11 +28,10 @@ type generalOptions struct {
 	EventOutput            string
 	ReportOutput           string
 	SummaryFile            string
-	SummaryJSONFile        string
+	SummaryFormat          string
 	ObservablePathNotation string
 	Overwrite              bool
 	PrettyJSON             bool
-	Quiet                  bool
 	Version                bool
 }
 

@@ -557,15 +557,54 @@ func TestInvariantProcessReportsIndependentOutputProblems(t *testing.T) {
 		"--validate",
 		"--report-output", "-",
 		"--summary", "-",
-		"--quiet",
 	)
 
 	assert.Equal(2, exitCode)
 	assert.Contains(stderr, "error: summary options require --events-dir\n")
-	assert.Contains(stderr, "error: --quiet requires --events-dir\n")
 	assert.Contains(stderr, "error: only one output option may use stdout\n")
-	assert.Equal(3, strings.Count(stderr, "error: "))
+	assert.Equal(2, strings.Count(stderr, "error: "))
 	assert.Equal(1, strings.Count(stderr, "Usage:\n"))
+}
+
+func TestProcessRejectsSummaryFormatWithoutSummary(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "events")
+	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--validate",
+		"--output-dir", filepath.Join(dir, "output"),
+		"--summary-format", "json",
+	)
+
+	assert.Equal(2, exitCode)
+	assert.Empty(stdout)
+	assert.Contains(stderr, "error: --summary-format requires --summary\n")
+}
+
+func TestProcessRejectsUnknownSummaryFormat(t *testing.T) {
+	assert := require.New(t)
+	dir := t.TempDir()
+	schemaPath := writeTestSchema(assert, dir)
+	eventsDir := filepath.Join(dir, "events")
+	writeJSONFile(assert, filepath.Join(eventsDir, "event.json"), validCLIEvent())
+
+	exitCode, stdout, stderr := runCLI(
+		"--schema", schemaPath,
+		"--events-dir", eventsDir,
+		"--validate",
+		"--output-dir", filepath.Join(dir, "output"),
+		"--summary", "-",
+		"--summary-format", "yaml",
+	)
+
+	assert.Equal(2, exitCode)
+	assert.Empty(stdout)
+	assert.Contains(stderr, `error: invalid --summary-format value "yaml": expected text or json`+"\n")
 }
 
 // Invariant test: unresolved prerequisite selections suppress diagnostics that depend on those selections.
@@ -1055,12 +1094,13 @@ func TestHelp(t *testing.T) {
 	assert.Contains(stdout, "inspecting it.")
 	assert.Contains(stdout, "Forced enum sibling removal retains siblings required for enum ID 99.")
 	assert.NotContains(stdout, "skip-invalid-output")
-	assert.Contains(stdout, helpLongOption("summary-json", "FILE"))
 	assert.Contains(stdout, helpLongOption("summary", "FILE"))
+	assert.Contains(stdout, helpLongOption("summary-format", "FORMAT"))
+	assert.NotContains(stdout, "--summary-json")
 	assert.Contains(stdout, helpLongOption("overwrite", ""))
 	assert.Contains(stdout, helpShortAndLongOption("p", "pretty-json", ""))
 	assert.Contains(stdout, "Pretty-print JSON output, including")
-	assert.Contains(stdout, helpShortAndLongOption("q", "quiet", ""))
+	assert.NotContains(stdout, "--quiet")
 	assert.Contains(stdout, helpShortAndLongOption("v", "version", ""))
 	assert.Contains(stdout, "--output-dir writes processed events beneath events/ and processing reports")
 	assert.Contains(stdout, "beneath reports/.")

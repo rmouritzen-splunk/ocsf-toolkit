@@ -82,13 +82,13 @@ func newParser() (*cliParser, *cliOptions) {
 		&options.General.SummaryFile,
 		"summary",
 		"FILE",
-		"Human-readable directory summary file, or - for stdout",
+		"Directory summary file, or - for stdout",
 	)
 	general.stringVar(
-		&options.General.SummaryJSONFile,
-		"summary-json",
-		"FILE",
-		"JSON directory summary file, or - for stdout",
+		&options.General.SummaryFormat,
+		"summary-format",
+		"FORMAT",
+		"Directory summary format: text or json; defaults to text",
 	)
 	general.stringVar(
 		&options.General.ObservablePathNotation,
@@ -99,7 +99,6 @@ func newParser() (*cliParser, *cliOptions) {
 	)
 	general.boolVar(&options.General.Overwrite, "overwrite", "", "Allow replacing existing output files")
 	general.boolVar(&options.General.PrettyJSON, "pretty-json", "p", "Pretty-print JSON output, including stdout")
-	general.boolVar(&options.General.Quiet, "quiet", "q", "Suppress the default directory summary on stdout")
 	general.boolVar(&options.General.Version, "version", "v", "Print version information and exit")
 
 	mutation := parser.newGroup("Enrichment Options")

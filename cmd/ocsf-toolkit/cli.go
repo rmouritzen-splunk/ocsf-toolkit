@@ -123,17 +123,20 @@ func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, 
 	}
 	writeInitializationIssues(stderr, initializationIssues, helpOutputWidth(stderr))
 
-	summary, runtimeFailure, err := processEvents(
+	var summary *summaryReport
+	if destinations.summaryOutput != nil {
+		summary = newSummaryReport(config, initializationIssues)
+	}
+	hasValidationErrors, err := processEvents(
 		config,
 		pipeline,
-		initializationIssues,
 		destinations,
 		stdin,
 		outputs,
+		summary,
 	)
 	if err != nil {
 		writef(stderr, "error: %s\n", err)
-		writePartialCompletion(stderr, config, summary)
 		var configurationError *commandConfigurationError
 		if errors.As(err, &configurationError) {
 			return 2
@@ -141,36 +144,26 @@ func runProcessCommand(config processConfig, stdin io.Reader, stdout io.Writer, 
 		return 1
 	}
 
-	if runtimeFailure {
-		writeFailureDetails(stderr, summary)
-		writePartialCompletion(stderr, config, summary)
-		return 1
-	}
-
-	if len(destinations.summaryFiles) > 0 || destinations.summaryJSONFile != nil {
-		report := buildSummaryReport(config, summary)
-		for _, summaryFile := range destinations.summaryFiles {
-			path := summaryFile.path.display
+	if summary != nil {
+		path := destinations.summaryOutput.path.display
+		if config.summaryFormat == summaryFormatJSON {
+			if err := outputs.writeJSON(path, summary); err != nil {
+				writef(stderr, "error: failed to write JSON summary %q: %s\n", path, err)
+				return 1
+			}
+		} else {
 			width := defaultHelpWidth
 			if path == stdioPath {
 				width = helpOutputWidth(stdout)
 			}
-			if err := outputs.writeText(path, humanSummaryWithMetadata(report, width)); err != nil {
+			if err := outputs.writeText(path, humanSummaryWithMetadata(*summary, width)); err != nil {
 				writef(stderr, "error: failed to write summary %q: %s\n", path, err)
-				return 1
-			}
-		}
-		if destinations.summaryJSONFile != nil {
-			path := destinations.summaryJSONFile.path.display
-			if err := outputs.writeJSON(path, report); err != nil {
-				writef(stderr, "error: failed to write JSON summary %q: %s\n", path, err)
 				return 1
 			}
 		}
 	}
 
-	if config.failOnValidationErrors &&
-		summary.EventsWithValidationErrorsOnly+summary.EventsWithValidationWarningsAndErrors > 0 {
+	if config.failOnValidationErrors && hasValidationErrors {
 		return 1
 	}
 	return 0
@@ -181,12 +174,6 @@ func writeInitializationIssues(w io.Writer, issues []schemaresult.Initialization
 		prefix := fmt.Sprintf("initialization issue %s: ", found.Code)
 		writef(w, "%s", prefix)
 		writeWrappedHanging(w, found.Message, len(prefix), helpEntryIndent, width)
-	}
-}
-
-func writePartialCompletion(w io.Writer, config processConfig, summary processSummary) {
-	if config.eventsDir != "" && summary.EventsProcessed > 0 {
-		writef(w, "Event files processed before error: %d\n", summary.EventsProcessed)
 	}
 }
 

@@ -700,7 +700,7 @@ func TestProcessSingleEventOutputDirWritesBothOutputs(t *testing.T) {
 	assert.FileExists(filepath.Join(outputDir, "existing.txt"))
 }
 
-func TestProcessDirectoryReportsFilesProcessedBeforeError(t *testing.T) {
+func TestProcessDirectoryStopsAfterFirstEventError(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
@@ -722,11 +722,11 @@ func TestProcessDirectoryReportsFilesProcessedBeforeError(t *testing.T) {
 	assert.Equal(1, exitCode)
 	assert.Empty(stdout)
 	assert.Contains(stderr, "a.json\": event write error")
-	assert.Contains(stderr, "Event files processed before error: 1")
+	assert.NotContains(stderr, "Event files processed before error")
 	assert.NoFileExists(filepath.Join(outputDir, "events", "b.json"))
 }
 
-func TestProcessDirectoryReportsFilesProcessedBeforeWalkError(t *testing.T) {
+func TestProcessDirectoryStopsAfterWalkError(t *testing.T) {
 	assert := require.New(t)
 	dir := t.TempDir()
 	schemaPath := writeTestSchema(assert, dir)
@@ -753,14 +753,13 @@ func TestProcessDirectoryReportsFilesProcessedBeforeWalkError(t *testing.T) {
 		"--events-dir", eventsDir,
 		"--validate",
 		"--output-dir", outputDir,
-		"--quiet",
 	)
 
 	assert.Equal(1, exitCode)
 	assert.Empty(stdout)
-	assert.Contains(stderr, "failed to walk events directory")
+	assert.Contains(stderr, "failed to process events directory")
 	assert.Contains(stderr, "permission denied")
-	assert.Contains(stderr, "Event files processed before error: 1")
+	assert.NotContains(stderr, "Event files processed before error")
 	assert.FileExists(filepath.Join(outputDir, "reports", "event.report.json"))
 }
 
@@ -787,6 +786,7 @@ func TestProcessDirectoryToleratesInputRootBecomingAFileBeforeWalk(t *testing.T)
 		"--events-dir", eventsDir,
 		"--validate",
 		"--output-dir", outputDir,
+		"--summary", "-",
 	)
 
 	assert.Equal(0, exitCode, stderr)

@@ -187,7 +187,7 @@ Rationale: command-line users can correct unrelated flag mistakes in one edit-an
 Derived requirements and test implications:
 
 - Successfully parsed independent flag problems are emitted in deterministic order with one error prefix per problem and one terse usage block.
-- CLI-local level and policy checks have focused parity coverage for ordering, duplicates, mandatory issue handling, and all-ignored validation policy.
+- CLI-local level configuration checks have focused parity coverage for ordering, duplicates, mandatory issue handling, and configurations that disable all event validation issues.
 - Parser, filesystem-operation, schema-loading, layout, and runtime failures remain singular.
 - Dependent output and policy diagnostics are not emitted when their prerequisite selection is unresolved.
 - Schema preflight accepts a symbolic link to a readable regular file, rejects non-regular or unreadable targets, and leaves schema content validation to schema loading.
@@ -202,7 +202,7 @@ Decision: the CLI is a local testing tool and follows ordinary command-line file
 
 Single-event processing applies best-effort preflight checks to explicit event and report outputs using the target platform's path semantics and observable filesystem identity. After installing the processed event and immediately before writing the report, it compares the now-existing destinations by filesystem identity. If they identify the same file, processing fails without writing the report, regardless of `--overwrite`, and leaves the completed event at its destination. Initially nonexistent case variants remain distinct on a case-sensitive filesystem. On a case-insensitive filesystem where the alias becomes observable only after creation, the post-write check catches it in flight.
 
-Rationale: bounded preflight catches ordinary mistakes without turning the toolkit into a filesystem-integrity monitor. Directory mode separates event and report namespaces, while the explicit-output recheck handles aliases that become observable only in flight. See the [FAQ](../FAQ.md) and [Architecture](../architecture.md).
+Rationale: bounded preflight catches ordinary mistakes without turning the toolkit into a filesystem-integrity monitor. Directory mode separates event and report namespaces, while the explicit-output recheck handles aliases that become observable only in flight. See [Frequently asked questions](../FAQ.md) and [Architecture](../architecture.md).
 
 Derived requirements and test implications:
 
@@ -221,21 +221,21 @@ Reconsider if the CLI becomes a server or privileged service, directory processi
 
 Decision: all selected mutation and validation processing completes before output, and the CLI writes the selected processed event and complete processing report even when validation finds errors. Validation conformance may affect the exit status, but it does not discard mutation output or remove non-validation report sections.
 
-Rationale: validation findings are successful processing results rather than processing failures. Keeping full output makes mutation results and diagnostics inspectable and avoids a second report shape controlled by event validity. See [Architecture](../architecture.md) and [Event processing](../event-processing.md).
+Rationale: validation findings are successful processing results rather than processing failures. Keeping full output makes mutation results and diagnostics inspectable and avoids a second report shape controlled by event validity. See [Architecture](../architecture.md) and the [Event Processing Model](../event-processing.md).
 
 Derived requirements and test implications:
 
 - Combined mutation and validation tests retain the processed event and every selected report section when validation errors are present.
 - `--fail-on-validation-errors` changes command success policy after processing; it does not change selected event or report content.
-- Summaries count written events and validation findings without an `events_skipped` state derived solely from invalidity.
+- Summaries count written events and validation warning-only and error events without an `events_skipped` state derived solely from invalidity.
 
 Reconsider if an explicit output policy introduces quarantined destinations or caller-selected filtering while retaining complete processing results.
 
 ### DECISION-OUTPUT-003: one output option owns stdout
 
-Decision: at most one of `--event-output`, `--report-output`, `--summary`, and `--summary-json` may select stdout in one invocation. The default directory summary owns stdout unless `--quiet` suppresses it or an explicit summary option selects stdout. Other selected artifacts use files or `--output-dir`.
+Decision: at most one of `--event-output`, `--report-output`, and `--summary` may select stdout in one invocation. Directory processing is quiet by default, and `--summary-format` chooses whether an explicitly selected summary destination receives text or JSON. Other selected artifacts use files or `--output-dir`.
 
-Rationale: event, processing-report, human-summary, and JSON-summary documents have different shapes. Concatenating them makes stdout a heterogeneous stream and prevents pretty JSON from being one JSON document.
+Rationale: event, processing-report, and summary documents have different shapes. Concatenating them makes stdout a heterogeneous stream and prevents pretty JSON from being one JSON document.
 
 Derived requirements and test implications:
 
@@ -250,7 +250,7 @@ Reconsider if a streaming protocol defines a stable, self-describing envelope th
 
 Decision: every event mutation requires `class_uid` to resolve successfully, including force-removal operations that could mechanically delete content without schema data.
 
-Rationale: successful class resolution is the minimum sanity check that the input can be processed as an OCSF event. Destructive mode changes how much proof is required before removing content; it does not bypass event identity. See [Event processing](../event-processing.md), [Enrichment removal](../enrichment-removal.md), [Architecture](../architecture.md), and `TOOLKIT-CLASS-001` in [Project and OCSF invariants](project-invariants.md).
+Rationale: successful class resolution is the minimum sanity check that the input can be processed as an OCSF event. Destructive mode changes how much proof is required before removing content; it does not bypass event identity. See the [Event Processing Model](../event-processing.md), [Enrichment Removal](../enrichment-removal.md), [Architecture](../architecture.md), and `TOOLKIT-CLASS-001` in [Project and OCSF invariants](project-invariants.md).
 
 Derived requirements and test implications:
 
@@ -264,7 +264,7 @@ Reconsider only through an explicit contract decision that defines a non-OCSF st
 
 Decision: the toolkit interprets both OCSF `integer_t` and `long_t` as signed 64-bit integers. Every accepted numeric representation denotes an exact mathematical integer within that range; conversion does not round, truncate, underflow, or overflow into a different value.
 
-Rationale: OCSF defines `long_t` as a signed 8-byte integer but does not specify an `integer_t` bit width or range. One signed-64-bit carrier is platform-independent, preserves the conventional `integer_t`-within-`long_t` relationship, and avoids loss for `long_t`. See the [FAQ](../FAQ.md), [Roadmap](../roadmap.md), and `TOOLKIT-NUM-001` and `TOOLKIT-NUM-002` in [Project and OCSF invariants](project-invariants.md).
+Rationale: OCSF defines `long_t` as a signed 8-byte integer but does not specify an `integer_t` bit width or range. One signed-64-bit carrier is platform-independent, preserves the conventional `integer_t`-within-`long_t` relationship, and avoids loss for `long_t`. See [Frequently asked questions](../FAQ.md), [Roadmap](../roadmap.md), and `TOOLKIT-NUM-001` and `TOOLKIT-NUM-002` in [Project and OCSF invariants](project-invariants.md).
 
 Derived requirements and test implications:
 
@@ -294,7 +294,7 @@ Reconsider if OCSF normatively defines the unit, Go's standard library adds Unic
 
 Decision: enum-sibling mutation runs before observable mutation, and all mutation runs before validation. Configuration-option or CLI-flag order does not change this processing order.
 
-Rationale: observables can depend on enum siblings, and validation must assess the final mutated event. Central pipeline ordering prevents option parsing or processor registration order from changing semantics. See [Event processing](../event-processing.md), [Architecture](../architecture.md), and `TOOLKIT-ORDER-001` in [Project and OCSF invariants](project-invariants.md).
+Rationale: observables can depend on enum siblings, and validation must assess the final mutated event. Central pipeline ordering prevents option parsing or processor registration order from changing semantics. See the [Event Processing Model](../event-processing.md), [Architecture](../architecture.md), and `TOOLKIT-ORDER-001` in [Project and OCSF invariants](project-invariants.md).
 
 Derived requirements and test implications:
 

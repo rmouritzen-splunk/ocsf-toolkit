@@ -20,8 +20,6 @@ import (
 	"github.com/ocsf/ocsf-toolkit/validation"
 )
 
-var errStopProcessing = errors.New("stop event processing")
-
 const eventReportVersion = 1
 
 // walkEventDirectory is replaceable so tests can inject directory traversal behavior and failures.
@@ -52,19 +50,14 @@ type eventReport struct {
 func processEvents(
 	config processConfig,
 	pipeline *eventpipeline.Pipeline,
-	initializationIssues []schemaresult.InitializationIssue,
 	destinations processingDestinations,
 	stdin io.Reader,
 	outputs *destinationWriter,
-) (processSummary, bool, error) {
-	summary := processSummary{
-		SchemaPath:           config.schemaPath,
-		InitializationIssues: initializationIssues,
-	}
-	retainFileSummaries := config.eventPath != "" || config.summaryJSONFile != ""
+	summary *summaryReport,
+) (bool, error) {
 	if config.eventPath != "" {
 		input := singleEventInput(config)
-		fileResult := processOneEvent(
+		return processOneEvent(
 			config,
 			pipeline,
 			input,
@@ -72,11 +65,11 @@ func processEvents(
 			destinations.reportOutput,
 			stdin,
 			outputs,
+			summary,
 		)
-		updateSummary(&summary, fileResult, retainFileSummaries)
-		return summary, fileResult.failed(), nil
 	}
 
+	hasValidationErrors := false
 	firstEntry := true
 	err := walkEventDirectory(config.eventsDir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -122,24 +115,20 @@ func processEvents(
 		if config.generatesReport() {
 			reportOutput = displayDestination(reportOutputPath(config, input))
 		}
-		fileResult := processOneEvent(config, pipeline, input, eventOutput, reportOutput, stdin, outputs)
-		updateSummary(&summary, fileResult, retainFileSummaries)
-		if fileResult.failed() {
-			return errStopProcessing
-		}
-		return nil
+		eventHasValidationErrors, err := processOneEvent(
+			config, pipeline, input, eventOutput, reportOutput, stdin, outputs, summary,
+		)
+		hasValidationErrors = hasValidationErrors || eventHasValidationErrors
+		return err
 	})
-	if errors.Is(err, errStopProcessing) {
-		return summary, true, nil
-	}
 	if err != nil {
-		return summary, false, fmt.Errorf(
-			"failed to walk events directory %q: %w",
+		return hasValidationErrors, fmt.Errorf(
+			"failed to process events directory %q: %w",
 			config.eventsDir,
 			fserror.QuotePaths(err),
 		)
 	}
-	return summary, false, nil
+	return hasValidationErrors, nil
 }
 
 func newPipeline(config processConfig) (*eventpipeline.Pipeline, []schemaresult.InitializationIssue, error) {
@@ -297,81 +286,74 @@ func processOneEvent(
 	reportOutput *outputDestination,
 	stdin io.Reader,
 	outputs *destinationWriter,
-) fileSummary {
-	fileResult := fileSummary{
-		InputPath:    input.path,
-		RelativePath: input.rel,
-	}
-
+	summary *summaryReport,
+) (bool, error) {
 	event, err := readInputEvent(input, stdin)
 	if err != nil {
-		fileResult.ParseError = err.Error()
-		return fileResult
+		return false, fmt.Errorf("%q: parse error: %w", input.path, err)
 	}
 
 	result, err := pipeline.ProcessEvent(event)
 	if err != nil {
-		fileResult.ProcessingError = err.Error()
-		return fileResult
+		return false, fmt.Errorf("%q: processing error: %w", input.path, err)
 	}
-	fileResult.ProcessingCompleted = true
-	fileResult.ValidationErrorCount = result.Validation().Count(validation.LevelError)
-	fileResult.ValidationWarningCount = result.Validation().Count(validation.LevelWarning)
-	fileResult.EnumSiblingsAdded = result.Enrichment().EnumSiblingsAdded
-	fileResult.ObservablesAdded = result.Enrichment().ObservablesAdded
-	fileResult.EnumSiblingsRemoved = result.EnrichmentRemoval().EnumSiblingsRemoved
-	fileResult.EnumSiblingsRetained = result.EnrichmentRemoval().EnumSiblingsRetained
-	fileResult.ObservablesRemoved = result.EnrichmentRemoval().ObservablesRemoved
-	fileResult.ObservablesRetained = result.EnrichmentRemoval().ObservablesRetained
-	fileResult.IssueCount = len(result.Issues())
+	hasValidationErrors := false
+	if summary != nil {
+		resultHasValidationErrors := summary.addProcessingResult(result)
+		if config.failOnValidationErrors {
+			hasValidationErrors = resultHasValidationErrors
+		}
+	} else if config.failOnValidationErrors {
+		hasValidationErrors = result.Validation().Count(validation.LevelError) > 0
+	}
 
+	eventDestination := ""
 	if config.mutatesEvent() {
 		outputPath := eventOutput.path.display
-		fileResult.EventPath = outputPath
 		if err := outputs.writeJSON(outputPath, event); err != nil {
-			fileResult.EventWriteError = err.Error()
-			return fileResult
+			return hasValidationErrors, fmt.Errorf("%q: event write error: %w", input.path, err)
 		}
-		fileResult.EventWritten = true
+		eventDestination = outputPath
+		if summary != nil {
+			summary.Output.EventsWritten++
+		}
 	}
 
 	if config.generatesReport() {
 		outputPath := reportOutput.path.display
-		fileResult.ReportPath = outputPath
 		if config.eventOutput != "" && config.eventOutput != stdioPath &&
 			config.reportOutput != "" && config.reportOutput != stdioPath &&
 			sameFilesystemPath(eventOutput.path, reportOutput.path) {
-			fileResult.ReportWriteError = fmt.Sprintf(
-				"processing report was not written because report output %q names the same file as event output %q, "+
-					"which was already written",
+			return hasValidationErrors, fmt.Errorf(
+				"%q: report write error: processing report was not written because report output %q"+
+					" names the same file as event output %q, which was already written",
+				input.path,
 				reportOutput.path.display,
 				eventOutput.path.display,
 			)
-			return fileResult
 		}
-		report := buildEventReport(config, input, result, fileResult)
+		report := buildEventReport(config, input, result, eventDestination)
 		if err := outputs.writeJSON(outputPath, report); err != nil {
-			fileResult.ReportWriteError = err.Error()
-			return fileResult
+			return hasValidationErrors, fmt.Errorf("%q: report write error: %w", input.path, err)
 		}
-		fileResult.ReportWritten = true
+		if summary != nil {
+			summary.Output.ReportsWritten++
+		}
 	}
-	return fileResult
+	return hasValidationErrors, nil
 }
 
 func buildEventReport(
 	config processConfig,
 	input inputEvent,
 	result eventpipeline.ProcessingResult,
-	fileResult fileSummary,
+	eventDestination string,
 ) eventReport {
 	report := eventReport{
 		ReportVersion: eventReportVersion,
 		EventSource:   input.path,
 	}
-	if fileResult.EventWritten {
-		report.EventDestination = fileResult.EventPath
-	}
+	report.EventDestination = eventDestination
 	if config.validate {
 		validation := result.Validation()
 		report.Validation = &validation
@@ -401,9 +383,4 @@ func readInputEvent(input inputEvent, stdin io.Reader) (jsonish.Map, error) {
 		return event, nil
 	}
 	return jsonio.ReadObject(input.path)
-}
-
-func (file fileSummary) failed() bool {
-	return file.ParseError != "" || file.ProcessingError != "" ||
-		file.EventWriteError != "" || file.ReportWriteError != ""
 }

@@ -20,7 +20,7 @@ Authority depends on the kind of claim being evaluated:
 2. The OCSF Schema Compiler format contract, source, and tests are authoritative for the normal compiled-schema representation that this toolkit consumes. Compiler behavior does not independently redefine event semantics.
 3. The OCSF schema `CHANGELOG.md`, repository history, and linked merged decisions establish when schema concepts or definitions were introduced, changed, or corrected.
 4. Explicit maintainer decisions and the toolkit's public contracts establish toolkit-specific behavior where OCSF leaves implementation choices open.
-5. Prior working implementations, including `ocsf-translator-go`, `ses-translator`, OCSF Server `validator2.ex`, and relevant OCSF Java tooling, are historical and implementation evidence. Common ancestry reduces their independence, and disagreement with an authoritative source may expose a defect in the prior implementation.
+5. Prior working implementations, including `ocsf-translator-go`, `ses-translator`, the OCSF Server v2 validator in `lib/schema/validator2.ex`, and relevant OCSF Java tooling, are historical and implementation evidence. Common ancestry reduces their independence, and disagreement with an authoritative source may expose a defect in the prior implementation.
 6. Released toolkit behavior, protected tests, fixtures, and the local event corpus are compatibility and reproduction evidence. A test protects an invariant only when the requirement it expresses has independent authority.
 7. `ocsf/ocsf-docs` is explanatory evidence intended for humans. It is useful for discovering intent and examples but may be vague, inaccurate, or stale; verify consequential claims against stronger sources.
 
