@@ -22,3 +22,16 @@ if "${repo_root}/scripts/benchmark-compare.sh" --count >/dev/null 2>&1; then
 	echo "Benchmark comparison accepted an option without its required argument" >&2
 	exit 1
 fi
+
+comparison_output="$("${repo_root}/scripts/benchmark-compare.sh" \
+	--base v0.8.0 \
+	--count 1 \
+	--time 1x \
+	--pattern '^BenchmarkProcessEventValidation$')"
+case "${comparison_output}" in
+*"release"*"current"*"vs base"*) ;;
+*)
+	echo "Benchmark comparison did not compare the renamed package with its release baseline" >&2
+	exit 1
+	;;
+esac

@@ -144,7 +144,8 @@ func BenchmarkProcessEventValidationPolicy(b *testing.B) {
 	}{
 		{name: "reported", wantLevel: validation.LevelError},
 		{
-			name: "ignore_selected",
+			name:      "ignore_selected",
+			wantLevel: validation.LevelIgnored,
 			policy: WithValidationLevel(
 				validation.AttributeWrongType, validation.LevelIgnored,
 			),

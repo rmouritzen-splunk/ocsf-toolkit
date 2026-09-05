@@ -67,7 +67,9 @@ fi
 
 work_root="$(mktemp -d "${TMPDIR:-/tmp}/ocsf-toolkit-benchmark.XXXXXX")"
 base_worktree="${work_root}/base"
+base_raw_output="${work_root}/base-raw.txt"
 base_output="${work_root}/base.txt"
+current_raw_output="${work_root}/current-raw.txt"
 current_output="${work_root}/current.txt"
 cleanup() {
 	git -C "${repo_root}" worktree remove --force "${base_worktree}" >/dev/null 2>&1 || true
@@ -84,11 +86,17 @@ fi
 
 echo "Benchmarking release baseline ${benchmark_base} (${base_commit})"
 (cd "${base_worktree}" && go test "${base_benchmark_package}" -run '^$' -bench "${benchmark_pattern}" \
-	-benchmem -benchtime "${benchmark_time}" -count "${benchmark_count}") >"${base_output}"
+	-benchmem -benchtime "${benchmark_time}" -count "${benchmark_count}") >"${base_raw_output}"
 
 echo "Benchmarking current checkout (${head_commit})"
 (cd "${repo_root}" && go test ./eventpipeline -run '^$' -bench "${benchmark_pattern}" \
-	-benchmem -benchtime "${benchmark_time}" -count "${benchmark_count}") >"${current_output}"
+	-benchmem -benchtime "${benchmark_time}" -count "${benchmark_count}") >"${current_raw_output}"
+
+# The public package was renamed from eventschema to eventpipeline after v0.8.0. Package identity is benchmark
+# metadata rather than part of the benchmark name, so remove it from both samples to preserve comparisons across
+# that rename while retaining Go version, platform, architecture, and CPU metadata.
+sed '/^pkg: /d' "${base_raw_output}" >"${base_output}"
+sed '/^pkg: /d' "${current_raw_output}" >"${current_output}"
 
 echo "Comparing ${benchmark_base} with current checkout"
 cd "${repo_root}/tools"
